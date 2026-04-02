@@ -305,6 +305,78 @@ export const coupangShipmentRows = pgTable(
   }),
 );
 
+export const uiStateEntries = pgTable("ui_state_entries", {
+  key: text("key").primaryKey(),
+  valueJson: jsonb("value_json").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const coupangProductExplorerCacheEntries = pgTable("coupang_product_explorer_cache_entries", {
+  storeId: text("store_id").primaryKey(),
+  snapshotJson: jsonb("snapshot_json").notNull().default({}),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const coupangProductDetailCacheEntries = pgTable(
+  "coupang_product_detail_cache_entries",
+  {
+    id: text("id").primaryKey(),
+    storeId: text("store_id").notNull(),
+    sellerProductId: text("seller_product_id").notNull(),
+    responseJson: jsonb("response_json").notNull().default({}),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    coupangProductDetailCacheUnique: uniqueIndex(
+      "coupang_product_detail_cache_entries_store_product_uidx",
+    ).on(table.storeId, table.sellerProductId),
+  }),
+);
+
+export const naverProductCacheEntries = pgTable("naver_product_cache_entries", {
+  storeId: text("store_id").primaryKey(),
+  responseJson: jsonb("response_json").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const naverProductSellerBarcodeCacheEntries = pgTable(
+  "naver_product_seller_barcode_cache_entries",
+  {
+    id: text("id").primaryKey(),
+    storeId: text("store_id").notNull(),
+    originProductNo: text("origin_product_no").notNull(),
+    sellerBarcode: text("seller_barcode").notNull(),
+    cachedAt: timestamp("cached_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    naverProductSellerBarcodeCacheUnique: uniqueIndex(
+      "naver_product_seller_barcode_cache_entries_store_origin_uidx",
+    ).on(table.storeId, table.originProductNo),
+  }),
+);
+
+export const naverProductMemoEntries = pgTable(
+  "naver_product_memo_entries",
+  {
+    id: text("id").primaryKey(),
+    storeId: text("store_id").notNull(),
+    originProductNo: text("origin_product_no").notNull(),
+    productName: text("product_name"),
+    memo: text("memo").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    naverProductMemoUnique: uniqueIndex("naver_product_memo_entries_store_origin_uidx").on(
+      table.storeId,
+      table.originProductNo,
+    ),
+  }),
+);
+
 export const naverBulkPriceSourcePresets = pgTable("naver_bulk_price_source_presets", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -498,6 +570,24 @@ export const operationLogs = pgTable("operation_logs", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const eventLogs = pgTable("event_logs", {
+  id: text("id").primaryKey(),
+  eventType: text("event_type").notNull(),
+  channel: text("channel").notNull(),
+  menuKey: text("menu_key"),
+  actionKey: text("action_key"),
+  level: text("level").notNull(),
+  status: text("status").notNull(),
+  message: text("message"),
+  metaJson: jsonb("meta_json"),
+  operationId: text("operation_id"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  durationMs: integer("duration_ms"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const platformFieldSyncRules = pgTable("platform_field_sync_rules", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -559,6 +649,15 @@ export type InsertExecutionRun = typeof executionRuns.$inferInsert;
 export type InsertExecutionItem = typeof executionItems.$inferInsert;
 export type InsertProductLibraryRecord = typeof productLibraryRecords.$inferInsert;
 export type InsertProductLibraryAttachment = typeof productLibraryAttachments.$inferInsert;
+export type InsertUiStateEntry = typeof uiStateEntries.$inferInsert;
+export type InsertCoupangProductExplorerCacheEntry =
+  typeof coupangProductExplorerCacheEntries.$inferInsert;
+export type InsertCoupangProductDetailCacheEntry =
+  typeof coupangProductDetailCacheEntries.$inferInsert;
+export type InsertNaverProductCacheEntry = typeof naverProductCacheEntries.$inferInsert;
+export type InsertNaverProductSellerBarcodeCacheEntry =
+  typeof naverProductSellerBarcodeCacheEntries.$inferInsert;
+export type InsertNaverProductMemoEntry = typeof naverProductMemoEntries.$inferInsert;
 export type InsertChannelStoreSetting = typeof channelStoreSettings.$inferInsert;
 export type InsertCoupangStoreSetting = typeof coupangStoreSettings.$inferInsert;
 export type InsertCoupangShipmentSheet = typeof coupangShipmentSheets.$inferInsert;
@@ -574,6 +673,7 @@ export type InsertCoupangBulkPriceRun = typeof coupangBulkPriceRuns.$inferInsert
 export type InsertCoupangBulkPriceRunItem = typeof coupangBulkPriceRunItems.$inferInsert;
 export type InsertCoupangBulkPriceLatestRecord = typeof coupangBulkPriceLatestRecords.$inferInsert;
 export type InsertOperationLog = typeof operationLogs.$inferInsert;
+export type InsertEventLog = typeof eventLogs.$inferInsert;
 export type InsertPlatformFieldSyncRule = typeof platformFieldSyncRules.$inferInsert;
 export type InsertPlatformFieldSyncRun = typeof platformFieldSyncRuns.$inferInsert;
 export type InsertStorageImport = typeof storageImports.$inferInsert;
@@ -588,6 +688,15 @@ export type ExecutionRun = typeof executionRuns.$inferSelect;
 export type ExecutionItem = typeof executionItems.$inferSelect;
 export type ProductLibraryRecordRow = typeof productLibraryRecords.$inferSelect;
 export type ProductLibraryAttachmentRow = typeof productLibraryAttachments.$inferSelect;
+export type UiStateEntryRow = typeof uiStateEntries.$inferSelect;
+export type CoupangProductExplorerCacheEntryRow =
+  typeof coupangProductExplorerCacheEntries.$inferSelect;
+export type CoupangProductDetailCacheEntryRow =
+  typeof coupangProductDetailCacheEntries.$inferSelect;
+export type NaverProductCacheEntryRow = typeof naverProductCacheEntries.$inferSelect;
+export type NaverProductSellerBarcodeCacheEntryRow =
+  typeof naverProductSellerBarcodeCacheEntries.$inferSelect;
+export type NaverProductMemoEntryRow = typeof naverProductMemoEntries.$inferSelect;
 export type ChannelStoreSettingRow = typeof channelStoreSettings.$inferSelect;
 export type CoupangStoreSettingRow = typeof coupangStoreSettings.$inferSelect;
 export type CoupangShipmentSheetRow = typeof coupangShipmentSheets.$inferSelect;
@@ -603,6 +712,7 @@ export type CoupangBulkPriceRunRow = typeof coupangBulkPriceRuns.$inferSelect;
 export type CoupangBulkPriceRunItemRow = typeof coupangBulkPriceRunItems.$inferSelect;
 export type CoupangBulkPriceLatestRecordRow = typeof coupangBulkPriceLatestRecords.$inferSelect;
 export type OperationLogRow = typeof operationLogs.$inferSelect;
+export type EventLogRow = typeof eventLogs.$inferSelect;
 export type PlatformFieldSyncRuleRow = typeof platformFieldSyncRules.$inferSelect;
 export type PlatformFieldSyncRunRow = typeof platformFieldSyncRuns.$inferSelect;
 export type StorageImportRow = typeof storageImports.$inferSelect;

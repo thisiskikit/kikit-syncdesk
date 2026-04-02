@@ -2,8 +2,8 @@ import type { NaverProductMemoStorePort } from "../interfaces/naver-product-memo
 import {
   NaverProductMemoStore,
   buildNaverProductMemoKey,
-  fileNaverProductMemoStore,
 } from "../stores/file-naver-product-memo-store";
+import { workDataNaverProductMemoStore } from "../stores/work-data-naver-product-memo-store";
 
 export type {
   NaverProductMemoEntry,
@@ -12,4 +12,4 @@ export type {
 } from "../interfaces/naver-product-memo-store";
 export { NaverProductMemoStore, buildNaverProductMemoKey };
 
-export const naverProductMemoStore: NaverProductMemoStorePort = fileNaverProductMemoStore;
+export const naverProductMemoStore: NaverProductMemoStorePort = workDataNaverProductMemoStore;

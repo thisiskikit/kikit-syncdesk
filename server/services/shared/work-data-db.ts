@@ -101,6 +101,71 @@ const createTableStatements = [
     ON coupang_shipment_rows (source_key)
   `,
   `
+    CREATE TABLE IF NOT EXISTS ui_state_entries (
+      key text PRIMARY KEY,
+      value_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS coupang_product_explorer_cache_entries (
+      store_id text PRIMARY KEY,
+      snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      fetched_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS coupang_product_detail_cache_entries (
+      id text PRIMARY KEY,
+      store_id text NOT NULL,
+      seller_product_id text NOT NULL,
+      response_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS coupang_product_detail_cache_entries_store_product_uidx
+    ON coupang_product_detail_cache_entries (store_id, seller_product_id)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS naver_product_cache_entries (
+      store_id text PRIMARY KEY,
+      response_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS naver_product_seller_barcode_cache_entries (
+      id text PRIMARY KEY,
+      store_id text NOT NULL,
+      origin_product_no text NOT NULL,
+      seller_barcode text NOT NULL,
+      cached_at timestamptz NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS naver_product_seller_barcode_cache_entries_store_origin_uidx
+    ON naver_product_seller_barcode_cache_entries (store_id, origin_product_no)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS naver_product_memo_entries (
+      id text PRIMARY KEY,
+      store_id text NOT NULL,
+      origin_product_no text NOT NULL,
+      product_name text,
+      memo text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS naver_product_memo_entries_store_origin_uidx
+    ON naver_product_memo_entries (store_id, origin_product_no)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS naver_bulk_price_source_presets (
       id text PRIMARY KEY,
       name text NOT NULL,
@@ -294,6 +359,25 @@ const createTableStatements = [
       retry_of_operation_id text,
       started_at timestamptz NOT NULL,
       finished_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS event_logs (
+      id text PRIMARY KEY,
+      event_type text NOT NULL,
+      channel text NOT NULL,
+      menu_key text,
+      action_key text,
+      level text NOT NULL,
+      status text NOT NULL,
+      message text,
+      meta_json jsonb,
+      operation_id text,
+      started_at timestamptz NOT NULL,
+      finished_at timestamptz,
+      duration_ms integer,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )
