@@ -1,0 +1,55 @@
+import type { Express } from "express";
+import { registerCoupangRetryHandlers } from "./application/coupang/register-retry-handlers";
+import { registerNaverRetryHandlers } from "./application/naver/register-retry-handlers";
+import catalogRouter from "./routes/catalog";
+import coupangBulkPriceRouter from "./routes/coupang-bulk-price";
+import coupangRouter from "./routes/coupang";
+import coupangPromotionsRouter from "./routes/coupang-promotions";
+import coupangSupportRouter from "./routes/coupang-support";
+import draftsRouter from "./routes/drafts";
+import executionsRouter from "./routes/executions";
+import healthRouter from "./routes/health";
+import logsRouter from "./routes/logs";
+import naverBulkPriceRouter from "./routes/naver-bulk-price";
+import naverClaimsRouter from "./routes/naver-claims";
+import naverInquiriesRouter from "./routes/naver-inquiries";
+import naverOrdersRouter from "./routes/naver-orders";
+import naverProductsRouter from "./routes/naver-products";
+import naverSellerRouter from "./routes/naver-seller";
+import naverSettlementsRouter from "./routes/naver-settlements";
+import naverStatsRouter from "./routes/naver-stats";
+import operationsRouter from "./routes/operations";
+import platformFieldSyncRouter from "./routes/platform-field-sync";
+import productLibraryRouter from "./routes/product-library";
+import settingsRouter from "./routes/settings";
+import syncRouter from "./routes/sync";
+import uiStateRouter from "./routes/ui-state";
+
+export function registerRoutes(app: Express) {
+  registerCoupangRetryHandlers();
+  registerNaverRetryHandlers();
+
+  app.use("/api/catalog", catalogRouter);
+  app.use("/api/catalog", syncRouter);
+  app.use("/api/coupang", coupangBulkPriceRouter);
+  app.use("/api/coupang", coupangRouter);
+  app.use("/api/coupang", coupangPromotionsRouter);
+  app.use("/api/coupang", coupangSupportRouter);
+  app.use("/api/drafts", draftsRouter);
+  app.use("/api/executions", executionsRouter);
+  app.use("/api/health", healthRouter);
+  app.use("/api/logs", logsRouter);
+  app.use("/api/naver", naverBulkPriceRouter);
+  app.use("/api/naver", naverClaimsRouter);
+  app.use("/api/naver", naverInquiriesRouter);
+  app.use("/api/naver", naverProductsRouter);
+  app.use("/api/naver", naverOrdersRouter);
+  app.use("/api/naver", naverSellerRouter);
+  app.use("/api/naver", naverSettlementsRouter);
+  app.use("/api/naver", naverStatsRouter);
+  app.use("/api/operations", operationsRouter);
+  app.use("/api/field-sync", platformFieldSyncRouter);
+  app.use("/api/product-library", productLibraryRouter);
+  app.use("/api/settings", settingsRouter);
+  app.use("/api/ui-state", uiStateRouter);
+}

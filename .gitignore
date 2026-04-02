@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+*.tsbuildinfo
+coverage
+data
+.claude/
+output/
+.codex-*.log
+tmp-runtime-snippet.txt
+실행명령어.txt
