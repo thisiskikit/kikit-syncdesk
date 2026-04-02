@@ -1,10 +1,8 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, rm, unlink, writeFile } from "fs/promises";
 import path from "path";
 import type {
-  CoupangDataSource,
   CoupangProductDetailResponse,
   CoupangProductExplorerRow,
-  CoupangStoreRef,
 } from "@shared/coupang";
 import type {
   CoupangProductCacheStorePort,
@@ -19,115 +17,217 @@ type PersistedCoupangProductCache = {
   details: Record<string, CoupangProductDetailResponse>;
 };
 
-const defaultData: PersistedCoupangProductCache = {
-  version: 1,
-  explorers: {},
-  details: {},
+type PersistedDetailShard = {
+  version: 1;
+  items: Record<string, CoupangProductDetailResponse>;
 };
 
-const DEFAULT_PERSIST_DEBOUNCE_MS = 5_000;
+type PersistedCacheManifest = {
+  version: 2;
+  shardCount: number;
+  migratedAt: string | null;
+};
 
-function getDetailKey(storeId: string, sellerProductId: string) {
-  return `${storeId}:${sellerProductId}`;
-}
+const SHARD_COUNT = 64;
+const DEFAULT_MANIFEST: PersistedCacheManifest = {
+  version: 2,
+  shardCount: SHARD_COUNT,
+  migratedAt: null,
+};
 
-function readPersistDebounceMs() {
-  const raw = process.env.COUPANG_PRODUCT_CACHE_PERSIST_DEBOUNCE_MS;
-  if (!raw?.trim()) {
-    return DEFAULT_PERSIST_DEBOUNCE_MS;
+function splitDetailKey(detailKey: string) {
+  const separatorIndex = detailKey.indexOf(":");
+  if (separatorIndex < 0) {
+    return null;
   }
 
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_PERSIST_DEBOUNCE_MS;
+  const storeId = detailKey.slice(0, separatorIndex).trim();
+  const sellerProductId = detailKey.slice(separatorIndex + 1).trim();
+  if (!storeId || !sellerProductId) {
+    return null;
   }
 
-  return Math.max(0, Math.min(60_000, Math.round(parsed)));
+  return {
+    storeId,
+    sellerProductId,
+  };
 }
 
-class CoupangProductCacheStore {
-  private readonly filePath = path.resolve(
+function normalizeStoreId(storeId: string) {
+  return encodeURIComponent(storeId.trim());
+}
+
+function hashString(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash >>> 0;
+}
+
+function getDetailShardKey(sellerProductId: string) {
+  return (hashString(sellerProductId) % SHARD_COUNT).toString(16).padStart(2, "0");
+}
+
+function getLegacyFilePath(filePath?: string) {
+  return path.resolve(
     process.cwd(),
-    process.env.COUPANG_PRODUCT_CACHE_FILE || "data/coupang-product-cache.json",
+    filePath ?? (process.env.COUPANG_PRODUCT_CACHE_FILE || "data/coupang-product-cache.json"),
   );
-  private readonly persistDebounceMs = readPersistDebounceMs();
+}
 
-  private cache: PersistedCoupangProductCache | null = null;
-  private writePromise = Promise.resolve();
-  private mutationQueue = Promise.resolve();
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private persistRequested = false;
+function getCacheRootDir(legacyFilePath: string) {
+  const extension = path.extname(legacyFilePath);
+  const baseName = extension
+    ? path.basename(legacyFilePath, extension)
+    : path.basename(legacyFilePath);
 
-  private get backupFilePath() {
-    return `${this.filePath}.bak`;
-  }
+  return path.join(path.dirname(legacyFilePath), baseName);
+}
 
-  private get tempFilePath() {
-    return `${this.filePath}.tmp`;
-  }
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
-  private buildCorruptFilePath() {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return `${this.filePath}.corrupt-${timestamp}`;
-  }
+function isMissingFileError(error: unknown) {
+  const code =
+    typeof error === "object" && error && "code" in error
+      ? String((error as { code?: string }).code)
+      : null;
+  return code === "ENOENT";
+}
 
-  private normalizeParsedData(parsed: Partial<PersistedCoupangProductCache>) {
-    return {
-      version: 1,
-      explorers:
-        parsed.explorers && typeof parsed.explorers === "object" && !Array.isArray(parsed.explorers)
-          ? (parsed.explorers as Record<string, CoupangProductExplorerSnapshot>)
-          : {},
-      details:
-        parsed.details && typeof parsed.details === "object" && !Array.isArray(parsed.details)
-          ? (parsed.details as Record<string, CoupangProductDetailResponse>)
-          : {},
-    } satisfies PersistedCoupangProductCache;
-  }
+function normalizeLegacyData(
+  parsed: Partial<PersistedCoupangProductCache> | null,
+): PersistedCoupangProductCache {
+  return {
+    version: 1,
+    explorers:
+      parsed?.explorers && isObjectRecord(parsed.explorers)
+        ? (parsed.explorers as Record<string, CoupangProductExplorerSnapshot>)
+        : {},
+    details:
+      parsed?.details && isObjectRecord(parsed.details)
+        ? (parsed.details as Record<string, CoupangProductDetailResponse>)
+        : {},
+  };
+}
 
-  private isMissingFileError(error: unknown) {
-    const code =
-      typeof error === "object" && error && "code" in error
-        ? String((error as { code?: string }).code)
-        : null;
-    return code === "ENOENT";
-  }
+function normalizeDetailShard(parsed: Partial<PersistedDetailShard> | null): PersistedDetailShard {
+  return {
+    version: 1,
+    items:
+      parsed?.items && isObjectRecord(parsed.items)
+        ? (parsed.items as Record<string, CoupangProductDetailResponse>)
+        : {},
+  };
+}
 
-  private async removeFileIfExists(targetPath: string) {
-    try {
-      await unlink(targetPath);
-    } catch (error) {
-      if (!this.isMissingFileError(error)) {
-        throw error;
-      }
-    }
-  }
+function cloneSnapshot<T>(value: T) {
+  return structuredClone(value);
+}
 
-  private async readPersistedFile(targetPath: string) {
-    const raw = await readFile(targetPath, "utf-8");
-    return this.normalizeParsedData(JSON.parse(raw) as Partial<PersistedCoupangProductCache>);
-  }
-
-  private async tryReadPersistedFile(targetPath: string) {
-    try {
-      return await this.readPersistedFile(targetPath);
-    } catch (error) {
-      if (this.isMissingFileError(error)) {
-        return null;
-      }
-
+async function readJsonFileIfExists<T>(filePath: string) {
+  try {
+    const raw = await readFile(filePath, "utf-8");
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    if (isMissingFileError(error)) {
       return null;
     }
+
+    throw error;
+  }
+}
+
+async function removeFileIfExists(filePath: string) {
+  try {
+    await unlink(filePath);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function writeJsonAtomically(filePath: string, value: unknown) {
+  const payload = `${JSON.stringify(value, null, 2)}\n`;
+  const tempFilePath = `${filePath}.tmp`;
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await removeFileIfExists(tempFilePath);
+  await writeFile(tempFilePath, payload, "utf-8");
+  await removeFileIfExists(filePath);
+  await rename(tempFilePath, filePath);
+}
+
+function readKeepLegacyFileFlag() {
+  return process.env.COUPANG_PRODUCT_CACHE_KEEP_LEGACY_FILE === "true";
+}
+
+export class FileCoupangProductCacheStore implements CoupangProductCacheStorePort {
+  private readonly legacyFilePath: string;
+  private readonly rootDir: string;
+  private readonly explorersDir: string;
+  private readonly detailsDir: string;
+  private readonly manifestPath: string;
+  private initializePromise: Promise<void> | null = null;
+  private mutationQueue = Promise.resolve();
+
+  constructor(filePath?: string) {
+    this.legacyFilePath = getLegacyFilePath(filePath);
+    this.rootDir = getCacheRootDir(this.legacyFilePath);
+    this.explorersDir = path.join(this.rootDir, "explorers");
+    this.detailsDir = path.join(this.rootDir, "details");
+    this.manifestPath = path.join(this.rootDir, "manifest.json");
   }
 
-  private async moveCorruptedPrimaryCache() {
-    try {
-      await rename(this.filePath, this.buildCorruptFilePath());
-    } catch (error) {
-      if (!this.isMissingFileError(error)) {
+  private getExplorerPath(storeId: string) {
+    return path.join(this.explorersDir, `${normalizeStoreId(storeId)}.json`);
+  }
+
+  private buildCorruptLegacyFilePath() {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    return `${this.legacyFilePath}.corrupt-${timestamp}`;
+  }
+
+  private getDetailStoreDir(storeId: string) {
+    return path.join(this.detailsDir, normalizeStoreId(storeId));
+  }
+
+  private getDetailShardPath(storeId: string, sellerProductId: string) {
+    return path.join(
+      this.getDetailStoreDir(storeId),
+      `${getDetailShardKey(sellerProductId)}.json`,
+    );
+  }
+
+  private async ensureInitialized() {
+    if (!this.initializePromise) {
+      this.initializePromise = (async () => {
+        await mkdir(this.explorersDir, { recursive: true });
+        await mkdir(this.detailsDir, { recursive: true });
+
+        const existingManifest =
+          await readJsonFileIfExists<PersistedCacheManifest>(this.manifestPath);
+        if (existingManifest?.version === 2) {
+          return;
+        }
+
+        const migrated = await this.migrateLegacyCacheIfNeeded();
+        await writeJsonAtomically(this.manifestPath, {
+          ...DEFAULT_MANIFEST,
+          migratedAt: migrated ? new Date().toISOString() : null,
+        } satisfies PersistedCacheManifest);
+      })().catch((error) => {
+        this.initializePromise = null;
         throw error;
-      }
+      });
     }
+
+    await this.initializePromise;
   }
 
   private async serializeMutation<T>(task: () => Promise<T>) {
@@ -139,104 +239,115 @@ class CoupangProductCacheStore {
     return result;
   }
 
-  private async load() {
-    if (this.cache) {
-      return this.cache;
+  private async readExplorer(storeId: string) {
+    const snapshot = await readJsonFileIfExists<CoupangProductExplorerSnapshot>(
+      this.getExplorerPath(storeId),
+    );
+    return snapshot ? cloneSnapshot(snapshot) : null;
+  }
+
+  private async writeExplorer(storeId: string, snapshot: CoupangProductExplorerSnapshot | null) {
+    const filePath = this.getExplorerPath(storeId);
+
+    if (!snapshot) {
+      await removeFileIfExists(filePath);
+      return;
     }
+
+    await writeJsonAtomically(filePath, snapshot);
+  }
+
+  private async readDetailShard(storeId: string, sellerProductId: string) {
+    const shard = await readJsonFileIfExists<PersistedDetailShard>(
+      this.getDetailShardPath(storeId, sellerProductId),
+    );
+    return normalizeDetailShard(shard);
+  }
+
+  private async writeDetailShard(
+    storeId: string,
+    sellerProductId: string,
+    shard: PersistedDetailShard,
+  ) {
+    const filePath = this.getDetailShardPath(storeId, sellerProductId);
+
+    if (!Object.keys(shard.items).length) {
+      await removeFileIfExists(filePath);
+      return;
+    }
+
+    await writeJsonAtomically(filePath, shard);
+  }
+
+  private async migrateLegacyCacheIfNeeded() {
+    let parsed: Partial<PersistedCoupangProductCache> | null;
 
     try {
-      this.cache = await this.readPersistedFile(this.filePath);
+      parsed = await readJsonFileIfExists<Partial<PersistedCoupangProductCache>>(this.legacyFilePath);
     } catch (error) {
-      if (this.isMissingFileError(error)) {
-        const backupSnapshot = await this.tryReadPersistedFile(this.backupFilePath);
-        this.cache = backupSnapshot ?? structuredClone(defaultData);
-        if (backupSnapshot) {
-          this.persist(this.cache);
-          await this.flush();
-        }
-      } else {
-        await this.moveCorruptedPrimaryCache();
-        this.cache =
-          (await this.tryReadPersistedFile(this.backupFilePath)) ?? structuredClone(defaultData);
-        this.persist(this.cache);
-        await this.flush();
-      }
-    }
-
-    return this.cache;
-  }
-
-  private scheduleFlush(delayMs = this.persistDebounceMs) {
-    if (this.flushTimer) {
-      return;
-    }
-
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
-      void this.flush();
-    }, Math.max(0, delayMs));
-  }
-
-  private persist(nextData: PersistedCoupangProductCache) {
-    this.cache = nextData;
-    this.persistRequested = true;
-    this.scheduleFlush();
-  }
-
-  private async flush() {
-    if (!this.cache || !this.persistRequested) {
-      return;
-    }
-
-    this.persistRequested = false;
-    const payload = JSON.stringify(this.cache, null, 2);
-
-    this.writePromise = this.writePromise.then(async () => {
-      await mkdir(path.dirname(this.filePath), { recursive: true });
-      await writeFile(this.tempFilePath, payload, "utf-8");
-      await this.removeFileIfExists(this.backupFilePath);
-
-      try {
-        await rename(this.filePath, this.backupFilePath);
-      } catch (error) {
-        if (!this.isMissingFileError(error)) {
-          throw error;
-        }
+      if (isMissingFileError(error)) {
+        return false;
       }
 
-      try {
-        await rename(this.tempFilePath, this.filePath);
-      } catch (error) {
-        if (!this.isMissingFileError(error)) {
-          const backupSnapshot = await this.tryReadPersistedFile(this.backupFilePath);
-          if (backupSnapshot) {
-            await writeFile(this.filePath, JSON.stringify(backupSnapshot, null, 2), "utf-8");
-          }
-        }
-        throw error;
+      await rename(this.legacyFilePath, this.buildCorruptLegacyFilePath()).catch(() => undefined);
+      return false;
+    }
+
+    if (!parsed) {
+      return false;
+    }
+
+    const legacy = normalizeLegacyData(parsed);
+    const detailShards = new Map<string, PersistedDetailShard>();
+
+    for (const [storeId, snapshot] of Object.entries(legacy.explorers)) {
+      if (!storeId.trim()) {
+        continue;
       }
 
-      await this.removeFileIfExists(this.backupFilePath);
-    });
-
-    await this.writePromise;
-
-    if (this.persistRequested) {
-      this.scheduleFlush(0);
+      await this.writeExplorer(storeId, snapshot);
     }
+
+    for (const [detailKey, response] of Object.entries(legacy.details)) {
+      const parsedKey = splitDetailKey(detailKey);
+      if (!parsedKey) {
+        continue;
+      }
+
+      const shardPath = this.getDetailShardPath(parsedKey.storeId, parsedKey.sellerProductId);
+      const shard =
+        detailShards.get(shardPath) ??
+        normalizeDetailShard(
+          await readJsonFileIfExists<PersistedDetailShard>(shardPath),
+        );
+
+      shard.items[parsedKey.sellerProductId] = cloneSnapshot(response);
+      detailShards.set(shardPath, shard);
+    }
+
+    for (const [shardPath, shard] of Array.from(detailShards.entries())) {
+      await writeJsonAtomically(shardPath, shard);
+    }
+
+    if (!readKeepLegacyFileFlag()) {
+      await removeFileIfExists(this.legacyFilePath);
+      await removeFileIfExists(`${this.legacyFilePath}.tmp`);
+      await removeFileIfExists(`${this.legacyFilePath}.bak`);
+    }
+
+    return true;
   }
 
   async getExplorer(storeId: string) {
-    const data = await this.load();
-    const entry = data.explorers[storeId];
-    return entry ? structuredClone(entry) : null;
+    await this.ensureInitialized();
+    return this.readExplorer(storeId);
   }
 
   async setExplorer(storeId: string, snapshot: CoupangProductExplorerSnapshot) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      data.explorers[storeId] = structuredClone(snapshot);
-      this.persist(data);
+      await this.writeExplorer(storeId, cloneSnapshot(snapshot));
     });
   }
 
@@ -246,19 +357,12 @@ class CoupangProductCacheStore {
       snapshot: CoupangProductExplorerSnapshot | null,
     ) => CoupangProductExplorerSnapshot | null,
   ) {
-    await this.serializeMutation(async () => {
-      const data = await this.load();
-      const current = data.explorers[storeId] ? structuredClone(data.explorers[storeId]) : null;
-      const nextSnapshot = updater(current);
+    await this.ensureInitialized();
 
-      if (nextSnapshot) {
-        data.explorers[storeId] = structuredClone(nextSnapshot);
-      } else if (data.explorers[storeId]) {
-        delete data.explorers[storeId];
-      } else {
-        return;
-      }
-      this.persist(data);
+    await this.serializeMutation(async () => {
+      const current = await this.readExplorer(storeId);
+      const nextSnapshot = updater(current ? cloneSnapshot(current) : null);
+      await this.writeExplorer(storeId, nextSnapshot ? cloneSnapshot(nextSnapshot) : null);
     });
   }
 
@@ -267,9 +371,10 @@ class CoupangProductCacheStore {
     sellerProductId: string,
     updater: (row: CoupangProductExplorerRow) => CoupangProductExplorerRow | null,
   ) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      const snapshot = data.explorers[storeId];
+      const snapshot = await this.readExplorer(storeId);
       if (!snapshot) {
         return;
       }
@@ -279,29 +384,34 @@ class CoupangProductCacheStore {
         return;
       }
 
-      const currentRow = structuredClone(snapshot.items[index]!);
+      const currentRow = cloneSnapshot(snapshot.items[index]!);
       const nextRow = updater(currentRow);
 
       if (nextRow) {
-        snapshot.items[index] = nextRow;
+        snapshot.items[index] = cloneSnapshot(nextRow);
       } else {
         snapshot.items.splice(index, 1);
       }
-      this.persist(data);
+
+      await this.writeExplorer(storeId, snapshot);
     });
   }
 
   async getDetail(storeId: string, sellerProductId: string) {
-    const data = await this.load();
-    const entry = data.details[getDetailKey(storeId, sellerProductId)];
-    return entry ? structuredClone(entry) : null;
+    await this.ensureInitialized();
+
+    const shard = await this.readDetailShard(storeId, sellerProductId);
+    const response = shard.items[sellerProductId];
+    return response ? cloneSnapshot(response) : null;
   }
 
   async setDetail(storeId: string, sellerProductId: string, response: CoupangProductDetailResponse) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      data.details[getDetailKey(storeId, sellerProductId)] = structuredClone(response);
-      this.persist(data);
+      const shard = await this.readDetailShard(storeId, sellerProductId);
+      shard.items[sellerProductId] = cloneSnapshot(response);
+      await this.writeDetailShard(storeId, sellerProductId, shard);
     });
   }
 
@@ -312,59 +422,48 @@ class CoupangProductCacheStore {
       response: CoupangProductDetailResponse | null,
     ) => CoupangProductDetailResponse | null,
   ) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      const key = getDetailKey(storeId, sellerProductId);
-      const current = data.details[key] ? structuredClone(data.details[key]) : null;
+      const shard = await this.readDetailShard(storeId, sellerProductId);
+      const current = shard.items[sellerProductId]
+        ? cloneSnapshot(shard.items[sellerProductId]!)
+        : null;
       const nextResponse = updater(current);
 
       if (nextResponse) {
-        data.details[key] = structuredClone(nextResponse);
-      } else if (data.details[key]) {
-        delete data.details[key];
+        shard.items[sellerProductId] = cloneSnapshot(nextResponse);
       } else {
-        return;
+        delete shard.items[sellerProductId];
       }
-      this.persist(data);
+
+      await this.writeDetailShard(storeId, sellerProductId, shard);
     });
   }
 
   async invalidateStore(storeId: string) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      let changed = false;
-
-      for (const key of Object.keys(data.details)) {
-        if (key.startsWith(`${storeId}:`)) {
-          delete data.details[key];
-          changed = true;
-        }
-      }
-
-      if (data.explorers[storeId]) {
-        delete data.explorers[storeId];
-        changed = true;
-      }
-
-      if (changed) {
-        this.persist(data);
-      }
+      await this.writeExplorer(storeId, null);
+      await rm(this.getDetailStoreDir(storeId), { recursive: true, force: true });
     });
   }
 
   async invalidateProduct(storeId: string, sellerProductId: string) {
+    await this.ensureInitialized();
+
     await this.serializeMutation(async () => {
-      const data = await this.load();
-      const detailKey = getDetailKey(storeId, sellerProductId);
-      if (!data.details[detailKey]) {
+      const shard = await this.readDetailShard(storeId, sellerProductId);
+      if (!shard.items[sellerProductId]) {
         return;
       }
 
-      delete data.details[detailKey];
-      this.persist(data);
+      delete shard.items[sellerProductId];
+      await this.writeDetailShard(storeId, sellerProductId, shard);
     });
   }
 }
 
 export const fileCoupangProductCacheStore: CoupangProductCacheStorePort =
-  new CoupangProductCacheStore();
+  new FileCoupangProductCacheStore();
