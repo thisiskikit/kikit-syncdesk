@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type {
   NaverBulkPriceCreateRunInput,
+  NaverBulkPricePreviewJobInput,
   NaverBulkPricePreviewQueryInput,
   NaverBulkPricePreviewSort,
   NaverBulkPriceRulePresetInput,
@@ -224,6 +225,13 @@ function parsePresetMeta(body: unknown) {
   };
 }
 
+function parsePreviewJobInput(body: unknown): NaverBulkPricePreviewJobInput {
+  return {
+    sourceConfig: parseSourceConfig(body),
+    rules: parseRuleSet(body),
+  };
+}
+
 function parseRowKeysQuery(value: unknown) {
   if (Array.isArray(value)) {
     return value.map(asString).filter((entry) => entry.trim().length > 0);
@@ -389,12 +397,48 @@ router.delete("/bulk-price/rule-presets/:id", async (req, res) => {
 
 router.post("/bulk-price/preview", async (req, res) => {
   try {
-    sendData(res, await naverBulkPriceService.preview(parsePreviewQueryInput(req.body)));
+    sendData(res, await naverBulkPriceService.getCachedPreview(parsePreviewQueryInput(req.body)));
   } catch (error) {
     sendNormalizedError(res, error, {
       fallbackCode: "NAVER_BULK_PRICE_PREVIEW_FAILED",
-      fallbackMessage: "Failed to build NAVER bulk price preview.",
+      fallbackMessage: "Failed to load NAVER bulk price preview.",
       fallbackStatus: 400,
+    });
+  }
+});
+
+router.get("/bulk-price/preview/jobs", async (_req, res) => {
+  try {
+    sendData(res, await naverBulkPriceService.listPreviewRefreshJobs());
+  } catch (error) {
+    sendNormalizedError(res, error, {
+      fallbackCode: "NAVER_BULK_PRICE_PREVIEW_JOB_LIST_FAILED",
+      fallbackMessage: "Failed to load NAVER preview refresh jobs.",
+      fallbackStatus: 500,
+    });
+  }
+});
+
+router.post("/bulk-price/preview/jobs", async (req, res) => {
+  try {
+    sendCreated(res, await naverBulkPriceService.startPreviewRefreshJob(parsePreviewJobInput(req.body)));
+  } catch (error) {
+    sendNormalizedError(res, error, {
+      fallbackCode: "NAVER_BULK_PRICE_PREVIEW_JOB_CREATE_FAILED",
+      fallbackMessage: "Failed to start NAVER preview refresh job.",
+      fallbackStatus: 400,
+    });
+  }
+});
+
+router.get("/bulk-price/preview/jobs/:id", async (req, res) => {
+  try {
+    sendData(res, await naverBulkPriceService.getPreviewRefreshJob(req.params.id));
+  } catch (error) {
+    sendNormalizedError(res, error, {
+      fallbackCode: "NAVER_BULK_PRICE_PREVIEW_JOB_READ_FAILED",
+      fallbackMessage: "Failed to load NAVER preview refresh job.",
+      fallbackStatus: 404,
     });
   }
 });

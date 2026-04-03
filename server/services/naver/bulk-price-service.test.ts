@@ -719,6 +719,144 @@ describe("naver bulk price helpers", () => {
     ).rejects.toThrow(/Preview session expired/i);
   });
 
+  it("returns cached preview rows without rebuilding when a snapshot already exists", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "naver-bulk-price-preview-cached-"));
+    process.env.NAVER_BULK_PRICE_FILE = path.join(tmpDir, "store.json");
+    const store = new NaverBulkPriceStore(process.env.NAVER_BULK_PRICE_FILE);
+    let buildPreviewCallCount = 0;
+
+    const service = new NaverBulkPriceService({
+      store,
+      loadSourceMetadata: async () => ({
+        configured: true,
+        databaseUrlAvailable: true,
+        tables: [],
+        columns: [],
+        sampleRows: [],
+        requestedTable: null,
+        fetchedAt: new Date().toISOString(),
+      }),
+      buildPreview: async () => {
+        buildPreviewCallCount += 1;
+        return createPreviewResponse(["origin-1"]);
+      },
+      applyPriceUpdate: async () => ({ message: "updated" }),
+    });
+
+    const builtPreview = await service.preview({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+      page: 1,
+      pageSize: 100,
+    });
+
+    const cachedPreview = await service.getCachedPreview({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+      page: 1,
+      pageSize: 100,
+    });
+
+    expect(buildPreviewCallCount).toBe(1);
+    expect(cachedPreview.previewId).toBe(builtPreview.previewId);
+  });
+
+  it("requires a preview refresh job when no cached preview exists", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "naver-bulk-price-preview-miss-"));
+    process.env.NAVER_BULK_PRICE_FILE = path.join(tmpDir, "store.json");
+    const store = new NaverBulkPriceStore(process.env.NAVER_BULK_PRICE_FILE);
+
+    const service = new NaverBulkPriceService({
+      store,
+      loadSourceMetadata: async () => ({
+        configured: true,
+        databaseUrlAvailable: true,
+        tables: [],
+        columns: [],
+        sampleRows: [],
+        requestedTable: null,
+        fetchedAt: new Date().toISOString(),
+      }),
+      buildPreview: async () => createPreviewResponse(["origin-1"]),
+      applyPriceUpdate: async () => ({ message: "updated" }),
+    });
+
+    await expect(
+      service.getCachedPreview({
+        sourceConfig: createSourceConfig(),
+        rules: createRules(),
+        page: 1,
+        pageSize: 100,
+      }),
+    ).rejects.toThrow(/Preview refresh required/i);
+  });
+
+  it("reuses the same running preview refresh job for identical settings", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "naver-bulk-price-preview-job-reuse-"));
+    process.env.NAVER_BULK_PRICE_FILE = path.join(tmpDir, "store.json");
+    const store = new NaverBulkPriceStore(process.env.NAVER_BULK_PRICE_FILE);
+    const refreshGate = deferred();
+    let buildPreviewCallCount = 0;
+
+    const service = new NaverBulkPriceService({
+      store,
+      loadSourceMetadata: async () => ({
+        configured: true,
+        databaseUrlAvailable: true,
+        tables: [],
+        columns: [],
+        sampleRows: [],
+        requestedTable: null,
+        fetchedAt: new Date().toISOString(),
+      }),
+      buildPreview: async () => {
+        buildPreviewCallCount += 1;
+        if (buildPreviewCallCount === 1) {
+          return createPreviewResponse(["origin-1"]);
+        }
+
+        await refreshGate.promise;
+        return createPreviewResponse(["origin-2"], {
+          generatedAt: new Date(Date.now() + 1_000).toISOString(),
+        });
+      },
+      applyPriceUpdate: async () => ({ message: "updated" }),
+    });
+
+    const cachedPreview = await service.preview({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+      page: 1,
+      pageSize: 100,
+    });
+
+    const firstStart = await service.startPreviewRefreshJob({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+    });
+    const secondStart = await service.startPreviewRefreshJob({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+    });
+
+    expect(firstStart.job.cachedPreviewId).toBe(cachedPreview.previewId);
+    expect(secondStart.job.id).toBe(firstStart.job.id);
+    expect(buildPreviewCallCount).toBe(2);
+
+    refreshGate.resolve();
+
+    await waitForCondition(async () => {
+      const next = await service.getPreviewRefreshJob(firstStart.job.id);
+      return next.job.status === "succeeded";
+    });
+
+    const completed = await service.getPreviewRefreshJob(firstStart.job.id);
+    const list = await service.listPreviewRefreshJobs();
+
+    expect(completed.job.latestPreviewId).toBeTruthy();
+    expect(list.items.map((item) => item.id)).toContain(firstStart.job.id);
+  });
+
   it("creates runs from all selectable rows while honoring excluded row keys", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "naver-bulk-price-run-all-selectable-"));
     process.env.NAVER_BULK_PRICE_FILE = path.join(tmpDir, "store.json");

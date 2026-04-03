@@ -4,6 +4,9 @@ import { useSearch } from "wouter";
 import type { ChannelStoreSummary } from "@shared/channel-settings";
 import type {
   NaverBulkPriceMatchField,
+  NaverBulkPricePreviewJob,
+  NaverBulkPricePreviewJobListResponse,
+  NaverBulkPricePreviewJobResponse,
   NaverBulkPricePreviewQueryInput,
   NaverBulkPricePreviewResponse,
   NaverBulkPricePreviewRow,
@@ -59,6 +62,8 @@ import { formatDate, formatNumber } from "@/lib/utils";
 import { resolveWorkspacePollingInterval } from "@/lib/workspace-tabs";
 import {
   buildMatchFieldLabel,
+  buildPreviewJobPhaseLabel,
+  buildPreviewJobProgressText,
   buildOptionTypeLabel,
   buildPriceDirection,
   buildRoundingModeLabel,
@@ -76,10 +81,12 @@ import {
 } from "./helpers";
 import {
   DEFAULT_WORK_DATE_RANGE,
+  buildPreviewJobQueryKey,
   DEFAULT_PREVIEW_SORT,
   DEFAULT_STATE,
   DEFAULT_UI_STATE,
   PREVIEW_ROWS_PER_PAGE,
+  type ActivePreviewRefreshJob,
   buildPreviewQueryKey,
   type ActivePreviewSession,
   type DisplayRow,
@@ -88,13 +95,27 @@ import {
   type NaverPreviewSortState,
   type SettingsStoresResponse,
   type UiState,
+  isMatchingPreviewRefreshJob,
 } from "./state";
 
 const LIVE_RUN_SUMMARY_POLL_MS = 2_500;
 const LIVE_RUN_DETAIL_POLL_MS = 5_000;
 const LIVE_RUN_RATE_LIMIT_BACKOFF_MS = 15_000;
+const PREVIEW_REFRESH_POLL_MS = 2_500;
+const PREVIEW_REFRESH_ERROR_BACKOFF_MS = 5_000;
 
 function sortNaverRuns(items: NaverBulkPriceRun[]) {
+  return items
+    .slice()
+    .sort(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    );
+}
+
+function sortPreviewRefreshJobs(items: NaverBulkPricePreviewJob[]) {
   return items
     .slice()
     .sort(
@@ -114,12 +135,42 @@ function upsertNaverRunListResponse(
   };
 }
 
+function upsertPreviewRefreshJobListResponse(
+  current: NaverBulkPricePreviewJobListResponse | undefined,
+  job: NaverBulkPricePreviewJob,
+): NaverBulkPricePreviewJobListResponse {
+  return {
+    items: sortPreviewRefreshJobs([
+      job,
+      ...(current?.items ?? []).filter((item) => item.id !== job.id),
+    ]),
+  };
+}
+
 function isRateLimitedApiError(error: unknown): error is ApiHttpError {
   return error instanceof ApiHttpError && error.status === 429;
 }
 
 function resolveRateLimitBackoffMs(error: ApiHttpError) {
   return Math.max(error.retryAfterMs ?? 0, LIVE_RUN_RATE_LIMIT_BACKOFF_MS);
+}
+
+function resolvePreviewRefreshBackoffMs(error: unknown) {
+  if (error instanceof ApiHttpError) {
+    if (error.status === 429) {
+      return Math.max(error.retryAfterMs ?? 0, PREVIEW_REFRESH_ERROR_BACKOFF_MS);
+    }
+
+    if (error.status >= 500) {
+      return PREVIEW_REFRESH_ERROR_BACKOFF_MS;
+    }
+  }
+
+  if (error instanceof Error) {
+    return PREVIEW_REFRESH_ERROR_BACKOFF_MS;
+  }
+
+  return 0;
 }
 
 export default function NaverBulkPricePage() {
@@ -188,8 +239,13 @@ export default function NaverBulkPricePage() {
   const [activePreviewSession, setActivePreviewSession] = useState<ActivePreviewSession | null>(
     null,
   );
+  const [activePreviewRefreshJob, setActivePreviewRefreshJob] =
+    useState<ActivePreviewRefreshJob | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [liveRunRateLimitUntil, setLiveRunRateLimitUntil] = useState<number | null>(null);
+  const [previewRefreshBackoffUntil, setPreviewRefreshBackoffUntil] = useState<number | null>(
+    null,
+  );
   const [previewPage, setPreviewPage] = useState(1);
   const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
   const [sourcePresetName, setSourcePresetName] = useState("");
@@ -513,36 +569,142 @@ export default function NaverBulkPricePage() {
       )
     : null;
 
-  const buildPreviewMutation = useMutation({
+  const previewRefreshJobsQuery = useQuery({
+    queryKey: ["/api/naver/bulk-price/preview/jobs", "list"],
+    queryFn: () =>
+      getJson<NaverBulkPricePreviewJobListResponse>("/api/naver/bulk-price/preview/jobs"),
+    refetchInterval: (query) => {
+      const items =
+        (query.state.data as NaverBulkPricePreviewJobListResponse | undefined)?.items ?? [];
+      return items.some((job) => job.status === "queued" || job.status === "running")
+        ? PREVIEW_REFRESH_POLL_MS
+        : false;
+    },
+    placeholderData: (previousData) => previousData,
+  });
+
+  const matchingPreviewRefreshJob = useMemo(() => {
+    const jobs = previewRefreshJobsQuery.data?.items ?? [];
+    const currentJob =
+      activePreviewRefreshJob &&
+      isMatchingPreviewRefreshJob(
+        {
+          sourceConfig: activePreviewRefreshJob.sourceConfig,
+          rules: activePreviewRefreshJob.rules,
+        },
+        currentSourceConfig,
+        currentRuleSet,
+      )
+        ? jobs.find((job) => job.id === activePreviewRefreshJob.jobId) ?? null
+        : null;
+
+    if (currentJob) {
+      return currentJob;
+    }
+
+    return (
+      jobs.find(
+        (job) =>
+          (job.status === "queued" || job.status === "running") &&
+          isMatchingPreviewRefreshJob(job, currentSourceConfig, currentRuleSet),
+      ) ?? null
+    );
+  }, [
+    activePreviewRefreshJob,
+    currentRuleSet,
+    currentSourceConfig,
+    previewRefreshJobsQuery.data?.items,
+  ]);
+
+  const activePreviewRefreshJobId =
+    activePreviewRefreshJob &&
+    isMatchingPreviewRefreshJob(
+      {
+        sourceConfig: activePreviewRefreshJob.sourceConfig,
+        rules: activePreviewRefreshJob.rules,
+      },
+      currentSourceConfig,
+      currentRuleSet,
+    )
+      ? activePreviewRefreshJob.jobId
+      : matchingPreviewRefreshJob?.id ?? null;
+
+  const previewRefreshMutation = useMutation({
     mutationFn: async (input: {
       sourceConfig: ReturnType<typeof buildSourceConfigFromState>;
       rules: NaverBulkPriceRuleSet;
     }) =>
-      apiRequestJson<NaverBulkPricePreviewResponse>("POST", "/api/naver/bulk-price/preview", {
-        sourceConfig: input.sourceConfig,
-        rules: input.rules,
-        page: 1,
-        pageSize: PREVIEW_ROWS_PER_PAGE,
-        matchedOnly: uiState.previewMatchedOnly,
-        sort: previewSortRequest,
-      } satisfies NaverBulkPricePreviewQueryInput),
-    onSuccess: (data, variables) => {
+      apiRequestJson<NaverBulkPricePreviewJobResponse>(
+        "POST",
+        "/api/naver/bulk-price/preview/jobs",
+        {
+          sourceConfig: input.sourceConfig,
+          rules: input.rules,
+        },
+      ),
+    onSuccess: ({ job }, variables) => {
+      queryClient.setQueryData(buildPreviewJobQueryKey(job.id), { job });
       queryClient.setQueryData(
-        buildPreviewQueryKey(
-          data.previewId,
-          data.page,
-          uiState.previewMatchedOnly,
-          previewSortRequest,
-        ),
-        data,
+        ["/api/naver/bulk-price/preview/jobs", "list"] as const,
+        (current: NaverBulkPricePreviewJobListResponse | undefined) =>
+          upsertPreviewRefreshJobListResponse(current, job),
       );
-      setActivePreviewSession({
-        previewId: data.previewId,
+      setActivePreviewRefreshJob({
+        jobId: job.id,
         sourceConfig: variables.sourceConfig,
         rules: variables.rules,
       });
+      if (job.cachedPreviewId) {
+        setPreviewPage(1);
+        setActivePreviewSession({
+          previewId: job.cachedPreviewId,
+          sourceConfig: variables.sourceConfig,
+          rules: variables.rules,
+        });
+      }
     },
   });
+
+  const previewRefreshJobQuery = useQuery({
+    queryKey: activePreviewRefreshJobId
+      ? buildPreviewJobQueryKey(activePreviewRefreshJobId)
+      : ["/api/naver/bulk-price/preview/jobs", "idle"],
+    queryFn: () =>
+      getJsonNoStore<NaverBulkPricePreviewJobResponse>(
+        `/api/naver/bulk-price/preview/jobs/${activePreviewRefreshJobId}`,
+      ),
+    enabled: Boolean(activePreviewRefreshJobId),
+    refetchInterval: (query) => {
+      const job = (query.state.data as NaverBulkPricePreviewJobResponse | undefined)?.job;
+      if (!job || (job.status !== "queued" && job.status !== "running")) {
+        return false;
+      }
+
+      const remainingCooldownMs = previewRefreshBackoffUntil
+        ? Math.max(0, previewRefreshBackoffUntil - Date.now())
+        : 0;
+      if (remainingCooldownMs > 0) {
+        return Math.max(PREVIEW_REFRESH_POLL_MS, remainingCooldownMs);
+      }
+
+      if (query.state.error) {
+        return Math.max(
+          PREVIEW_REFRESH_POLL_MS,
+          resolvePreviewRefreshBackoffMs(query.state.error),
+        );
+      }
+
+      return PREVIEW_REFRESH_POLL_MS;
+    },
+    placeholderData: (previousData) => previousData,
+  });
+
+  const previewRefreshJob =
+    previewRefreshJobQuery.data?.job ??
+    (activePreviewRefreshJobId
+      ? (previewRefreshJobsQuery.data?.items ?? []).find((job) => job.id === activePreviewRefreshJobId) ??
+        null
+      : null);
 
   const previewQuery = useQuery({
     queryKey: activePreviewQueryKey ?? ["/api/naver/bulk-price/preview", "idle"],
@@ -562,6 +724,8 @@ export default function NaverBulkPricePage() {
 
   const previewData = activePreviewSession ? previewQuery.data ?? null : null;
   const currentPreviewId = activePreviewSession?.previewId ?? null;
+  const previewRefreshActive =
+    previewRefreshJob?.status === "queued" || previewRefreshJob?.status === "running";
   const previewSelection = currentPreviewId
     ? previewSelections[currentPreviewId] ?? createDefaultPreviewSelectionState()
     : createDefaultPreviewSelectionState();
@@ -578,6 +742,77 @@ export default function NaverBulkPricePage() {
     activeRunId ?? "",
     "summary",
   ] as const;
+
+  useEffect(() => {
+    const job = previewRefreshJobQuery.data?.job;
+    if (!job) {
+      return;
+    }
+
+    queryClient.setQueryData(
+      ["/api/naver/bulk-price/preview/jobs", "list"] as const,
+      (current: NaverBulkPricePreviewJobListResponse | undefined) =>
+        upsertPreviewRefreshJobListResponse(current, job),
+    );
+  }, [previewRefreshJobQuery.data?.job]);
+
+  useEffect(() => {
+    if (!previewRefreshJob) {
+      return;
+    }
+
+    if (previewRefreshJob.cachedPreviewId && !currentPreviewId) {
+      setPreviewPage(1);
+      setActivePreviewSession({
+        previewId: previewRefreshJob.cachedPreviewId,
+        sourceConfig: previewRefreshJob.sourceConfig,
+        rules: previewRefreshJob.rules,
+      });
+    }
+
+    if (
+      previewRefreshJob.latestPreviewId &&
+      previewRefreshJob.latestPreviewId !== currentPreviewId
+    ) {
+      setPreviewPage(1);
+      setActivePreviewSession({
+        previewId: previewRefreshJob.latestPreviewId,
+        sourceConfig: previewRefreshJob.sourceConfig,
+        rules: previewRefreshJob.rules,
+      });
+    }
+  }, [currentPreviewId, previewRefreshJob]);
+
+  useEffect(() => {
+    const backoffMs = resolvePreviewRefreshBackoffMs(
+      previewRefreshJobQuery.error ?? previewRefreshJobsQuery.error,
+    );
+    if (!backoffMs) {
+      return;
+    }
+
+    const nextCooldownUntil = Date.now() + backoffMs;
+    setPreviewRefreshBackoffUntil((current) =>
+      current && current > nextCooldownUntil ? current : nextCooldownUntil,
+    );
+  }, [previewRefreshJobQuery.error, previewRefreshJobsQuery.error]);
+
+  useEffect(() => {
+    if (!previewRefreshBackoffUntil) {
+      return;
+    }
+
+    const remainingMs = previewRefreshBackoffUntil - Date.now();
+    if (remainingMs <= 0) {
+      setPreviewRefreshBackoffUntil(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setPreviewRefreshBackoffUntil(null);
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [previewRefreshBackoffUntil]);
 
   const runSummaryQuery = useQuery({
     queryKey: runSummaryQueryKey,
@@ -680,13 +915,13 @@ export default function NaverBulkPricePage() {
       JSON.stringify(activePreviewSession?.rules) !== JSON.stringify(currentRuleSet));
 
   function handleRefreshPreview() {
-    if (!configReady || buildPreviewMutation.isPending) {
+    if (!configReady || previewRefreshMutation.isPending || previewRefreshActive) {
       return;
     }
 
     if (currentPreviewId && hasPreviewSelectionChanges(previewSelection)) {
       const confirmed = window.confirm(
-        "?꾩옱 誘몃━蹂닿린?먯꽌 ?좏깮?섍굅???섎룞 ?낅젰??媛믪씠 珥덇린?붾맗?덈떎. ??誘몃━蹂닿린瑜?留뚮뱾源뚯슂?",
+        "Selection changes and manual overrides from the current preview will be reset. Create a fresh preview?",
       );
       if (!confirmed) {
         return;
@@ -694,7 +929,7 @@ export default function NaverBulkPricePage() {
     }
 
     setPreviewPage(1);
-    buildPreviewMutation.mutate({
+    previewRefreshMutation.mutate({
       sourceConfig: currentSourceConfig,
       rules: currentRuleSet,
     });
@@ -1085,7 +1320,20 @@ export default function NaverBulkPricePage() {
       activeRunStatus === "paused");
 
   const sourceMetadataError = (tablesQuery.error ?? metadataQuery.error) as Error | null;
-  const previewError = (buildPreviewMutation.error ?? previewQuery.error) as Error | null;
+  const previewRefreshBackoffActive =
+    previewRefreshActive &&
+    previewRefreshBackoffUntil !== null &&
+    previewRefreshBackoffUntil > Date.now();
+  const previewRefreshStatusText = previewRefreshJob
+    ? buildPreviewJobProgressText(previewRefreshJob)
+    : null;
+  const previewRefreshFailure =
+    previewRefreshJob?.status === "failed"
+      ? new Error(previewRefreshJob.error ?? "Preview refresh failed.")
+      : null;
+  const previewError = (previewRefreshMutation.error ??
+    previewRefreshFailure ??
+    previewQuery.error) as Error | null;
   const runError = (createRunMutation.error ??
     pauseMutation.error ??
     resumeMutation.error ??
@@ -1108,8 +1356,8 @@ export default function NaverBulkPricePage() {
     createRulePresetMutation.isPending ||
     updateRulePresetMutation.isPending ||
     deleteRulePresetMutation.isPending;
+  const previewRefreshBusy = previewRefreshMutation.isPending || previewRefreshActive;
   const runBusy =
-    buildPreviewMutation.isPending ||
     createRunMutation.isPending ||
     pauseMutation.isPending ||
     resumeMutation.isPending ||
@@ -1780,7 +2028,7 @@ export default function NaverBulkPricePage() {
                 className="button ghost"
                 type="button"
                 onClick={handleRefreshPreview}
-                disabled={!configReady || buildPreviewMutation.isPending}
+                disabled={!configReady || previewRefreshBusy}
               >
                 Refresh preview
               </button>
@@ -1915,9 +2163,9 @@ export default function NaverBulkPricePage() {
                 className="button ghost"
                 type="button"
                 onClick={handleRefreshPreview}
-                disabled={!configReady || buildPreviewMutation.isPending}
+                disabled={!configReady || previewRefreshBusy}
               >
-                {buildPreviewMutation.isPending ? "Refreshing preview..." : "Load matching rows"}
+                {previewRefreshBusy ? "Refreshing preview..." : "Load matching rows"}
               </button>
               <button
                 className={`button ${allReadyChecked ? "secondary" : "ghost"}`}
@@ -2012,6 +2260,56 @@ export default function NaverBulkPricePage() {
               </div>
             </div>
           </div>
+
+          {previewRefreshJob ? (
+            <div className="feedback">
+              <strong>
+                {previewRefreshActive ? "Refreshing preview..." : "Latest refresh"}
+              </strong>
+              <div className="muted">
+                {buildStatusLabel(previewRefreshJob.status)} ·{" "}
+                {previewRefreshStatusText ?? buildPreviewJobPhaseLabel(previewRefreshJob.phase)}
+              </div>
+              {previewRefreshJob.startedFromCache ? (
+                <div className="muted">
+                  Showing the last completed preview while a fresh snapshot is built in the
+                  background.
+                </div>
+              ) : null}
+              {!currentPreviewId && previewRefreshActive ? (
+                <div className="muted">
+                  Rows will appear automatically as soon as the first snapshot is ready.
+                </div>
+              ) : null}
+              {previewRefreshJob.summary?.stats ? (
+                <div className="muted">
+                  Last snapshot: ready{" "}
+                  {formatNumber(previewRefreshJob.summary.stats.readyCount)} / selectable{" "}
+                  {formatNumber(previewRefreshJob.summary.stats.selectableCount)} / conflicts{" "}
+                  {formatNumber(previewRefreshJob.summary.stats.conflictCount)} / unmatched{" "}
+                  {formatNumber(previewRefreshJob.summary.stats.unmatchedCount)}
+                </div>
+              ) : null}
+            </div>
+          ) : !currentPreviewId ? (
+            <div className="feedback">
+              <strong>Preview not loaded yet</strong>
+              <div className="muted">
+                Start a preview refresh to load matching rows. Large stores now build the preview
+                in the background so the page does not wait on a long request.
+              </div>
+            </div>
+          ) : null}
+
+          {previewRefreshBackoffActive ? (
+            <div className="feedback">
+              <strong>Preview refresh slowed down</strong>
+              <div className="muted">
+                Progress checks hit a temporary request limit or transient upstream delay. The
+                page is backing off and will retry automatically.
+              </div>
+            </div>
+          ) : null}
 
           {previewError ? (
             <div className="feedback error">

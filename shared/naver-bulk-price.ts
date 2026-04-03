@@ -51,6 +51,25 @@ export const naverBulkPriceRunItemStatuses = [
 export type NaverBulkPriceRunItemStatus =
   (typeof naverBulkPriceRunItemStatuses)[number];
 
+export const naverBulkPricePreviewJobStatuses = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+] as const;
+export type NaverBulkPricePreviewJobStatus =
+  (typeof naverBulkPricePreviewJobStatuses)[number];
+
+export const naverBulkPricePreviewJobPhases = [
+  "loading_naver_products",
+  "enriching_barcodes",
+  "loading_source_rows",
+  "matching",
+  "finalizing",
+] as const;
+export type NaverBulkPricePreviewJobPhase =
+  (typeof naverBulkPricePreviewJobPhases)[number];
+
 export const naverBulkPricePreviewSortDirections = ["asc", "desc"] as const;
 export type NaverBulkPricePreviewSortDirection =
   (typeof naverBulkPricePreviewSortDirections)[number];
@@ -283,6 +302,52 @@ export interface NaverBulkPricePreviewResponse
   pageSize: number;
   filteredTotal: number;
   totalPages: number;
+}
+
+export interface NaverBulkPricePreviewJobProgress {
+  loadedProducts: number;
+  totalProducts: number;
+  matchedCodes: number;
+  processedRows: number;
+  updatedAt: string;
+}
+
+export interface NaverBulkPricePreviewJobSummary {
+  previewId: string | null;
+  stats: NaverBulkPricePreviewStats | null;
+  workDateFilterSummary: NaverBulkPriceWorkDateFilterSummary | null;
+  generatedAt: string | null;
+}
+
+export interface NaverBulkPricePreviewJob {
+  id: string;
+  sourceConfig: NaverBulkPriceSourceConfig;
+  rules: NaverBulkPriceRuleSet;
+  status: NaverBulkPricePreviewJobStatus;
+  phase: NaverBulkPricePreviewJobPhase;
+  progress: NaverBulkPricePreviewJobProgress;
+  cachedPreviewId: string | null;
+  cachedSummary: NaverBulkPricePreviewJobSummary | null;
+  startedFromCache: boolean;
+  latestPreviewId: string | null;
+  summary: NaverBulkPricePreviewJobSummary | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
+export interface NaverBulkPricePreviewJobInput {
+  sourceConfig: NaverBulkPriceSourceConfig;
+  rules: NaverBulkPriceRuleSet;
+}
+
+export interface NaverBulkPricePreviewJobResponse {
+  job: NaverBulkPricePreviewJob;
+}
+
+export interface NaverBulkPricePreviewJobListResponse {
+  items: NaverBulkPricePreviewJob[];
 }
 
 export interface NaverBulkPriceLatestAppliedRecord {

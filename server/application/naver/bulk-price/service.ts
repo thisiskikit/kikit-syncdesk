@@ -4,6 +4,10 @@ import type {
   NaverBulkPriceSaleStatus,
   NaverBulkPriceCreateRunInput,
   NaverBulkPriceLatestAppliedRecord,
+  NaverBulkPricePreviewJob,
+  NaverBulkPricePreviewJobPhase,
+  NaverBulkPricePreviewJobProgress,
+  NaverBulkPricePreviewJobSummary,
   NaverBulkPricePreviewQueryInput,
   NaverBulkPricePreviewResponse,
   NaverBulkPricePreviewRow,
@@ -90,6 +94,7 @@ type NaverBulkPriceServiceDeps = {
   buildPreview: (input: {
     sourceConfig: NaverBulkPriceSourceConfig;
     rules: NaverBulkPriceRuleSet;
+    onProgress?: (update: BuildPreviewProgressUpdate) => void;
   }) => Promise<NaverBulkPricePreviewSnapshot>;
   applyPriceUpdate: (input: {
     storeId: string;
@@ -142,6 +147,15 @@ type PreviewSession = {
   cachedAt: number;
 };
 
+type BuildPreviewProgressUpdate = Partial<NaverBulkPricePreviewJobProgress> & {
+  phase?: NaverBulkPricePreviewJobPhase;
+};
+
+type PreviewRefreshJob = NaverBulkPricePreviewJob & {
+  key: string;
+  promise: Promise<void> | null;
+};
+
 type PreviewCandidateCacheEntry = {
   rows: NaverPreviewCandidate[];
   cachedAt: number;
@@ -153,9 +167,11 @@ const DEFAULT_PREVIEW_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_PREVIEW_CANDIDATE_CACHE_TTL_MS = 60_000;
 const SELLER_BARCODE_PREVIEW_CANDIDATE_CACHE_TTL_MS = 5_000;
 const DEFAULT_PREVIEW_PAGE_SIZE = 100;
+const DEFAULT_SOURCE_MATCH_CODE_BATCH_SIZE = 500;
 const RECENT_RUN_ITEM_LIMIT = 20;
 const RUN_SUMMARY_PERSIST_DEBOUNCE_MS = 200;
 const NAVER_RESTOCK_QUANTITY = 102;
+const PREVIEW_REFRESH_JOB_TTL_MS = 10 * 60_000;
 
 const previewCandidateCache = new Map<string, PreviewCandidateCacheEntry>();
 const previewCandidateRequests = new Map<string, Promise<NaverPreviewCandidate[]>>();
@@ -606,6 +622,47 @@ function buildPagedPreviewResponse(input: {
   };
 }
 
+function createEmptyPreviewJobProgress(): NaverBulkPricePreviewJobProgress {
+  return {
+    loadedProducts: 0,
+    totalProducts: 0,
+    matchedCodes: 0,
+    processedRows: 0,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function buildPreviewJobSummary(
+  session: PreviewSession | null,
+): NaverBulkPricePreviewJobSummary | null {
+  if (!session) {
+    return null;
+  }
+
+  return {
+    previewId: session.id,
+    stats: session.preview.stats,
+    workDateFilterSummary: session.preview.workDateFilterSummary,
+    generatedAt: session.preview.generatedAt,
+  };
+}
+
+function sortPreviewRefreshJobs(items: PreviewRefreshJob[]) {
+  return items
+    .slice()
+    .sort(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    );
+}
+
+function toPublicPreviewRefreshJob(job: PreviewRefreshJob): NaverBulkPricePreviewJob {
+  const { key: _key, promise: _promise, ...publicJob } = job;
+  return publicJob;
+}
+
 export function buildNaverBulkPricePreviewRows(input: {
   sourceRows: BulkPricePreviewSourceRow[];
   naverRows: NaverPreviewCandidate[];
@@ -826,6 +883,7 @@ export function buildNaverBulkPricePreviewRows(input: {
 export function buildNaverBulkPricePreview(input: {
   sourceConfig: NaverBulkPriceSourceConfig;
   rules: NaverBulkPriceRuleSet;
+  onProgress?: (update: BuildPreviewProgressUpdate) => void;
 }): Promise<NaverBulkPricePreviewSnapshot> {
   validateSourceConfig(input.sourceConfig);
   validateBulkPriceRuleSet(input.rules);
@@ -875,6 +933,14 @@ export function buildNaverBulkPricePreview(input: {
       });
     }
 
+    input.onProgress?.({
+      phase: "loading_naver_products",
+      loadedProducts: 0,
+      totalProducts: 0,
+      matchedCodes: 0,
+      processedRows: 0,
+      updatedAt: new Date().toISOString(),
+    });
     const naverRows = await loadAllNaverPreviewCandidates(input.sourceConfig);
     const matchCodes = Array.from(
       new Set(
@@ -883,20 +949,57 @@ export function buildNaverBulkPricePreview(input: {
           .filter((value): value is string => Boolean(value)),
       ),
     );
+    input.onProgress?.({
+      phase:
+        input.sourceConfig.naverMatchField === "sellerBarcode"
+          ? "enriching_barcodes"
+          : "loading_source_rows",
+      loadedProducts: naverRows.length,
+      totalProducts: naverRows.length,
+      matchedCodes: 0,
+      processedRows: 0,
+      updatedAt: new Date().toISOString(),
+    });
     const sourceRowsResult = await loadRelevantSourceRows({
       sourceConfig: input.sourceConfig,
       matchCodes,
       sourceMatchColumnDataType: sourceMatchColumn?.dataType ?? null,
+      batchSize: DEFAULT_SOURCE_MATCH_CODE_BATCH_SIZE,
+      onBatchComplete: (progress) =>
+        input.onProgress?.({
+          phase: "loading_source_rows",
+          loadedProducts: naverRows.length,
+          totalProducts: naverRows.length,
+          matchedCodes: progress.processedMatchCodes,
+          processedRows: 0,
+          updatedAt: new Date().toISOString(),
+        }),
     });
     const latestRecords = await naverBulkPriceStore.listLatestRecordsByRowKeys(
       naverRows.map((row) => row.rowKey),
     );
+    input.onProgress?.({
+      phase: "matching",
+      loadedProducts: naverRows.length,
+      totalProducts: naverRows.length,
+      matchedCodes: matchCodes.length,
+      processedRows: 0,
+      updatedAt: new Date().toISOString(),
+    });
     const previewRowsResult = buildNaverBulkPricePreviewRows({
       sourceRows: sourceRowsResult.rows,
       naverRows,
       rules: input.rules,
       latestRecords,
       excludedOnlyMatchCodes: sourceRowsResult.excludedOnlyMatchCodes,
+    });
+    input.onProgress?.({
+      phase: "finalizing",
+      loadedProducts: naverRows.length,
+      totalProducts: naverRows.length,
+      matchedCodes: matchCodes.length,
+      processedRows: previewRowsResult.rows.length,
+      updatedAt: new Date().toISOString(),
     });
     const workDateFilterSummary: NaverBulkPriceWorkDateFilterSummary = {
       ...sourceRowsResult.workDateFilterSummary,
@@ -1216,6 +1319,8 @@ export class NaverBulkPriceService {
   private readonly controllers = new Map<string, RunController>();
   private readonly previewSessionsByKey = new Map<string, PreviewSession>();
   private readonly previewSessionsById = new Map<string, PreviewSession>();
+  private readonly previewRefreshJobsById = new Map<string, PreviewRefreshJob>();
+  private readonly previewRefreshJobsByKey = new Map<string, PreviewRefreshJob>();
 
   constructor(private readonly deps: NaverBulkPriceServiceDeps) {}
 
@@ -1241,6 +1346,101 @@ export class NaverBulkPriceService {
     });
   }
 
+  async getCachedPreview(input: NaverBulkPricePreviewQueryInput) {
+    const previewId = input.previewId?.trim() ?? "";
+    const session = previewId
+      ? this.resolvePreviewSessionById(previewId)
+      : this.findPreviewSession(input.sourceConfig ?? null, input.rules ?? null);
+
+    if (!session) {
+      throw new ApiRouteError({
+        code: "NAVER_BULK_PRICE_PREVIEW_REFRESH_REQUIRED",
+        message: "Preview refresh required. Start a preview refresh job and try again.",
+        status: 409,
+      });
+    }
+
+    return buildPagedPreviewResponse({
+      session,
+      page: input.page,
+      pageSize: input.pageSize,
+      matchedOnly: input.matchedOnly,
+      sort: input.sort,
+    });
+  }
+
+  async startPreviewRefreshJob(input: {
+    sourceConfig: NaverBulkPriceSourceConfig;
+    rules: NaverBulkPriceRuleSet;
+  }) {
+    validateSourceConfig(input.sourceConfig);
+    validateBulkPriceRuleSet(input.rules);
+    this.cleanupExpiredPreviewRefreshJobs();
+
+    const key = this.getPreviewSessionKey(input.sourceConfig, input.rules);
+    const existing = this.previewRefreshJobsByKey.get(key);
+    if (existing && (existing.status === "queued" || existing.status === "running")) {
+      return {
+        job: toPublicPreviewRefreshJob(existing),
+      };
+    }
+
+    const cachedSession = this.findPreviewSession(input.sourceConfig, input.rules);
+    const timestamp = new Date().toISOString();
+    const job: PreviewRefreshJob = {
+      id: randomUUID(),
+      key,
+      sourceConfig: input.sourceConfig,
+      rules: input.rules,
+      status: "queued",
+      phase: "loading_naver_products",
+      progress: createEmptyPreviewJobProgress(),
+      cachedPreviewId: cachedSession?.id ?? null,
+      cachedSummary: buildPreviewJobSummary(cachedSession),
+      startedFromCache: Boolean(cachedSession),
+      latestPreviewId: null,
+      summary: null,
+      error: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      finishedAt: null,
+      promise: null,
+    };
+
+    this.previewRefreshJobsById.set(job.id, job);
+    this.previewRefreshJobsByKey.set(key, job);
+    job.promise = this.runPreviewRefreshJob(job);
+
+    return {
+      job: toPublicPreviewRefreshJob(job),
+    };
+  }
+
+  async getPreviewRefreshJob(jobId: string) {
+    this.cleanupExpiredPreviewRefreshJobs();
+    const job = this.previewRefreshJobsById.get(jobId) ?? null;
+    if (!job) {
+      throw new ApiRouteError({
+        code: "NAVER_BULK_PRICE_PREVIEW_JOB_NOT_FOUND",
+        message: "Preview refresh job not found.",
+        status: 404,
+      });
+    }
+
+    return {
+      job: toPublicPreviewRefreshJob(job),
+    };
+  }
+
+  async listPreviewRefreshJobs() {
+    this.cleanupExpiredPreviewRefreshJobs();
+    return {
+      items: sortPreviewRefreshJobs(Array.from(this.previewRefreshJobsById.values())).map(
+        toPublicPreviewRefreshJob,
+      ),
+    };
+  }
+
   private getPreviewSessionKey(
     sourceConfig: NaverBulkPriceSourceConfig,
     rules: NaverBulkPriceRuleSet,
@@ -1254,6 +1454,18 @@ export class NaverBulkPriceService {
 
   private getPreviewCacheTtlMs() {
     return Math.max(1_000, this.deps.previewCacheTtlMs ?? DEFAULT_PREVIEW_CACHE_TTL_MS);
+  }
+
+  private findPreviewSession(
+    sourceConfig: NaverBulkPriceSourceConfig | null,
+    rules: NaverBulkPriceRuleSet | null,
+  ) {
+    this.cleanupExpiredPreviewSessions();
+    if (!sourceConfig || !rules) {
+      return null;
+    }
+
+    return this.previewSessionsByKey.get(this.getPreviewSessionKey(sourceConfig, rules)) ?? null;
   }
 
   private removePreviewSession(session: PreviewSession) {
@@ -1274,6 +1486,53 @@ export class NaverBulkPriceService {
         this.removePreviewSession(session);
       }
     }
+  }
+
+  private removePreviewRefreshJob(job: PreviewRefreshJob) {
+    this.previewRefreshJobsById.delete(job.id);
+    const activeKeyEntry = this.previewRefreshJobsByKey.get(job.key);
+    if (activeKeyEntry?.id === job.id) {
+      this.previewRefreshJobsByKey.delete(job.key);
+    }
+  }
+
+  private cleanupExpiredPreviewRefreshJobs() {
+    const now = Date.now();
+
+    for (const job of Array.from(this.previewRefreshJobsById.values())) {
+      if (job.status === "queued" || job.status === "running") {
+        continue;
+      }
+
+      const referenceTime = Date.parse(job.finishedAt ?? job.updatedAt);
+      if (Number.isNaN(referenceTime)) {
+        continue;
+      }
+
+      if (now - referenceTime > PREVIEW_REFRESH_JOB_TTL_MS) {
+        this.removePreviewRefreshJob(job);
+      }
+    }
+  }
+
+  private updatePreviewRefreshJob(
+    job: PreviewRefreshJob,
+    patch: Partial<
+      Omit<PreviewRefreshJob, "id" | "key" | "sourceConfig" | "rules" | "createdAt" | "promise">
+    >,
+  ) {
+    const nextProgress = patch.progress
+      ? {
+          ...job.progress,
+          ...patch.progress,
+          updatedAt: patch.progress.updatedAt ?? new Date().toISOString(),
+        }
+      : job.progress;
+
+    Object.assign(job, patch, {
+      progress: nextProgress,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    });
   }
 
   private cachePreviewSession(preview: NaverBulkPricePreviewSnapshot) {
@@ -1322,6 +1581,7 @@ export class NaverBulkPriceService {
   private async createPreviewSession(input: {
     sourceConfig: NaverBulkPriceSourceConfig | null;
     rules: NaverBulkPriceRuleSet | null;
+    onProgress?: (update: BuildPreviewProgressUpdate) => void;
   }) {
     if (!input.sourceConfig || !input.rules) {
       throw new ApiRouteError({
@@ -1338,8 +1598,62 @@ export class NaverBulkPriceService {
       await this.deps.buildPreview({
         sourceConfig: input.sourceConfig,
         rules: input.rules,
+        onProgress: input.onProgress,
       }),
     );
+  }
+
+  private async runPreviewRefreshJob(job: PreviewRefreshJob) {
+    this.updatePreviewRefreshJob(job, {
+      status: "running",
+      phase: "loading_naver_products",
+      error: null,
+      finishedAt: null,
+      progress: createEmptyPreviewJobProgress(),
+    });
+
+    try {
+      const session = await this.createPreviewSession({
+        sourceConfig: job.sourceConfig,
+        rules: job.rules,
+        onProgress: (update) =>
+          this.updatePreviewRefreshJob(job, {
+            status: "running",
+            phase: update.phase ?? job.phase,
+            progress: {
+              ...job.progress,
+              ...update,
+            },
+          }),
+      });
+
+      this.updatePreviewRefreshJob(job, {
+        status: "succeeded",
+        phase: "finalizing",
+        latestPreviewId: session.id,
+        summary: buildPreviewJobSummary(session),
+        finishedAt: new Date().toISOString(),
+        progress: {
+          loadedProducts: session.preview.stats.totalNaverItems,
+          totalProducts: session.preview.stats.totalNaverItems,
+          matchedCodes:
+            session.preview.stats.totalNaverItems - session.preview.stats.unmatchedCount,
+          processedRows: session.preview.rows.length,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      this.updatePreviewRefreshJob(job, {
+        status: "failed",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to refresh NAVER bulk price preview.",
+        finishedAt: new Date().toISOString(),
+      });
+    } finally {
+      job.promise = null;
+    }
   }
 
   private resolvePreviewSessionForRun(input: {

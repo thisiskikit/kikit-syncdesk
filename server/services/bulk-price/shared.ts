@@ -648,6 +648,13 @@ export async function loadRelevantSourceRows(input: {
   sourceMatchColumnDataType?: string | null;
   workDateFrom?: string;
   workDateTo?: string;
+  batchSize?: number;
+  onBatchComplete?: (progress: {
+    completedBatchCount: number;
+    totalBatchCount: number;
+    processedMatchCodes: number;
+    totalMatchCodes: number;
+  }) => void;
 }) {
   const pool = getExternalSourcePool();
   const fallbackRange = getDefaultWorkDateRange();
@@ -679,6 +686,11 @@ export async function loadRelevantSourceRows(input: {
   const includedMatchCodes = new Set<string>();
   const excludedMatchCodes = new Set<string>();
   let excludedSourceRowCount = 0;
+  const batchSize = Math.max(1, Math.min(input.batchSize ?? input.matchCodes.length, input.matchCodes.length));
+  const matchCodeBatches = Array.from(
+    { length: Math.ceil(input.matchCodes.length / batchSize) },
+    (_, index) => input.matchCodes.slice(index * batchSize, index * batchSize + batchSize),
+  ).filter((batch) => batch.length > 0);
 
   const consumeRows = (rows: SourceRowRecord[]) => {
     for (const row of rows) {
@@ -733,31 +745,43 @@ export async function loadRelevantSourceRows(input: {
     where btrim(cast(${quoteIdentifier(input.sourceConfig.sourceMatchColumn)} as text)) = any($1::text[])
   `;
 
-  if (!isTextualSourceDataType(input.sourceMatchColumnDataType)) {
-    const result = await pool.query<SourceRowRecord>(normalizedQuery, [input.matchCodes]);
-    consumeRows(result.rows);
-  } else {
-    const exactQuery = `
-      select *
-      from ${quoteIdentifier(input.sourceConfig.schema)}.${quoteIdentifier(
-        input.sourceConfig.table,
-      )}
-      where ${quoteIdentifier(input.sourceConfig.sourceMatchColumn)} = any($1::text[])
-    `;
+  const exactQuery = `
+    select *
+    from ${quoteIdentifier(input.sourceConfig.schema)}.${quoteIdentifier(
+      input.sourceConfig.table,
+    )}
+    where ${quoteIdentifier(input.sourceConfig.sourceMatchColumn)} = any($1::text[])
+  `;
 
-    const exactResult = await pool.query<SourceRowRecord>(exactQuery, [input.matchCodes]);
-    consumeRows(exactResult.rows);
-    const exactMatchedCodes = new Set(
-      exactResult.rows
-        .map((row) => normalizeMatchCode(row[input.sourceConfig.sourceMatchColumn]))
-        .filter((value): value is string => Boolean(value)),
-    );
-    const remainingMatchCodes = input.matchCodes.filter((code) => !exactMatchedCodes.has(code));
+  for (let index = 0; index < matchCodeBatches.length; index += 1) {
+    const batchMatchCodes = matchCodeBatches[index] ?? [];
+    if (!isTextualSourceDataType(input.sourceMatchColumnDataType)) {
+      const result = await pool.query<SourceRowRecord>(normalizedQuery, [batchMatchCodes]);
+      consumeRows(result.rows);
+    } else {
+      const exactResult = await pool.query<SourceRowRecord>(exactQuery, [batchMatchCodes]);
+      consumeRows(exactResult.rows);
+      const exactMatchedCodes = new Set(
+        exactResult.rows
+          .map((row) => normalizeMatchCode(row[input.sourceConfig.sourceMatchColumn]))
+          .filter((value): value is string => Boolean(value)),
+      );
+      const remainingMatchCodes = batchMatchCodes.filter(
+        (code: string) => !exactMatchedCodes.has(code),
+      );
 
-    if (remainingMatchCodes.length) {
-      const fallbackResult = await pool.query<SourceRowRecord>(normalizedQuery, [remainingMatchCodes]);
-      consumeRows(fallbackResult.rows);
+      if (remainingMatchCodes.length) {
+        const fallbackResult = await pool.query<SourceRowRecord>(normalizedQuery, [remainingMatchCodes]);
+        consumeRows(fallbackResult.rows);
+      }
     }
+
+    input.onBatchComplete?.({
+      completedBatchCount: index + 1,
+      totalBatchCount: matchCodeBatches.length,
+      processedMatchCodes: Math.min((index + 1) * batchSize, input.matchCodes.length),
+      totalMatchCodes: input.matchCodes.length,
+    });
   }
 
   const excludedOnlyMatchCodes = new Set(

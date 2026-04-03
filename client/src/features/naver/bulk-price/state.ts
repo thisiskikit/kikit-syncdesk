@@ -1,6 +1,7 @@
 import type { ChannelStoreSummary } from "@shared/channel-settings";
 import type {
   NaverBulkPriceMatchField,
+  NaverBulkPricePreviewJob,
   NaverBulkPricePreviewQueryInput,
   NaverBulkPricePreviewRow,
   NaverBulkPricePreviewSort,
@@ -63,6 +64,12 @@ export type ActivePreviewSession = {
   rules: NaverBulkPriceRuleSet;
 };
 
+export type ActivePreviewRefreshJob = {
+  jobId: string;
+  sourceConfig: NaverBulkPriceSourceConfig;
+  rules: NaverBulkPriceRuleSet;
+};
+
 export const DEFAULT_WORK_DATE_RANGE = getDefaultWorkDateRangeInput();
 
 export const DEFAULT_STATE: MenuState = {
@@ -121,4 +128,19 @@ export function buildPreviewQueryKey(
     NonNullable<NaverBulkPricePreviewQueryInput["sort"]>["field"],
     NonNullable<NaverBulkPricePreviewQueryInput["sort"]>["direction"],
   ];
+}
+
+export function buildPreviewJobQueryKey(jobId: string) {
+  return ["/api/naver/bulk-price/preview/jobs", jobId] as const;
+}
+
+export function isMatchingPreviewRefreshJob(
+  job: Pick<NaverBulkPricePreviewJob, "sourceConfig" | "rules">,
+  sourceConfig: NaverBulkPriceSourceConfig,
+  rules: NaverBulkPriceRuleSet,
+) {
+  return (
+    JSON.stringify(job.sourceConfig) === JSON.stringify(sourceConfig) &&
+    JSON.stringify(job.rules) === JSON.stringify(rules)
+  );
 }

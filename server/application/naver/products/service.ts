@@ -107,6 +107,14 @@ type NaverRequestContext = {
   authorization: string;
 };
 
+type NaverProductSnapshotProgress = {
+  phase: "loading_naver_products" | "enriching_barcodes";
+  loadedProducts: number;
+  totalProducts: number;
+  processedBarcodes?: number;
+  totalBarcodes?: number;
+};
+
 type NaverAvailabilityUpdateResult = {
   messages: string[];
   inventoryUpdated: boolean;
@@ -726,6 +734,7 @@ async function fetchSellerBarcodeByOriginProductNo(input: {
 async function enrichSellerBarcodesForResponse(input: {
   context: NaverRequestContext;
   response: NaverProductListResponse;
+  onProgress?: (progress: NaverProductSnapshotProgress) => void;
 }) {
   const missingByOriginProductNo = new Map<string, number[]>();
 
@@ -740,6 +749,14 @@ async function enrichSellerBarcodesForResponse(input: {
   });
 
   if (!missingByOriginProductNo.size) {
+    input.onProgress?.({
+      phase: "enriching_barcodes",
+      loadedProducts: input.response.items.length,
+      totalProducts:
+        input.response.availableTotalElements ?? input.response.totalElements,
+      processedBarcodes: 0,
+      totalBarcodes: 0,
+    });
     return input.response;
   }
 
@@ -786,6 +803,15 @@ async function enrichSellerBarcodesForResponse(input: {
     (originProductNo) => !cachedSellerBarcodes.has(originProductNo),
   );
 
+  input.onProgress?.({
+    phase: "enriching_barcodes",
+    loadedProducts: input.response.items.length,
+    totalProducts:
+      input.response.availableTotalElements ?? input.response.totalElements,
+    processedBarcodes: originProductNos.length - unresolvedAfterCache.length,
+    totalBarcodes: originProductNos.length,
+  });
+
   if (!unresolvedAfterCache.length) {
     return {
       ...input.response,
@@ -793,6 +819,7 @@ async function enrichSellerBarcodesForResponse(input: {
     } satisfies NaverProductListResponse;
   }
 
+  let completedBarcodeFetches = originProductNos.length - unresolvedAfterCache.length;
   const sellerBarcodeEntries = await mapWithConcurrency(
     unresolvedAfterCache,
     NAVER_PRODUCT_BARCODE_FETCH_CONCURRENCY,
@@ -805,14 +832,33 @@ async function enrichSellerBarcodesForResponse(input: {
       }
 
       try {
-        return {
+        const result = {
           originProductNo,
           sellerBarcode: await fetchSellerBarcodeByOriginProductNo({
             context: input.context,
             originProductNo,
           }),
         };
+        completedBarcodeFetches += 1;
+        input.onProgress?.({
+          phase: "enriching_barcodes",
+          loadedProducts: input.response.items.length,
+          totalProducts:
+            input.response.availableTotalElements ?? input.response.totalElements,
+          processedBarcodes: completedBarcodeFetches,
+          totalBarcodes: originProductNos.length,
+        });
+        return result;
       } catch {
+        completedBarcodeFetches += 1;
+        input.onProgress?.({
+          phase: "enriching_barcodes",
+          loadedProducts: input.response.items.length,
+          totalProducts:
+            input.response.availableTotalElements ?? input.response.totalElements,
+          processedBarcodes: completedBarcodeFetches,
+          totalBarcodes: originProductNos.length,
+        });
         return {
           originProductNo,
           sellerBarcode: null,
@@ -1304,17 +1350,24 @@ async function searchNaverProductsPageWithRetry(input: {
 async function fetchNaverProductSnapshot(input: {
   context: NaverRequestContext;
   includeSellerBarcodes: boolean;
+  onProgress?: (progress: NaverProductSnapshotProgress) => void;
 }) {
   const firstPage = await searchNaverProductsPageWithRetry({
     context: input.context,
     page: 1,
     size: NAVER_PRODUCT_SEARCH_PAGE_SIZE_MAX,
   });
+  input.onProgress?.({
+    phase: "loading_naver_products",
+    loadedProducts: firstPage.items.length,
+    totalProducts: firstPage.totalElements,
+  });
 
   const enrichedFirstPage = input.includeSellerBarcodes
     ? await enrichSellerBarcodesForResponse({
         context: input.context,
         response: firstPage,
+        onProgress: input.onProgress,
       })
     : firstPage;
 
@@ -1333,6 +1386,7 @@ async function fetchNaverProductSnapshot(input: {
     { length: Math.max(0, cappedTotalPages - 1) },
     (_, index) => index + 2,
   );
+  let loadedProducts = firstPage.items.length;
   const nextPages = await mapWithConcurrency(
     remainingPages,
     NAVER_PRODUCT_FETCH_PAGE_CONCURRENCY,
@@ -1343,19 +1397,32 @@ async function fetchNaverProductSnapshot(input: {
         await sleep(staggerMs);
       }
 
-      return searchNaverProductsPageWithRetry({
+      const response = await searchNaverProductsPageWithRetry({
         context: input.context,
         page,
         size: NAVER_PRODUCT_SEARCH_PAGE_SIZE_MAX,
       });
+      loadedProducts += response.items.length;
+      input.onProgress?.({
+        phase: "loading_naver_products",
+        loadedProducts,
+        totalProducts: firstPage.totalElements,
+      });
+      return response;
     },
   );
 
   const merged = mergeSearchResponses([firstPage, ...nextPages]);
+  input.onProgress?.({
+    phase: "loading_naver_products",
+    loadedProducts: merged.items.length,
+    totalProducts: merged.totalElements,
+  });
   const enrichedMerged = input.includeSellerBarcodes
     ? await enrichSellerBarcodesForResponse({
         context: input.context,
         response: merged,
+        onProgress: input.onProgress,
       })
     : merged;
 
@@ -1420,6 +1487,7 @@ export async function fetchNaverProducts(input: {
   all?: boolean;
   refresh?: boolean;
   includeSellerBarcodes?: boolean;
+  onProgress?: (progress: NaverProductSnapshotProgress) => void;
 }) {
   const needsSellerBarcodes = input.includeSellerBarcodes === true;
   let contextPromise: Promise<NaverRequestContext> | null = null;
@@ -1441,6 +1509,7 @@ export async function fetchNaverProducts(input: {
           ? await enrichSellerBarcodesForResponse({
               context: await getContext(),
               response: cached,
+              onProgress: input.onProgress,
             })
           : cached;
 
@@ -1466,6 +1535,13 @@ export async function fetchNaverProducts(input: {
             maxItems: input.maxItems,
           });
 
+      input.onProgress?.({
+        phase: "loading_naver_products",
+        loadedProducts: visibleResponse.items.length,
+        totalProducts:
+          visibleResponse.availableTotalElements ?? visibleResponse.totalElements,
+      });
+
       return attachProductMemos(visibleResponse);
     }
   }
@@ -1483,6 +1559,7 @@ export async function fetchNaverProducts(input: {
         ? await enrichSellerBarcodesForResponse({
             context,
             response: pageResponse,
+            onProgress: input.onProgress,
           })
         : pageResponse;
 
@@ -1514,6 +1591,7 @@ export async function fetchNaverProducts(input: {
         ? await enrichSellerBarcodesForResponse({
             context,
             response: firstPage,
+            onProgress: input.onProgress,
           })
         : firstPage;
 
@@ -1535,6 +1613,7 @@ export async function fetchNaverProducts(input: {
   const snapshot = await fetchNaverProductSnapshot({
     context,
     includeSellerBarcodes: needsSellerBarcodes,
+    onProgress: input.onProgress,
   });
   await naverProductCacheStore.set(input.storeId, withNaverProductCacheState(snapshot, false));
   return attachProductMemos(applyVisibleItemLimit(snapshot, input.maxItems));

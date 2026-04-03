@@ -1,5 +1,6 @@
 import type {
   NaverBulkPriceMatchField,
+  NaverBulkPricePreviewJob,
   NaverBulkPriceRuleSet,
   NaverBulkPriceRunDetail,
   NaverBulkPriceRunStatus,
@@ -256,4 +257,41 @@ export function buildRunSummaryText(run: NaverBulkPriceRunDetail["run"] | null) 
     `Paused ${run.summary.paused}`,
     `Stopped ${run.summary.stopped}`,
   ].join(" / ");
+}
+
+export function buildPreviewJobPhaseLabel(phase: NaverBulkPricePreviewJob["phase"]) {
+  switch (phase) {
+    case "loading_naver_products":
+      return "Loading NAVER products";
+    case "enriching_barcodes":
+      return "Enriching seller barcodes";
+    case "loading_source_rows":
+      return "Loading source rows";
+    case "matching":
+      return "Matching rows";
+    case "finalizing":
+      return "Finalizing preview";
+    default:
+      return phase;
+  }
+}
+
+export function buildPreviewJobProgressText(job: NaverBulkPricePreviewJob) {
+  const parts = [buildPreviewJobPhaseLabel(job.phase)];
+
+  if (job.progress.totalProducts > 0) {
+    parts.push(
+      `${formatNumber(job.progress.loadedProducts)} / ${formatNumber(job.progress.totalProducts)} products`,
+    );
+  }
+
+  if (job.progress.matchedCodes > 0) {
+    parts.push(`${formatNumber(job.progress.matchedCodes)} match codes`);
+  }
+
+  if (job.progress.processedRows > 0) {
+    parts.push(`${formatNumber(job.progress.processedRows)} rows processed`);
+  }
+
+  return parts.join(" / ");
 }

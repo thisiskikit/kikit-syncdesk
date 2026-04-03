@@ -1,14 +1,16 @@
 import { useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
-  BulkPriceRunRecentChange,
   BulkPriceRun,
   BulkPriceRunListResponse,
+  BulkPriceRunRecentChange,
 } from "@shared/coupang-bulk-price";
 import type {
+  NaverBulkPricePreviewJob,
+  NaverBulkPricePreviewJobListResponse,
   NaverBulkPriceRun,
-  NaverBulkPriceRunRecentChange,
   NaverBulkPriceRunListResponse,
+  NaverBulkPriceRunRecentChange,
 } from "@shared/naver-bulk-price";
 import { getBulkPriceRunHref, getOperationLogsHref } from "@/lib/operation-links";
 import { apiRequestJson, getJson, queryClient } from "@/lib/queryClient";
@@ -47,7 +49,15 @@ type BulkRunPanelEntry = BasePanelEntry & {
   recentChanges: Array<BulkPriceRunRecentChange | NaverBulkPriceRunRecentChange>;
 };
 
-type PanelEntry = OperationPanelEntry | BulkRunPanelEntry;
+type PreviewRefreshPanelEntry = BasePanelEntry & {
+  kind: "preview-refresh";
+  jobId: string;
+};
+
+type PanelEntry =
+  | OperationPanelEntry
+  | BulkRunPanelEntry
+  | PreviewRefreshPanelEntry;
 
 type BulkRunMutationInput = {
   channel: BulkRunChannel;
@@ -61,6 +71,7 @@ type DeleteBulkRunResponse = {
 
 const ACTIVE_BULK_RUN_PANEL_POLL_MS = 5_000;
 const IDLE_BULK_RUN_PANEL_POLL_MS = 10_000;
+const ACTIVE_PREVIEW_REFRESH_PANEL_POLL_MS = 2_500;
 
 const KRW_FORMATTER = new Intl.NumberFormat("ko-KR");
 
@@ -72,12 +83,26 @@ function isActiveBulkRunStatus(status: string) {
   return status === "queued" || status === "running";
 }
 
+function isActivePreviewRefreshStatus(status: string) {
+  return status === "queued" || status === "running";
+}
+
 function isStoppableBulkRunStatus(status: string) {
   return status === "queued" || status === "running" || status === "paused";
 }
 
-function shouldShowRecentBulkRun(run: Pick<BulkPriceRun, "status" | "finishedAt"> | Pick<NaverBulkPriceRun, "status" | "finishedAt">) {
+function shouldShowRecentBulkRun(
+  run:
+    | Pick<BulkPriceRun, "status" | "finishedAt">
+    | Pick<NaverBulkPriceRun, "status" | "finishedAt">,
+) {
   return run.status === "paused" || isRecentlyFinished(run.finishedAt, 20_000);
+}
+
+function shouldShowRecentPreviewRefresh(
+  job: Pick<NaverBulkPricePreviewJob, "status" | "finishedAt">,
+) {
+  return job.status === "failed" || isRecentlyFinished(job.finishedAt, 20_000);
 }
 
 function isRecentlyFinished(finishedAt: string | null, maxAgeMs: number) {
@@ -95,6 +120,10 @@ function isRecentlyFinished(finishedAt: string | null, maxAgeMs: number) {
 
 function hasActiveBulkRuns(runs: Array<{ status: string }> | undefined) {
   return Boolean(runs?.some((run) => isActiveBulkRunStatus(run.status)));
+}
+
+function hasActivePreviewRefreshJobs(jobs: Array<{ status: string }> | undefined) {
+  return Boolean(jobs?.some((job) => isActivePreviewRefreshStatus(job.status)));
 }
 
 function getBulkRunHiddenKey(
@@ -144,7 +173,7 @@ function formatBulkRunPrice(value: number | null) {
     return null;
   }
 
-  return `${KRW_FORMATTER.format(value)}원`;
+  return `${KRW_FORMATTER.format(value)} KRW`;
 }
 
 function formatBulkRunChange(
@@ -158,15 +187,18 @@ function formatBulkRunChange(
   if (beforePrice || afterPrice) {
     details.push(`${beforePrice ?? "-"} -> ${afterPrice ?? "-"}`);
   }
+
   if (change.beforeSaleStatus || change.afterSaleStatus) {
-    details.push(`${formatStatusLabel(change.beforeSaleStatus ?? "-")} -> ${formatStatusLabel(change.afterSaleStatus ?? "-")}`);
+    details.push(
+      `${formatStatusLabel(change.beforeSaleStatus ?? "-")} -> ${formatStatusLabel(change.afterSaleStatus ?? "-")}`,
+    );
   }
 
   if (!details.length) {
     return label;
   }
 
-  return `${label}: ${details.join(" · ")}`;
+  return `${label}: ${details.join(" / ")}`;
 }
 
 function getOperationTone(status: OperationToast["status"]): PanelTone {
@@ -199,6 +231,74 @@ function getBulkRunTone(status: string): PanelTone {
   }
 
   return "failed";
+}
+
+function getPreviewRefreshTone(status: NaverBulkPricePreviewJob["status"]): PanelTone {
+  if (status === "queued" || status === "running") {
+    return "pending";
+  }
+
+  if (status === "succeeded") {
+    return "success";
+  }
+
+  return "failed";
+}
+
+function formatPreviewRefreshPhase(phase: NaverBulkPricePreviewJob["phase"]) {
+  switch (phase) {
+    case "loading_naver_products":
+      return "Loading NAVER products";
+    case "enriching_barcodes":
+      return "Enriching seller barcodes";
+    case "loading_source_rows":
+      return "Loading source rows";
+    case "matching":
+      return "Matching rows";
+    case "finalizing":
+      return "Finalizing preview";
+    default:
+      return phase;
+  }
+}
+
+function formatPreviewRefreshBody(job: NaverBulkPricePreviewJob) {
+  if (job.status === "failed" && job.error) {
+    return job.error;
+  }
+
+  const parts = [formatPreviewRefreshPhase(job.phase)];
+
+  if (job.progress.totalProducts > 0) {
+    parts.push(`${job.progress.loadedProducts}/${job.progress.totalProducts} products`);
+  }
+
+  if (job.progress.matchedCodes > 0) {
+    parts.push(`${job.progress.matchedCodes} match codes`);
+  }
+
+  if (job.progress.processedRows > 0) {
+    parts.push(`${job.progress.processedRows} rows processed`);
+  }
+
+  const snapshotSummary = job.summary ?? job.cachedSummary;
+  if (snapshotSummary?.stats) {
+    parts.push(
+      `Ready ${snapshotSummary.stats.readyCount}/${snapshotSummary.stats.totalNaverItems}`,
+    );
+    if (snapshotSummary.stats.conflictCount > 0) {
+      parts.push(`Conflicts ${snapshotSummary.stats.conflictCount}`);
+    }
+    if (snapshotSummary.stats.unmatchedCount > 0) {
+      parts.push(`Unmatched ${snapshotSummary.stats.unmatchedCount}`);
+    }
+  }
+
+  if (job.startedFromCache && job.status !== "failed") {
+    parts.push("Cached preview shown while refreshing");
+  }
+
+  return parts.join(" / ");
 }
 
 function compareEntries(left: PanelEntry, right: PanelEntry) {
@@ -259,6 +359,26 @@ function buildBulkRunEntry(
   };
 }
 
+function buildPreviewRefreshEntry(job: NaverBulkPricePreviewJob): PreviewRefreshPanelEntry {
+  const active = isActivePreviewRefreshStatus(job.status);
+
+  return {
+    kind: "preview-refresh",
+    id: `naver-preview:${job.id}`,
+    jobId: job.id,
+    title: "NAVER Preview Refresh",
+    subtitle: `Job ${job.id.slice(0, 8)}`,
+    body: formatPreviewRefreshBody(job),
+    statusLabel: formatStatusLabel(job.status),
+    statusValue: job.status,
+    tone: getPreviewRefreshTone(job.status),
+    href: getBulkPriceRunHref("naver"),
+    startedAt: job.createdAt,
+    updatedAt: job.finishedAt ?? job.updatedAt,
+    active,
+  };
+}
+
 export function OperationToaster() {
   const { toasts, dismissToast } = useOperations();
   const { openTab } = useWorkspaceTabs();
@@ -313,6 +433,19 @@ export function OperationToaster() {
     placeholderData: (previousData) => previousData,
   });
 
+  const naverPreviewJobsQuery = useQuery({
+    queryKey: ["/api/naver/bulk-price/preview/jobs", "status-panel"],
+    queryFn: () =>
+      getJson<NaverBulkPricePreviewJobListResponse>("/api/naver/bulk-price/preview/jobs"),
+    refetchInterval: (query) =>
+      hasActivePreviewRefreshJobs(
+        (query.state.data as NaverBulkPricePreviewJobListResponse | undefined)?.items,
+      )
+        ? ACTIVE_PREVIEW_REFRESH_PANEL_POLL_MS
+        : IDLE_BULK_RUN_PANEL_POLL_MS,
+    placeholderData: (previousData) => previousData,
+  });
+
   const isBulkRunHidden = (
     channel: BulkRunChannel,
     run: BulkPriceRun | NaverBulkPriceRun,
@@ -329,6 +462,9 @@ export function OperationToaster() {
     const operationEntries = toasts
       .filter((toast) => isActiveOperationStatus(toast.status))
       .map((toast) => buildOperationEntry(toast, dismissToast));
+    const previewEntries = (naverPreviewJobsQuery.data?.items ?? [])
+      .filter((job) => isActivePreviewRefreshStatus(job.status))
+      .map((job) => buildPreviewRefreshEntry(job));
     const bulkEntries = [
       ...(naverRunsQuery.data?.items ?? [])
         .filter((run) => isActiveBulkRunStatus(run.status))
@@ -340,11 +476,12 @@ export function OperationToaster() {
         .map((run) => buildBulkRunEntry("coupang", run)),
     ];
 
-    return [...operationEntries, ...bulkEntries].sort(compareEntries);
+    return [...operationEntries, ...previewEntries, ...bulkEntries].sort(compareEntries);
   }, [
     coupangRunsQuery.data?.items,
     dismissToast,
     hiddenBulkRuns,
+    naverPreviewJobsQuery.data?.items,
     naverRunsQuery.data?.items,
     toasts,
   ]);
@@ -353,6 +490,10 @@ export function OperationToaster() {
     const recentOperationEntries = toasts
       .filter((toast) => !isActiveOperationStatus(toast.status))
       .map((toast) => buildOperationEntry(toast, dismissToast));
+    const recentPreviewEntries = (naverPreviewJobsQuery.data?.items ?? [])
+      .filter((job) => !isActivePreviewRefreshStatus(job.status))
+      .filter((job) => shouldShowRecentPreviewRefresh(job))
+      .map((job) => buildPreviewRefreshEntry(job));
     const recentBulkEntries = [
       ...(naverRunsQuery.data?.items ?? [])
         .filter((run) => !isActiveBulkRunStatus(run.status))
@@ -366,16 +507,20 @@ export function OperationToaster() {
         .map((run) => buildBulkRunEntry("coupang", run)),
     ];
 
-    return [...recentOperationEntries, ...recentBulkEntries].sort(compareEntries);
+    return [...recentOperationEntries, ...recentPreviewEntries, ...recentBulkEntries].sort(
+      compareEntries,
+    );
   }, [
     coupangRunsQuery.data?.items,
     dismissToast,
     hiddenBulkRuns,
+    naverPreviewJobsQuery.data?.items,
     naverRunsQuery.data?.items,
     toasts,
   ]);
 
-  const syncWarningVisible = naverRunsQuery.isError || coupangRunsQuery.isError;
+  const syncWarningVisible =
+    naverPreviewJobsQuery.isError || naverRunsQuery.isError || coupangRunsQuery.isError;
   const actionError =
     (stopRunMutation.error as Error | null) ??
     (deleteRunMutation.error as Error | null);
@@ -411,10 +556,7 @@ export function OperationToaster() {
             {activeEntries.length ? (
               <div className="task-status-list">
                 {activeEntries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`task-status-entry ${entry.tone}`}
-                  >
+                  <div key={entry.id} className={`task-status-entry ${entry.tone}`}>
                     <div className="task-status-entry-header">
                       <div>
                         <strong>{entry.title}</strong>
@@ -445,7 +587,8 @@ export function OperationToaster() {
                         >
                           Open
                         </button>
-                        {entry.kind === "bulk-run" && isStoppableBulkRunStatus(entry.statusValue) ? (
+                        {entry.kind === "bulk-run" &&
+                        isStoppableBulkRunStatus(entry.statusValue) ? (
                           <button
                             type="button"
                             className="task-status-entry-button"
@@ -454,10 +597,12 @@ export function OperationToaster() {
                               stopRunMutation.variables?.channel === entry.channel &&
                               stopRunMutation.variables?.runId === entry.runId
                             }
-                            onClick={() => stopRunMutation.mutate({
-                              channel: entry.channel,
-                              runId: entry.runId,
-                            })}
+                            onClick={() =>
+                              stopRunMutation.mutate({
+                                channel: entry.channel,
+                                runId: entry.runId,
+                              })
+                            }
                           >
                             {stopRunMutation.isPending &&
                             stopRunMutation.variables?.channel === entry.channel &&
@@ -487,10 +632,7 @@ export function OperationToaster() {
 
               <div className="task-status-list">
                 {recentEntries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`task-status-entry ${entry.tone}`}
-                  >
+                  <div key={entry.id} className={`task-status-entry ${entry.tone}`}>
                     <div className="task-status-entry-header">
                       <div>
                         <strong>{entry.title}</strong>
@@ -541,10 +683,12 @@ export function OperationToaster() {
                                   stopRunMutation.variables?.channel === entry.channel &&
                                   stopRunMutation.variables?.runId === entry.runId
                                 }
-                                onClick={() => stopRunMutation.mutate({
-                                  channel: entry.channel,
-                                  runId: entry.runId,
-                                })}
+                                onClick={() =>
+                                  stopRunMutation.mutate({
+                                    channel: entry.channel,
+                                    runId: entry.runId,
+                                  })
+                                }
                               >
                                 {stopRunMutation.isPending &&
                                 stopRunMutation.variables?.channel === entry.channel &&
@@ -607,9 +751,7 @@ export function OperationToaster() {
           ) : null}
 
           {actionError ? (
-            <div className="task-status-footnote error">
-              {actionError.message}
-            </div>
+            <div className="task-status-footnote error">{actionError.message}</div>
           ) : null}
         </div>
       ) : null}
