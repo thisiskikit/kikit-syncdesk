@@ -11,6 +11,7 @@ import type {
   NaverBulkPriceRulePreset,
   NaverBulkPriceRulePresetListResponse,
   NaverBulkPriceRuleSet,
+  NaverBulkPriceRun,
   NaverBulkPriceRunDetail,
   NaverBulkPriceRunListResponse,
   NaverBulkPriceRunSummaryResponse,
@@ -89,6 +90,25 @@ import {
   type UiState,
 } from "./state";
 
+function sortNaverRuns(items: NaverBulkPriceRun[]) {
+  return items
+    .slice()
+    .sort(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    );
+}
+
+function upsertNaverRunListResponse(
+  current: NaverBulkPriceRunListResponse | undefined,
+  run: NaverBulkPriceRun,
+): NaverBulkPriceRunListResponse {
+  return {
+    items: sortNaverRuns([run, ...(current?.items ?? []).filter((item) => item.id !== run.id)]),
+  };
+}
 
 export default function NaverBulkPricePage() {
   function resolveLiveRunRefetchInterval(
@@ -699,8 +719,22 @@ export default function NaverBulkPricePage() {
       .slice(0, 20);
   }
 
+  function syncNaverRunListCaches(run: NaverBulkPriceRun) {
+    queryClient.setQueryData(
+      ["/api/naver/bulk-price/runs", "list"] as const,
+      (current: NaverBulkPriceRunListResponse | undefined) =>
+        upsertNaverRunListResponse(current, run),
+    );
+    queryClient.setQueryData(
+      ["/api/naver/bulk-price/runs", "status-panel"] as const,
+      (current: NaverBulkPriceRunListResponse | undefined) =>
+        upsertNaverRunListResponse(current, run),
+    );
+  }
+
   function syncRunCaches(detail: NaverBulkPriceRunDetail) {
     setActiveRunId(detail.run.id);
+    syncNaverRunListCaches(detail.run);
     queryClient.setQueryData(
       ["/api/naver/bulk-price/runs", detail.run.id, "summary"] as const,
       {
@@ -725,6 +759,14 @@ export default function NaverBulkPricePage() {
       );
     }
   }
+
+  useEffect(() => {
+    if (!activeRun) {
+      return;
+    }
+
+    syncNaverRunListCaches(activeRun);
+  }, [activeRun]);
 
   const createRunMutation = useMutation({
     mutationFn: () =>
