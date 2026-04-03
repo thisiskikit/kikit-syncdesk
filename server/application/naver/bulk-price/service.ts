@@ -145,11 +145,13 @@ type PreviewSession = {
 type PreviewCandidateCacheEntry = {
   rows: NaverPreviewCandidate[];
   cachedAt: number;
+  ttlMs: number;
 };
 
 const DEFAULT_RUN_WORKER_CONCURRENCY = 5;
 const DEFAULT_PREVIEW_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_PREVIEW_CANDIDATE_CACHE_TTL_MS = 60_000;
+const SELLER_BARCODE_PREVIEW_CANDIDATE_CACHE_TTL_MS = 5_000;
 const DEFAULT_PREVIEW_PAGE_SIZE = 100;
 const RECENT_RUN_ITEM_LIMIT = 20;
 const RUN_SUMMARY_PERSIST_DEBOUNCE_MS = 200;
@@ -254,7 +256,7 @@ async function loadAllNaverPreviewCandidates(
   const cachedEntry = previewCandidateCache.get(cacheKey);
   if (
     cachedEntry &&
-    Date.now() - cachedEntry.cachedAt <= DEFAULT_PREVIEW_CANDIDATE_CACHE_TTL_MS
+    Date.now() - cachedEntry.cachedAt <= cachedEntry.ttlMs
   ) {
     return cachedEntry.rows;
   }
@@ -295,9 +297,15 @@ async function loadAllNaverPreviewCandidates(
       }),
     )
     .then((rows) => {
+      const shouldShortCache =
+        sourceConfig.naverMatchField === "sellerBarcode" &&
+        rows.some((row) => row.matchedCode === null);
       previewCandidateCache.set(cacheKey, {
         rows,
         cachedAt: Date.now(),
+        ttlMs: shouldShortCache
+          ? SELLER_BARCODE_PREVIEW_CANDIDATE_CACHE_TTL_MS
+          : DEFAULT_PREVIEW_CANDIDATE_CACHE_TTL_MS,
       });
       return rows;
     })

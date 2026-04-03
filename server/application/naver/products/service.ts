@@ -37,7 +37,10 @@ const NAVER_PRODUCT_UPDATE_RETRY_COUNT = 5;
 const NAVER_PRODUCT_UPDATE_RETRY_DELAY_MS = 1_500;
 const NAVER_PRODUCT_FETCH_PAGE_CONCURRENCY = 4;
 const NAVER_PRODUCT_FETCH_PAGE_STAGGER_MS = 75;
-const NAVER_PRODUCT_BARCODE_FETCH_CONCURRENCY = 6;
+const NAVER_PRODUCT_BARCODE_FETCH_CONCURRENCY = 3;
+const NAVER_PRODUCT_BARCODE_FETCH_STAGGER_MS = 125;
+const NAVER_PRODUCT_BARCODE_FETCH_RETRY_COUNT = 3;
+const NAVER_PRODUCT_BARCODE_FETCH_RETRY_DELAY_MS = 1_000;
 const NAVER_PRODUCT_BARCODE_CACHE_TTL_MS = 10 * 60_000;
 const NAVER_PRODUCT_SNAPSHOT_STALE_MS = 60_000;
 
@@ -680,16 +683,38 @@ async function fetchSellerBarcodeByOriginProductNo(input: {
     return inFlightRequest;
   }
 
-  const requestPromise = requestNaverJsonWithContext<Record<string, unknown>>({
-    context: input.context,
-    method: "GET",
-    path: `/v2/products/origin-products/${encodeURIComponent(input.originProductNo)}`,
-  })
-    .then(({ payload }) => {
-      const sellerBarcode = extractSellerBarcode(normalizeOriginProductPayload(payload));
-      setCachedSellerBarcode(input.context.store.id, input.originProductNo, sellerBarcode);
-      return sellerBarcode;
-    })
+  const requestPromise = (async () => {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        const { payload } = await requestNaverJsonWithContext<Record<string, unknown>>({
+          context: input.context,
+          method: "GET",
+          path: `/v2/products/origin-products/${encodeURIComponent(input.originProductNo)}`,
+        });
+        const sellerBarcode = extractSellerBarcode(normalizeOriginProductPayload(payload));
+        setCachedSellerBarcode(input.context.store.id, input.originProductNo, sellerBarcode);
+        return sellerBarcode;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to load NAVER seller barcode.";
+        const canRetry =
+          isRetryableNaverProductRequestError(message) &&
+          attempt < NAVER_PRODUCT_BARCODE_FETCH_RETRY_COUNT;
+
+        if (!canRetry) {
+          throw error;
+        }
+
+        const delayMs = NAVER_PRODUCT_BARCODE_FETCH_RETRY_DELAY_MS * (attempt + 1);
+        await sleep(delayMs);
+        attempt += 1;
+      }
+    }
+  })()
     .finally(() => {
       sellerBarcodeInFlightRequests.delete(cacheKey);
     });
@@ -771,7 +796,14 @@ async function enrichSellerBarcodesForResponse(input: {
   const sellerBarcodeEntries = await mapWithConcurrency(
     unresolvedAfterCache,
     NAVER_PRODUCT_BARCODE_FETCH_CONCURRENCY,
-    async (originProductNo) => {
+    async (originProductNo, index) => {
+      const staggerMs =
+        NAVER_PRODUCT_BARCODE_FETCH_STAGGER_MS *
+        (index % NAVER_PRODUCT_BARCODE_FETCH_CONCURRENCY);
+      if (staggerMs > 0) {
+        await sleep(staggerMs);
+      }
+
       try {
         return {
           originProductNo,

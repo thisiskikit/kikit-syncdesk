@@ -187,6 +187,77 @@ describe("fetchNaverProducts", () => {
           JSON.stringify({
             contents: [
               {
+                originProductNo: 2001,
+                channelProducts: [
+                  {
+                    originProductNo: 2001,
+                    channelProductNo: "channel-2001",
+                    name: "Product 2001",
+                    statusType: "SALE",
+                    channelProductDisplayStatusType: "ON",
+                    salePrice: 10010,
+                    discountedPrice: 10010,
+                    deliveryFee: 3000,
+                    stockQuantity: 5,
+                    regDate: "2026-03-22T00:00:00.000Z",
+                    modifiedDate: "2026-03-22T00:00:00.000Z",
+                  },
+                ],
+              },
+            ],
+            page: 1,
+            size: 1,
+            totalElements: 1,
+            totalPages: 1,
+            first: true,
+            last: true,
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            originProduct: {
+              originProductNo: 2001,
+              sellerCodeInfo: {
+                sellerBarcode: "BARCODE-2001",
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        ),
+      );
+
+    const response = await fetchNaverProducts({
+      storeId: "store-1",
+      page: 1,
+      size: 1,
+      includeSellerBarcodes: true,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(response.items[0]?.sellerBarcode).toBe("BARCODE-2001");
+  });
+
+  it("retries seller barcode hydration when NAVER temporarily rate limits origin detail", async () => {
+    vi.useFakeTimers();
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            contents: [
+              {
                 originProductNo: 1001,
                 channelProducts: [
                   {
@@ -223,6 +294,19 @@ describe("fetchNaverProducts", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
+            message: "요청이 많아 서비스를 일시적으로 사용할 수 없습니다.",
+          }),
+          {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
             originProduct: {
               originProductNo: 1001,
               sellerCodeInfo: {
@@ -239,14 +323,18 @@ describe("fetchNaverProducts", () => {
         ),
       );
 
-    const response = await fetchNaverProducts({
+    const promise = fetchNaverProducts({
       storeId: "store-1",
-      page: 1,
-      size: 1,
+      all: true,
+      maxItems: 1,
+      refresh: true,
       includeSellerBarcodes: true,
     });
 
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    await vi.runAllTimersAsync();
+    const response = await promise;
+
+    expect(global.fetch).toHaveBeenCalledTimes(3);
     expect(response.items[0]?.sellerBarcode).toBe("BARCODE-1001");
   });
 
