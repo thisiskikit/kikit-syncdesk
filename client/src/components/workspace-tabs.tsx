@@ -309,9 +309,11 @@ export function WorkspaceTabsViewport(props: { renderContent: () => ReactNode })
 export function WorkspaceEntryLink(
   props: Omit<ComponentPropsWithoutRef<"a">, "href"> & {
     href: string;
+    workspaceBehavior?: "navigate" | "tab";
   },
 ) {
   const { openTab } = useWorkspaceTabs();
+  const [, navigate] = useLocation();
 
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     props.onClick?.(event);
@@ -332,7 +334,12 @@ export function WorkspaceEntryLink(
     }
 
     event.preventDefault();
-    openTab(props.href);
+    if (props.workspaceBehavior === "tab") {
+      openTab(props.href);
+      return;
+    }
+
+    navigate(props.href);
   };
 
   return <a {...props} href={props.href} onClick={handleClick} />;

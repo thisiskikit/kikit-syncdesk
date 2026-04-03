@@ -72,7 +72,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="dashboard-grid">
-        <WorkspaceEntryLink href="/naver/products" className="dashboard-card">
+        <WorkspaceEntryLink href="/naver/products" className="dashboard-card" workspaceBehavior="tab">
           <div className="dashboard-card-header">
             <strong>NAVER Workspace</strong>
             <StatusBadge tone="live" />
@@ -80,7 +80,7 @@ export default function DashboardPage() {
           <p>Open product management, order, shipment, inquiry, and settlement workflows for NAVER.</p>
         </WorkspaceEntryLink>
 
-        <WorkspaceEntryLink href="/coupang/products" className="dashboard-card">
+        <WorkspaceEntryLink href="/coupang/products" className="dashboard-card" workspaceBehavior="tab">
           <div className="dashboard-card-header">
             <strong>COUPANG Workspace</strong>
             <StatusBadge tone="draft" />
@@ -88,7 +88,7 @@ export default function DashboardPage() {
           <p>Jump into COUPANG product, control, logistics, order, and support workflows.</p>
         </WorkspaceEntryLink>
 
-        <WorkspaceEntryLink href="/engine/catalog" className="dashboard-card">
+        <WorkspaceEntryLink href="/engine/catalog" className="dashboard-card" workspaceBehavior="tab">
           <div className="dashboard-card-header">
             <strong>Draft / Runs</strong>
             <StatusBadge tone="shared" />
@@ -96,7 +96,7 @@ export default function DashboardPage() {
           <p>Use the shared catalog, draft validation, and execution run history across channels.</p>
         </WorkspaceEntryLink>
 
-        <WorkspaceEntryLink href="/operations" className="dashboard-card">
+        <WorkspaceEntryLink href="/operations" className="dashboard-card" workspaceBehavior="tab">
           <div className="dashboard-card-header">
             <strong>Work Center</strong>
             <StatusBadge tone="live" label="Live" />
@@ -108,7 +108,7 @@ export default function DashboardPage() {
       <div className="card">
         <div className="toolbar" style={{ justifyContent: "space-between" }}>
           <h3 style={{ margin: 0 }}>Recent Operations</h3>
-          <WorkspaceEntryLink href="/operations" className="button ghost">
+          <WorkspaceEntryLink href="/operations" className="button ghost" workspaceBehavior="tab">
             Open Work Center
           </WorkspaceEntryLink>
         </div>
