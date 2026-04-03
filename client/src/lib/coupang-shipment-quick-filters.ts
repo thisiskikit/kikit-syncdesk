@@ -2,6 +2,7 @@ import {
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { resolveCoupangDisplayOrderStatus } from "@/lib/coupang-order-status";
 
 export type InvoiceStatusCardKey =
   | "all"
@@ -18,7 +19,10 @@ export type OrderStatusCardKey =
   | "DEPARTURE"
   | "DELIVERING"
   | "FINAL_DELIVERY"
-  | "NONE_TRACKING";
+  | "NONE_TRACKING"
+  | "CANCEL"
+  | "RETURN"
+  | "EXCHANGE";
 
 export type OutputStatusCardKey = "all" | "notExported" | "exported";
 
@@ -56,6 +60,9 @@ const ORDER_STATUS_CARD_VALUE_KEYS = [
   "DELIVERING",
   "FINAL_DELIVERY",
   "NONE_TRACKING",
+  "CANCEL",
+  "RETURN",
+  "EXCHANGE",
 ] as const satisfies readonly Exclude<OrderStatusCardKey, "all">[];
 
 const ORDER_STATUS_CARD_KEYS = [
@@ -172,9 +179,14 @@ export function normalizeOutputStatusCardKey(
 }
 
 export function getOrderStatusCardKey(
-  row: Pick<CoupangShipmentWorksheetRow, "orderStatus">,
+  row: Pick<CoupangShipmentWorksheetRow, "orderStatus" | "customerServiceIssueSummary">,
 ): Exclude<OrderStatusCardKey, "all"> | null {
-  return getOrderStatusValueKey(row.orderStatus);
+  return getOrderStatusValueKey(
+    resolveCoupangDisplayOrderStatus({
+      orderStatus: row.orderStatus,
+      customerServiceIssueSummary: row.customerServiceIssueSummary,
+    }),
+  );
 }
 
 export function getOutputStatusCardKey(
@@ -213,7 +225,7 @@ export function matchesInvoiceStatusCard(
 }
 
 export function matchesOrderStatusCard(
-  row: Pick<CoupangShipmentWorksheetRow, "orderStatus">,
+  row: Pick<CoupangShipmentWorksheetRow, "orderStatus" | "customerServiceIssueSummary">,
   cardKey: OrderStatusCardKey,
 ) {
   return cardKey === "all" || getOrderStatusCardKey(row) === cardKey;

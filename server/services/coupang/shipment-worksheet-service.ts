@@ -16,6 +16,7 @@
 } from "@shared/coupang";
 import {
   getExchangeDetail,
+  getOrderCustomerServiceSummary,
   getOrderDetail,
   getReturnDetail,
   listExchanges,
@@ -424,6 +425,12 @@ function formatSeoulDateOnly(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function offsetSeoulDateOnly(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return formatSeoulDateOnly(date);
+}
+
 function resolveClaimLookupDate(value: string | null | undefined, fallbackOffsetDays: number) {
   const parsed = value ? new Date(value) : new Date();
   if (!Number.isNaN(parsed.getTime())) {
@@ -680,6 +687,91 @@ function buildNextSyncState(
     coveredCreatedAtTo: maxDate(currentSyncState.coveredCreatedAtTo, plan.fetchCreatedAtTo),
     lastStatusFilter: plan.statusFilter,
   };
+}
+
+function hasPersistedWorksheetCustomerServiceIssue(row: CoupangShipmentWorksheetRow) {
+  return Boolean(normalizeWhitespace(row.customerServiceIssueSummary)) || row.customerServiceIssueCount > 0;
+}
+
+async function refreshWorksheetCustomerServiceStatuses(input: {
+  storeId: string;
+  rows: CoupangShipmentWorksheetRow[];
+  syncPlan: ShipmentWorksheetSyncPlan;
+}) {
+  if (!input.rows.length) {
+    return {
+      rows: input.rows,
+      message: null,
+    };
+  }
+
+  const createdAtFrom = minDate(input.syncPlan.fetchCreatedAtFrom, offsetSeoulDateOnly(-30));
+  const createdAtTo = formatSeoulDateOnly(new Date());
+
+  try {
+    const response = await getOrderCustomerServiceSummary({
+      storeId: input.storeId,
+      createdAtFrom: createdAtFrom ?? offsetSeoulDateOnly(-30),
+      createdAtTo,
+      items: input.rows.map((row) => ({
+        rowKey: row.id,
+        orderId: row.orderId,
+        shipmentBoxId: row.shipmentBoxId,
+        vendorItemId: row.vendorItemId,
+        sellerProductId: row.sellerProductId,
+      })),
+    });
+
+    if (response.source !== "live") {
+      return {
+        rows: input.rows,
+        message:
+          response.message ??
+          "취소/반품 상태를 확인하지 못해 기존 쿠팡 상태를 유지했습니다.",
+      };
+    }
+
+    const summaryByRowKey = new Map(response.items.map((item) => [item.rowKey, item] as const));
+
+    return {
+      rows: input.rows.map((row) => {
+        const summary = summaryByRowKey.get(row.id);
+        if (!summary) {
+          return row;
+        }
+
+        const shouldPreserveExistingIssue =
+          summary.customerServiceIssueCount === 0 && hasPersistedWorksheetCustomerServiceIssue(row);
+
+        const nextRow = normalizeWorksheetRow({
+          ...row,
+          customerServiceIssueCount: shouldPreserveExistingIssue
+            ? row.customerServiceIssueCount
+            : summary.customerServiceIssueCount,
+          customerServiceIssueSummary: shouldPreserveExistingIssue
+            ? row.customerServiceIssueSummary
+            : summary.customerServiceIssueSummary,
+          customerServiceState: shouldPreserveExistingIssue
+            ? row.customerServiceState
+            : summary.customerServiceState,
+          customerServiceFetchedAt: shouldPreserveExistingIssue
+            ? row.customerServiceFetchedAt
+            : summary.customerServiceFetchedAt,
+        });
+
+        return hasWorksheetRowChanged(row, nextRow) ? nextRow : row;
+      }),
+      message: response.message,
+    };
+  } catch (error) {
+    return {
+      rows: input.rows,
+      message:
+        error instanceof Error
+          ? `취소/반품 상태를 갱신하지 못했습니다. ${error.message}`
+          : "취소/반품 상태를 갱신하지 못했습니다.",
+    };
+  }
 }
 
 function hasManualDeliveryRequest(
@@ -1464,6 +1556,12 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     mergedBySourceKey.set(nextRow.sourceKey, existingRow);
   }
 
+  const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
+    storeId: input.storeId,
+    rows: Array.from(mergedBySourceKey.values()),
+    syncPlan,
+  });
+
   const syncState = buildNextSyncState(
     currentSheet.syncState ?? createEmptySyncState(),
     syncPlan,
@@ -1478,7 +1576,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
   const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
     storeId: input.storeId,
-    items: Array.from(mergedBySourceKey.values()),
+    items: customerServiceRefresh.rows,
     collectedAt: now,
     source: listResponse.source,
     message: mergeMessages([
@@ -1490,6 +1588,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       productWarnings.length
         ? `상품 상세 ${productWarnings.length}건은 쿠팡 주문 원본값으로 보완했습니다.`
         : null,
+      customerServiceRefresh.message,
       ...prepareMessages,
     ]),
     syncState,

@@ -17,6 +17,10 @@ import {
   countRowsWithUnknownCustomerService,
   mergeCoupangOrderCustomerServiceSummary,
 } from "@/lib/coupang-customer-service";
+import {
+  formatCoupangOrderStatusLabel,
+  resolveCoupangDisplayOrderStatus,
+} from "@/lib/coupang-order-status";
 import { getResponseCacheState, isStaleCachedResponse } from "@/lib/freshness";
 import {
   apiRequestJson,
@@ -64,7 +68,6 @@ const ORDER_STATUS_OPTIONS = [
   ["FINAL_DELIVERY", "Delivered"],
   ["NONE_TRACKING", "No Tracking"],
 ] as const;
-const ORDER_STATUS_LABELS = Object.fromEntries(ORDER_STATUS_OPTIONS) as Record<string, string>;
 
 function defaultDate(offset: number) {
   const date = new Date();
@@ -94,9 +97,13 @@ function buildOrderDetailUrl(storeId: string, row: Pick<CoupangOrderRow, "shipme
 
 function matchesQuery(row: CoupangOrderRow, query: string) {
   if (!query) return true;
+  const resolvedStatus = resolveOrderDisplayStatus(row);
   return [
     row.orderId,
     row.shipmentBoxId,
+    row.status,
+    resolvedStatus,
+    formatStatus(resolvedStatus),
     row.productName,
     row.optionName,
     row.sellerProductName,
@@ -113,7 +120,17 @@ function matchesQuery(row: CoupangOrderRow, query: string) {
 }
 
 function formatStatus(status: string | null | undefined) {
-  return ORDER_STATUS_LABELS[(status ?? "").trim().toUpperCase()] ?? status ?? "-";
+  return formatCoupangOrderStatusLabel(status);
+}
+
+function resolveOrderDisplayStatus(
+  row: Pick<CoupangOrderRow, "status" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary">,
+) {
+  return resolveCoupangDisplayOrderStatus({
+    orderStatus: row.status,
+    customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+    customerServiceIssueSummary: row.customerServiceIssueSummary,
+  });
 }
 
 /*

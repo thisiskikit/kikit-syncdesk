@@ -15,8 +15,13 @@ import {
   getShipmentWorksheetCustomerServiceSearchText,
   hasCoupangCustomerServiceIssue,
 } from "@/lib/coupang-customer-service";
+import {
+  formatCoupangOrderStatusLabel,
+  getCoupangOrderStatusToneClass,
+  resolveCoupangDisplayOrderStatus,
+} from "@/lib/coupang-order-status";
 import { formatNumber } from "@/lib/utils";
-import { ORDER_STATUS_LABEL_BY_VALUE, SHIPMENT_COLUMN_DEFAULT_WIDTHS } from "./worksheet-config";
+import { SHIPMENT_COLUMN_DEFAULT_WIDTHS } from "./worksheet-config";
 import type {
   EditableColumnKey,
   ShipmentColumnConfig,
@@ -470,28 +475,23 @@ export function sortShipmentRowsForExcelExport(
 }
 
 export function formatOrderStatusLabel(value: string | null | undefined) {
-  const normalized = (value ?? "").trim().toUpperCase();
-  if (!normalized) {
-    return "-";
-  }
-
-  return ORDER_STATUS_LABEL_BY_VALUE.get(normalized) ?? normalized;
+  return formatCoupangOrderStatusLabel(value);
 }
 
 function getOrderStatusToneClass(value: string | null | undefined) {
-  const normalized = (value ?? "").trim().toUpperCase();
+  return getCoupangOrderStatusToneClass(value);
+}
 
-  if (normalized === "ACCEPT" || normalized === "INSTRUCT") return "pending";
-  if (normalized === "DEPARTURE" || normalized === "DELIVERING") return "running";
-  if (normalized === "FINAL_DELIVERY") return "success";
-  if (normalized === "NONE_TRACKING") return "attention";
-  if (normalized === "CANCEL") return "failed";
-
-  return "draft";
+function resolveWorksheetOrderStatus(row: CoupangShipmentWorksheetRow) {
+  return resolveCoupangDisplayOrderStatus({
+    orderStatus: row.orderStatus,
+    customerServiceIssueSummary: row.customerServiceIssueSummary,
+  });
 }
 
 export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
-  const orderLabel = formatOrderStatusLabel(row.orderStatus);
+  const resolvedOrderStatus = resolveWorksheetOrderStatus(row);
+  const orderLabel = formatOrderStatusLabel(resolvedOrderStatus);
   const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
@@ -514,7 +514,7 @@ export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow)
 
   return {
     orderLabel,
-    orderToneClassName: getOrderStatusToneClass(row.orderStatus),
+    orderToneClassName: getOrderStatusToneClass(resolvedOrderStatus),
     customerServiceLabel,
     customerServiceIssueSummary,
     customerServiceStateText,
@@ -638,7 +638,8 @@ export function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
   return [
     row.orderDateText,
     row.orderStatus,
-    formatOrderStatusLabel(row.orderStatus),
+    resolveWorksheetOrderStatus(row),
+    formatOrderStatusLabel(resolveWorksheetOrderStatus(row)),
     invoiceStatusLabel,
     getShipmentWorksheetCustomerServiceSearchText(row),
     row.productName,
