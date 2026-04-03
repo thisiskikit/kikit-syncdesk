@@ -4,6 +4,27 @@ import { getConfiguredApiBaseUrl, resolveApiUrl } from "./api-url";
 
 const DEFAULT_QUERY_GC_TIME_MS = 30 * 60_000;
 
+export class ApiHttpError extends Error {
+  status: number;
+  contentType: string | null;
+  bodySummary: string | null;
+
+  constructor(
+    message: string,
+    options: {
+      status: number;
+      contentType?: string | null;
+      bodySummary?: string | null;
+    },
+  ) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = options.status;
+    this.contentType = options.contentType ?? null;
+    this.bodySummary = options.bodySummary ?? null;
+  }
+}
+
 export const queryPresets = {
   reference: {
     staleTime: 5 * 60_000,
@@ -93,7 +114,14 @@ function summarizePayload(text: string, maxLength = 160) {
 }
 
 function buildHtmlResponseMessage(res: Response) {
-  return `Expected JSON from ${getResponseLabel(res)}, but received HTML. Check that the app server is running and that the /api route is correct.`;
+  const label = getResponseLabel(res);
+
+  if (res.status === 429) {
+    return `Request to ${label} was rate-limited by the server. Retry in a moment.`;
+  }
+
+  const statusLabel = res.status ? ` (${res.status}${res.statusText ? ` ${res.statusText}` : ""})` : "";
+  return `Expected JSON from ${label}, but received HTML${statusLabel}. Check that the app server is running and that the /api route is correct.`;
 }
 
 function getApiEnvelopeErrorMessage(payload: ApiResponse<unknown>, fallback: string) {
@@ -114,9 +142,15 @@ async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     let message = text;
+    const contentType = res.headers.get("content-type");
+    const bodySummary = text ? summarizePayload(text) : null;
 
-    if (isHtmlPayload(text, res.headers.get("content-type"))) {
-      throw new Error(buildHtmlResponseMessage(res));
+    if (isHtmlPayload(text, contentType)) {
+      throw new ApiHttpError(buildHtmlResponseMessage(res), {
+        status: res.status,
+        contentType,
+        bodySummary,
+      });
     }
 
     if (text) {
@@ -138,7 +172,11 @@ async function throwIfResNotOk(res: Response) {
       }
     }
 
-    throw new Error(message);
+    throw new ApiHttpError(message, {
+      status: res.status,
+      contentType,
+      bodySummary,
+    });
   }
 }
 
@@ -150,7 +188,11 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
   }
 
   if (isHtmlPayload(text, res.headers.get("content-type"))) {
-    throw new Error(buildHtmlResponseMessage(res));
+    throw new ApiHttpError(buildHtmlResponseMessage(res), {
+      status: res.status,
+      contentType: res.headers.get("content-type"),
+      bodySummary: summarizePayload(text),
+    });
   }
 
   try {
@@ -223,10 +265,20 @@ export async function apiRequestFormDataJson<T>(
   return parseJsonResponse<T>(res);
 }
 
-export async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(resolveApiUrl(url));
+async function getJsonWithInit<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(resolveApiUrl(url), init);
   await throwIfResNotOk(res);
   return parseJsonResponse<T>(res);
+}
+
+export async function getJson<T>(url: string): Promise<T> {
+  return getJsonWithInit<T>(url);
+}
+
+export async function getJsonNoStore<T>(url: string): Promise<T> {
+  return getJsonWithInit<T>(url, {
+    cache: "no-store",
+  });
 }
 
 export async function getJsonWithRefresh<T>(url: string): Promise<T> {

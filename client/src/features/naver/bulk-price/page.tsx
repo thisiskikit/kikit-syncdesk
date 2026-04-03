@@ -46,7 +46,13 @@ import {
   type FixedAdjustmentMode,
   type PreviewSelectionState,
 } from "@/features/shared/bulk-price/page-helpers";
-import { apiRequestJson, getJson, queryClient } from "@/lib/queryClient";
+import {
+  ApiHttpError,
+  apiRequestJson,
+  getJson,
+  getJsonNoStore,
+  queryClient,
+} from "@/lib/queryClient";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 import { formatDate, formatNumber } from "@/lib/utils";
 import { resolveWorkspacePollingInterval } from "@/lib/workspace-tabs";
@@ -85,6 +91,38 @@ import {
 
 
 export default function NaverBulkPricePage() {
+  function resolveLiveRunRefetchInterval(
+    isPollingEnabled: boolean,
+    baseIntervalMs: number,
+    error: unknown,
+  ) {
+    const defaultInterval = resolveWorkspacePollingInterval(
+      isActiveTab,
+      isPollingEnabled,
+      baseIntervalMs,
+    );
+
+    if (!defaultInterval) {
+      return false;
+    }
+
+    if (error instanceof ApiHttpError) {
+      if (error.status === 429) {
+        return Math.max(baseIntervalMs * 5, 10_000);
+      }
+
+      if (error.status >= 500) {
+        return Math.max(baseIntervalMs * 3, 5_000);
+      }
+    }
+
+    if (error instanceof Error) {
+      return Math.max(baseIntervalMs * 3, 5_000);
+    }
+
+    return defaultInterval;
+  }
+
   const isActiveTab = useWorkspaceTabActivity();
   const search = useSearch();
   const { state, setState } = useServerMenuState<MenuState>(
@@ -505,17 +543,17 @@ export default function NaverBulkPricePage() {
   const runSummaryQuery = useQuery({
     queryKey: runSummaryQueryKey,
     queryFn: () =>
-      getJson<NaverBulkPriceRunSummaryResponse>(
+      getJsonNoStore<NaverBulkPriceRunSummaryResponse>(
         `/api/naver/bulk-price/runs/${activeRunId}/summary`,
       ),
     enabled: Boolean(activeRunId),
     refetchInterval: (query) => {
       const data = query.state.data as NaverBulkPriceRunSummaryResponse | undefined;
       const status = data?.run.status;
-      return resolveWorkspacePollingInterval(
-        isActiveTab,
+      return resolveLiveRunRefetchInterval(
         status === "queued" || status === "running",
         1000,
+        query.state.error,
       );
     },
   });
@@ -546,16 +584,18 @@ export default function NaverBulkPricePage() {
         params.append("rowKey", rowKey);
       }
       const suffix = params.toString() ? `?${params.toString()}` : "";
-      return getJson<NaverBulkPriceRunDetail>(`/api/naver/bulk-price/runs/${activeRunId}${suffix}`);
+      return getJsonNoStore<NaverBulkPriceRunDetail>(
+        `/api/naver/bulk-price/runs/${activeRunId}${suffix}`,
+      );
     },
     enabled: Boolean(activeRunId) && shouldOverlayRun && previewRowKeys.length > 0,
     refetchInterval: (query) => {
       const data = query.state.data as NaverBulkPriceRunDetail | undefined;
       const status = data?.run.status ?? activeRunStatus;
-      return resolveWorkspacePollingInterval(
-        isActiveTab,
+      return resolveLiveRunRefetchInterval(
         status === "queued" || status === "running",
         2000,
+        query.state.error,
       );
     },
   });
