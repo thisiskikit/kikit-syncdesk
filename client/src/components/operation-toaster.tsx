@@ -59,6 +59,9 @@ type DeleteBulkRunResponse = {
   runId: string;
 };
 
+const ACTIVE_BULK_RUN_PANEL_POLL_MS = 5_000;
+const IDLE_BULK_RUN_PANEL_POLL_MS = 10_000;
+
 const KRW_FORMATTER = new Intl.NumberFormat("ko-KR");
 
 function isActiveOperationStatus(status: OperationToast["status"]) {
@@ -295,8 +298,8 @@ export function OperationToaster() {
     queryFn: () => getJson<NaverBulkPriceRunListResponse>("/api/naver/bulk-price/runs"),
     refetchInterval: (query) =>
       hasActiveBulkRuns((query.state.data as NaverBulkPriceRunListResponse | undefined)?.items)
-        ? 2_000
-        : 5_000,
+        ? ACTIVE_BULK_RUN_PANEL_POLL_MS
+        : IDLE_BULK_RUN_PANEL_POLL_MS,
     placeholderData: (previousData) => previousData,
   });
 
@@ -305,8 +308,8 @@ export function OperationToaster() {
     queryFn: () => getJson<BulkPriceRunListResponse>("/api/coupang/bulk-price/runs"),
     refetchInterval: (query) =>
       hasActiveBulkRuns((query.state.data as BulkPriceRunListResponse | undefined)?.items)
-        ? 2_000
-        : 5_000,
+        ? ACTIVE_BULK_RUN_PANEL_POLL_MS
+        : IDLE_BULK_RUN_PANEL_POLL_MS,
     placeholderData: (previousData) => previousData,
   });
 

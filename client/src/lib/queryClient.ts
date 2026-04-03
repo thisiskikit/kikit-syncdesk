@@ -8,6 +8,7 @@ export class ApiHttpError extends Error {
   status: number;
   contentType: string | null;
   bodySummary: string | null;
+  retryAfterMs: number | null;
 
   constructor(
     message: string,
@@ -15,6 +16,7 @@ export class ApiHttpError extends Error {
       status: number;
       contentType?: string | null;
       bodySummary?: string | null;
+      retryAfterMs?: number | null;
     },
   ) {
     super(message);
@@ -22,6 +24,7 @@ export class ApiHttpError extends Error {
     this.status = options.status;
     this.contentType = options.contentType ?? null;
     this.bodySummary = options.bodySummary ?? null;
+    this.retryAfterMs = options.retryAfterMs ?? null;
   }
 }
 
@@ -113,6 +116,25 @@ function summarizePayload(text: string, maxLength = 160) {
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
+function parseRetryAfterMs(res: Response) {
+  const raw = res.headers.get("retry-after");
+  if (!raw) {
+    return null;
+  }
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.max(0, seconds * 1000);
+  }
+
+  const retryAt = Date.parse(raw);
+  if (Number.isNaN(retryAt)) {
+    return null;
+  }
+
+  return Math.max(0, retryAt - Date.now());
+}
+
 function buildHtmlResponseMessage(res: Response) {
   const label = getResponseLabel(res);
 
@@ -150,6 +172,7 @@ async function throwIfResNotOk(res: Response) {
         status: res.status,
         contentType,
         bodySummary,
+        retryAfterMs: parseRetryAfterMs(res),
       });
     }
 
@@ -176,6 +199,7 @@ async function throwIfResNotOk(res: Response) {
       status: res.status,
       contentType,
       bodySummary,
+      retryAfterMs: parseRetryAfterMs(res),
     });
   }
 }
@@ -192,6 +216,7 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
       status: res.status,
       contentType: res.headers.get("content-type"),
       bodySummary: summarizePayload(text),
+      retryAfterMs: parseRetryAfterMs(res),
     });
   }
 

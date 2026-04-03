@@ -90,6 +90,10 @@ import {
   type UiState,
 } from "./state";
 
+const LIVE_RUN_SUMMARY_POLL_MS = 2_500;
+const LIVE_RUN_DETAIL_POLL_MS = 5_000;
+const LIVE_RUN_RATE_LIMIT_BACKOFF_MS = 15_000;
+
 function sortNaverRuns(items: NaverBulkPriceRun[]) {
   return items
     .slice()
@@ -110,11 +114,20 @@ function upsertNaverRunListResponse(
   };
 }
 
+function isRateLimitedApiError(error: unknown): error is ApiHttpError {
+  return error instanceof ApiHttpError && error.status === 429;
+}
+
+function resolveRateLimitBackoffMs(error: ApiHttpError) {
+  return Math.max(error.retryAfterMs ?? 0, LIVE_RUN_RATE_LIMIT_BACKOFF_MS);
+}
+
 export default function NaverBulkPricePage() {
   function resolveLiveRunRefetchInterval(
     isPollingEnabled: boolean,
     baseIntervalMs: number,
     error: unknown,
+    rateLimitUntil: number | null,
   ) {
     const defaultInterval = resolveWorkspacePollingInterval(
       isActiveTab,
@@ -126,9 +139,14 @@ export default function NaverBulkPricePage() {
       return false;
     }
 
+    const remainingCooldownMs = rateLimitUntil ? Math.max(0, rateLimitUntil - Date.now()) : 0;
+    if (remainingCooldownMs > 0) {
+      return Math.max(defaultInterval, remainingCooldownMs);
+    }
+
     if (error instanceof ApiHttpError) {
       if (error.status === 429) {
-        return Math.max(baseIntervalMs * 5, 10_000);
+        return Math.max(resolveRateLimitBackoffMs(error), defaultInterval);
       }
 
       if (error.status >= 500) {
@@ -171,6 +189,7 @@ export default function NaverBulkPricePage() {
     null,
   );
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [liveRunRateLimitUntil, setLiveRunRateLimitUntil] = useState<number | null>(null);
   const [previewPage, setPreviewPage] = useState(1);
   const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
   const [sourcePresetName, setSourcePresetName] = useState("");
@@ -572,8 +591,9 @@ export default function NaverBulkPricePage() {
       const status = data?.run.status;
       return resolveLiveRunRefetchInterval(
         status === "queued" || status === "running",
-        1000,
+        LIVE_RUN_SUMMARY_POLL_MS,
         query.state.error,
+        liveRunRateLimitUntil,
       );
     },
   });
@@ -614,8 +634,9 @@ export default function NaverBulkPricePage() {
       const status = data?.run.status ?? activeRunStatus;
       return resolveLiveRunRefetchInterval(
         status === "queued" || status === "running",
-        2000,
+        LIVE_RUN_DETAIL_POLL_MS,
         query.state.error,
+        liveRunRateLimitUntil,
       );
     },
   });
@@ -694,6 +715,37 @@ export default function NaverBulkPricePage() {
       queryKey: ["/api/naver/bulk-price/runs"],
     });
   }, [activeRun]);
+
+  useEffect(() => {
+    const rateLimitedError = [runSummaryQuery.error, runDetailQuery.error].find(
+      isRateLimitedApiError,
+    );
+    if (!rateLimitedError) {
+      return;
+    }
+
+    const nextCooldownUntil = Date.now() + resolveRateLimitBackoffMs(rateLimitedError);
+    setLiveRunRateLimitUntil((current) =>
+      current && current > nextCooldownUntil ? current : nextCooldownUntil,
+    );
+  }, [runDetailQuery.error, runSummaryQuery.error]);
+
+  useEffect(() => {
+    if (!liveRunRateLimitUntil) {
+      return;
+    }
+
+    const remainingMs = liveRunRateLimitUntil - Date.now();
+    if (remainingMs <= 0) {
+      setLiveRunRateLimitUntil(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setLiveRunRateLimitUntil(null);
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [liveRunRateLimitUntil]);
 
   function buildRecentRunItems(items: NaverBulkPriceRunDetail["items"]) {
     return items
@@ -1023,15 +1075,22 @@ export default function NaverBulkPricePage() {
             : null
       : null;
   const workDateFilterSummary = previewData?.workDateFilterSummary ?? null;
+  const pollingRunError = (runSummaryQuery.error ?? runDetailQuery.error) as Error | null;
+  const suppressPollingRunError = isRateLimitedApiError(pollingRunError);
+  const runRefreshBackoffActive =
+    Boolean(activeRunId) &&
+    Boolean(liveRunRateLimitUntil) &&
+    (activeRunStatus === "queued" ||
+      activeRunStatus === "running" ||
+      activeRunStatus === "paused");
 
   const sourceMetadataError = (tablesQuery.error ?? metadataQuery.error) as Error | null;
   const previewError = (buildPreviewMutation.error ?? previewQuery.error) as Error | null;
-  const runError = (runSummaryQuery.error ??
-    runDetailQuery.error ??
-    createRunMutation.error ??
+  const runError = (createRunMutation.error ??
     pauseMutation.error ??
     resumeMutation.error ??
-    stopMutation.error) as Error | null;
+    stopMutation.error ??
+    (suppressPollingRunError ? null : pollingRunError)) as Error | null;
   const sourcePresetError = (sourcePresetsQuery.error ??
     createSourcePresetMutation.error ??
     updateSourcePresetMutation.error ??
@@ -1768,6 +1827,16 @@ export default function NaverBulkPricePage() {
               Option products appear in preview and selection, but the actual price update only changes the base product price.
             </div>
           </div>
+
+          {runRefreshBackoffActive ? (
+            <div className="feedback">
+              <strong>Status refresh slowed down</strong>
+              <div className="muted">
+                The run is still active. Progress checks hit a temporary request limit, so the page
+                is backing off and retrying automatically instead of treating it as a run failure.
+              </div>
+            </div>
+          ) : null}
 
           {runError ? (
             <div className="feedback error">
