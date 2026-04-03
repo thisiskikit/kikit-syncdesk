@@ -1,0 +1,14 @@
+.git
+.claude
+.env
+node_modules
+client/node_modules
+dist
+data
+output
+coverage
+docs
+migrations
+repo-map.md
+tmp-runtime-snippet.txt
+.codex-*.log
