@@ -4,18 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - client/**
-      - server/**
-      - shared/**
-      - script/**
-      - .github/workflows/deploy-kikit-price-change.yml
-      - Dockerfile
-      - .dockerignore
-      - package.json
-      - package-lock.json
-      - tsconfig.json
-      - vite.config.ts
 
 permissions:
   contents: read
