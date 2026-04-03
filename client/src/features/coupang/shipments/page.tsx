@@ -27,6 +27,7 @@ import {
   type CoupangShipmentWorksheetRow,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
+import { OrderTicketSection, TicketInfoTable } from "@/components/order-ticket-sections";
 import { StatusBadge } from "@/components/status-badge";
 import { useOperations } from "@/components/operation-provider";
 import {
@@ -1349,6 +1350,183 @@ export default function CoupangShipmentsPage() {
     shipmentDetailQuery.data?.item.claimLookupCreatedAtFrom && shipmentDetailQuery.data?.item.claimLookupCreatedAtTo
       ? `${shipmentDetailQuery.data.item.claimLookupCreatedAtFrom} ~ ${shipmentDetailQuery.data.item.claimLookupCreatedAtTo}`
       : "-";
+  const detailHeroMeta = detailRow
+    ? [
+        formatExportText(detailRow.optionName),
+        detailRow.quantity === null ? "" : `${formatNumber(detailRow.quantity)}개`,
+        formatExportText(detailRow.receiverName),
+        formatExportText(detailRow.collectedAccountName),
+      ]
+        .filter(Boolean)
+        .join(" · ") || "-"
+    : "-";
+  const detailOptionSummary = detailRow
+    ? formatJoinedText(
+        [detailRow.optionName, detailRow.quantity === null ? null : `${formatNumber(detailRow.quantity)}개`],
+        " / ",
+      )
+    : "-";
+  const detailWorksheetStatusValue: ReactNode = detailOrderPresentation ? (
+    <div className="shipment-detail-inline-stack">
+      <div className="shipment-detail-inline-badges">
+        <span className={`status-pill ${detailOrderPresentation.orderToneClassName}`}>
+          {detailOrderPresentation.orderLabel}
+        </span>
+        {detailOrderPresentation.customerServiceLabel ? (
+          <span className="shipment-detail-inline-note">
+            {detailOrderPresentation.customerServiceLabel}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  ) : (
+    "-"
+  );
+  const detailCoupangStatusValue: ReactNode =
+    detailOrderDetail?.status ?? detailRow?.orderStatus ? (
+      <span
+        className={`status-pill ${getOrderStatusToneClass(
+          detailOrderDetail?.status ?? detailRow?.orderStatus,
+        )}`}
+      >
+        {formatOrderStatusLabel(detailOrderDetail?.status ?? detailRow?.orderStatus)}
+      </span>
+    ) : (
+      "-"
+    );
+  const detailInvoiceStatusValue: ReactNode = detailInvoicePresentation ? (
+    <span className={detailInvoicePresentation.toneClassName}>
+      {detailInvoicePresentation.label}
+    </span>
+  ) : (
+    "-"
+  );
+  const detailOutputStatusValue: ReactNode = detailRow ? (
+    <span className={`status-pill ${detailRow.exportedAt ? "success" : "draft"}`}>
+      {detailRow.exportedAt ? "출력 완료" : "미출력"}
+    </span>
+  ) : (
+    "-"
+  );
+  const detailCustomerServiceValue: ReactNode = detailCustomerServiceLabel ? (
+    <span className="shipment-detail-inline-note strong">{detailCustomerServiceLabel}</span>
+  ) : detailRow?.customerServiceState === "ready" ? (
+    <span className="status-pill draft">접수 없음</span>
+  ) : (
+    "-"
+  );
+  const detailClaimStatusValue: ReactNode = shipmentDetailQuery.isLoading ? (
+    <span className="status-pill pending">조회 중</span>
+  ) : detailClaimCount > 0 ? (
+    <span className="status-pill attention">{`${formatNumber(detailClaimCount)}건`}</span>
+  ) : (
+    <span className="status-pill draft">없음</span>
+  );
+  const detailWorksheetInvoice = formatJoinedText([
+    detailRow?.deliveryCompanyCode,
+    detailRow?.invoiceNumber,
+  ]);
+  const detailCoupangInvoice = formatJoinedText([
+    detailOrderDetail?.deliveryCompanyName,
+    detailOrderDetail?.deliveryCompanyCode,
+    detailOrderDetail?.invoiceNumber,
+  ]);
+  const detailReceiverContact = formatJoinedText([
+    detailOrderDetail?.receiver.safeNumber,
+    detailOrderDetail?.receiver.receiverNumber,
+    detailRow?.contact,
+    detailRow?.buyerPhoneNumber,
+  ]);
+  const detailBuyerContact = formatJoinedText([
+    detailOrderDetail?.orderer.safeNumber,
+    detailOrderDetail?.orderer.ordererNumber,
+  ]);
+  const detailReceiverAddress = formatAddressText([
+    detailOrderDetail?.receiver.postCode ? `(${detailOrderDetail.receiver.postCode})` : null,
+    detailOrderDetail?.receiver.addr1,
+    detailOrderDetail?.receiver.addr2,
+    detailRow?.receiverAddress,
+  ]);
+  const detailDeliveryTypeText = formatJoinedText(
+    [
+      detailOrderDetail?.shipmentType,
+      detailOrderDetail?.splitShipping === null
+        ? null
+        : detailOrderDetail?.splitShipping
+          ? "분할배송"
+          : "단일배송",
+      detailOrderDetail?.ableSplitShipping === null
+        ? null
+        : detailOrderDetail?.ableSplitShipping
+          ? "분할배송 가능"
+          : "분할배송 불가",
+    ],
+    " · ",
+  );
+  const detailWorksheetRows = detailRow
+    ? [
+        { label: "주문번호", value: detailRow.orderId },
+        { label: "상품주문번호", value: detailRow.productOrderNumber },
+        { label: "배송번호", value: detailRow.shipmentBoxId },
+        { label: "셀픽주문번호", value: detailRow.selpickOrderNumber },
+        {
+          label: "주문일시",
+          value: formatDateTimeLabel(detailOrderDetail?.orderedAt ?? detailRow.orderedAtRaw),
+        },
+        { label: "결제일시", value: formatDateTimeLabel(detailOrderDetail?.paidAt) },
+        { label: "상품명", value: detailRow.productName },
+        { label: "옵션 / 수량", value: detailOptionSummary },
+        { label: "노출상품명", value: detailRow.exposedProductName },
+        { label: "수집 계정", value: detailRow.collectedAccountName },
+      ]
+    : [];
+  const detailDeliveryRows = detailRow
+    ? [
+        { label: "수령자", value: detailRow.receiverName },
+        { label: "연락처", value: detailReceiverContact },
+        { label: "수령지", value: detailReceiverAddress },
+        { label: "요청사항", value: formatText(detailRow.deliveryRequest) },
+        { label: "워크시트 송장", value: detailWorksheetInvoice },
+        { label: "쿠팡 송장", value: detailCoupangInvoice },
+        {
+          label: "주문자",
+          value: formatJoinedText([detailOrderDetail?.orderer.name, detailRow.ordererName]),
+        },
+        { label: "주문자 연락처", value: detailBuyerContact },
+      ]
+    : [];
+  const detailStatusRows = detailRow
+    ? [
+        { label: "워크시트 상태", value: detailWorksheetStatusValue },
+        { label: "쿠팡 주문상태", value: detailCoupangStatusValue },
+        { label: "송장 상태", value: detailInvoiceStatusValue },
+        { label: "출력 상태", value: detailOutputStatusValue },
+        { label: "CS 상태", value: detailCustomerServiceValue },
+        { label: "클레임 현황", value: detailClaimStatusValue },
+        { label: "CS 요약", value: formatText(detailRow.customerServiceIssueSummary) },
+        { label: "클레임 조회 범위", value: detailClaimLookupRange },
+        { label: "출력 메모", value: formatText(detailOrderDetail?.parcelPrintMessage) },
+        { label: "송장 전송 메모", value: formatText(detailRow.invoiceTransmissionMessage) },
+      ]
+    : [];
+  const detailRealtimeOrderRows = detailRow
+    ? [
+        {
+          label: "주문자",
+          value: formatJoinedText([detailOrderDetail?.orderer.name, detailRow.ordererName]),
+        },
+        { label: "주문자 연락처", value: detailBuyerContact },
+        {
+          label: "주문일시",
+          value: formatDateTimeLabel(detailOrderDetail?.orderedAt ?? detailRow.orderedAtRaw),
+        },
+        { label: "결제일시", value: formatDateTimeLabel(detailOrderDetail?.paidAt) },
+        { label: "배송유형", value: detailDeliveryTypeText },
+        { label: "쿠팡 송장", value: detailCoupangInvoice },
+        { label: "배송중 전환", value: formatDateTimeLabel(detailOrderDetail?.inTransitDateTime) },
+        { label: "배송완료", value: formatDateTimeLabel(detailOrderDetail?.deliveredDate) },
+      ]
+    : [];
   const recentActivityItems = useMemo<ShipmentActivityItem[]>(() => {
     const items: ShipmentActivityItem[] = [];
 
@@ -3014,11 +3192,37 @@ export default function CoupangShipmentsPage() {
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="detail-box-header">
-              <div>
-                <h3 style={{ margin: 0 }}>셀픽 워크시트 상세</h3>
-                <p className="muted shipment-detail-dialog-note">
-                  메모, 현재 상태, 쿠팡 주문 상세와 클레임 내용을 한 번에 확인합니다.
-                </p>
+              <div className="shipment-detail-header-stack">
+                <div>
+                  <h3 className="shipment-detail-title">셀픽 워크시트 상세</h3>
+                  <p className="muted shipment-detail-dialog-note">
+                    메모, 현재 상태, 쿠팡 주문 상세와 클레임 내용을 한 번에 확인합니다.
+                  </p>
+                </div>
+
+                <div className="shipment-detail-hero">
+                  <div className="shipment-detail-hero-copy">
+                    <div className="shipment-detail-hero-eyebrow">워크시트 행 요약</div>
+                    <strong className="shipment-detail-hero-title">
+                      {detailRow.exposedProductName || detailRow.productName}
+                    </strong>
+                    <div className="shipment-detail-hero-meta">{detailHeroMeta}</div>
+                  </div>
+                  <div className="shipment-detail-hero-badges">
+                    <div className="shipment-detail-hero-badge">
+                      <span className="shipment-detail-hero-badge-label">워크시트</span>
+                      {detailWorksheetStatusValue}
+                    </div>
+                    <div className="shipment-detail-hero-badge">
+                      <span className="shipment-detail-hero-badge-label">송장</span>
+                      {detailInvoiceStatusValue}
+                    </div>
+                    <div className="shipment-detail-hero-badge">
+                      <span className="shipment-detail-hero-badge-label">클레임</span>
+                      {detailClaimStatusValue}
+                    </div>
+                  </div>
+                </div>
               </div>
               <div className="detail-actions">
                 <button className="button secondary" onClick={closeShipmentDetailDialog}>
@@ -3027,81 +3231,18 @@ export default function CoupangShipmentsPage() {
               </div>
             </div>
 
-            <div className="detail-grid">
-              <div className="detail-card">
-                <strong>기본 정보</strong>
-                <p>상품: {detailRow.productName}</p>
-                <p>옵션: {formatText(detailRow.optionName)}</p>
-                <p>수량: {formatNumber(detailRow.quantity)}개</p>
-                <p>주문일시: {detailRow.orderDateText || formatDateTimeLabel(detailRow.orderedAtRaw)}</p>
-                <p>셀픽주문번호: {detailRow.selpickOrderNumber}</p>
-                <p>shipmentBoxId: {detailRow.shipmentBoxId}</p>
-                <p>orderId: {detailRow.orderId}</p>
-                <p>상품주문번호: {detailRow.productOrderNumber}</p>
-              </div>
+            <div className="shipment-detail-section-grid">
+              <OrderTicketSection title="주문 정보">
+                <TicketInfoTable rows={detailWorksheetRows} />
+              </OrderTicketSection>
 
-              <div className="detail-card">
-                <strong>현재 상태</strong>
-                <p>워크시트 상태: {detailOrderPresentation?.title ?? "-"}</p>
-                <p>
-                  쿠팡 주문상태: {formatOrderStatusLabel(detailOrderDetail?.status ?? detailRow.orderStatus)}
-                </p>
-                <p>송장상태: {detailInvoicePresentation?.label ?? "-"}</p>
-                <p>
-                  출력상태:{" "}
-                  {detailRow.exportedAt
-                    ? `출력 완료 (${formatDateTimeLabel(detailRow.exportedAt)})`
-                    : "미출력"}
-                </p>
-                <p>
-                  CS 상태:{" "}
-                  {detailCustomerServiceLabel ??
-                    (detailRow.customerServiceState === "ready" ? "접수 없음" : "-")}
-                </p>
-                <p>CS 요약: {formatText(detailRow.customerServiceIssueSummary)}</p>
-                <p>
-                  클레임 현황:{" "}
-                  {shipmentDetailQuery.isLoading
-                    ? "조회 중..."
-                    : detailClaimCount > 0
-                      ? `${formatNumber(detailClaimCount)}건`
-                      : "없음"}
-                </p>
-              </div>
+              <OrderTicketSection title="배송 정보">
+                <TicketInfoTable rows={detailDeliveryRows} />
+              </OrderTicketSection>
 
-              <div className="detail-card">
-                <strong>메모</strong>
-                <p>요청사항: {formatText(detailRow.deliveryRequest)}</p>
-                <p>출력 메모: {formatText(detailOrderDetail?.parcelPrintMessage)}</p>
-                <p>송장 전송 메모: {formatText(detailRow.invoiceTransmissionMessage)}</p>
-                <p>클레임 조회 범위: {detailClaimLookupRange}</p>
-              </div>
-
-              <div className="detail-card">
-                <strong>수령 / 송장</strong>
-                <p>수령자: {detailRow.receiverName}</p>
-                <p>
-                  연락처:{" "}
-                  {formatJoinedText([
-                    detailOrderDetail?.receiver.safeNumber,
-                    detailOrderDetail?.receiver.receiverNumber,
-                    detailRow.contact,
-                    detailRow.buyerPhoneNumber,
-                  ])}
-                </p>
-                <p>
-                  주소:{" "}
-                  {formatAddressText([
-                    detailOrderDetail?.receiver.postCode
-                      ? `(${detailOrderDetail.receiver.postCode})`
-                      : null,
-                    detailOrderDetail?.receiver.addr1,
-                    detailOrderDetail?.receiver.addr2,
-                    detailRow.receiverAddress,
-                  ])}
-                </p>
-                <p>워크시트 송장: {formatJoinedText([detailRow.deliveryCompanyCode, detailRow.invoiceNumber])}</p>
-              </div>
+              <OrderTicketSection title="상태 / 메모">
+                <TicketInfoTable rows={detailStatusRows} />
+              </OrderTicketSection>
             </div>
 
             {shipmentDetailQuery.isLoading ? (
@@ -3127,79 +3268,41 @@ export default function CoupangShipmentsPage() {
                   </div>
                 ) : null}
 
-                <div className="detail-columns">
-                  <div className="detail-box">
-                    <strong>주문 상세</strong>
-                    <p>주문자: {formatJoinedText([detailOrderDetail?.orderer.name, detailRow.ordererName])}</p>
-                    <p>
-                      주문자 연락처:{" "}
-                      {formatJoinedText([
-                        detailOrderDetail?.orderer.safeNumber,
-                        detailOrderDetail?.orderer.ordererNumber,
-                      ])}
-                    </p>
-                    <p>주문일시: {formatDateTimeLabel(detailOrderDetail?.orderedAt ?? detailRow.orderedAtRaw)}</p>
-                    <p>결제일시: {formatDateTimeLabel(detailOrderDetail?.paidAt)}</p>
-                    <p>
-                      배송유형:{" "}
-                      {formatJoinedText(
-                        [
-                          detailOrderDetail?.shipmentType,
-                          detailOrderDetail?.splitShipping === null
-                            ? null
-                            : detailOrderDetail?.splitShipping
-                              ? "분할배송"
-                              : "단일배송",
-                          detailOrderDetail?.ableSplitShipping === null
-                            ? null
-                            : detailOrderDetail?.ableSplitShipping
-                              ? "분할배송 가능"
-                              : "분할배송 불가",
-                        ],
-                        " · ",
-                      )}
-                    </p>
-                    <p>
-                      쿠팡 송장:{" "}
-                      {formatJoinedText([
-                        detailOrderDetail?.deliveryCompanyName,
-                        detailOrderDetail?.deliveryCompanyCode,
-                        detailOrderDetail?.invoiceNumber,
-                      ])}
-                    </p>
-                    <p>배송중 전환: {formatDateTimeLabel(detailOrderDetail?.inTransitDateTime)}</p>
-                    <p>배송완료: {formatDateTimeLabel(detailOrderDetail?.deliveredDate)}</p>
-                  </div>
+                <div className="shipment-detail-section-grid">
+                  <OrderTicketSection title="실시간 주문 상세">
+                    <TicketInfoTable rows={detailRealtimeOrderRows} />
+                  </OrderTicketSection>
 
-                  <div className="detail-box">
-                    <strong>주문 상품</strong>
+                  <OrderTicketSection title="주문 상품">
                     {detailOrderDetail?.items.length ? (
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>상품</th>
-                            <th>옵션</th>
-                            <th>수량</th>
-                            <th>상태</th>
-                            <th>송장</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detailOrderDetail.items.map((item, index) => (
-                            <tr key={`${item.id}:${index}`}>
-                              <td>{item.productName}</td>
-                              <td>{item.optionName ?? "-"}</td>
-                              <td>{formatNumber(item.quantity)}</td>
-                              <td>{formatOrderStatusLabel(item.status)}</td>
-                              <td>{formatJoinedText([item.deliveryCompanyCode, item.invoiceNumber])}</td>
+                      <div className="shipment-detail-table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>상품</th>
+                              <th>옵션</th>
+                              <th>수량</th>
+                              <th>상태</th>
+                              <th>송장</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {detailOrderDetail.items.map((item, index) => (
+                              <tr key={`${item.id}:${index}`}>
+                                <td>{item.productName}</td>
+                                <td>{item.optionName ?? "-"}</td>
+                                <td>{formatNumber(item.quantity)}</td>
+                                <td>{formatOrderStatusLabel(item.status)}</td>
+                                <td>{formatJoinedText([item.deliveryCompanyCode, item.invoiceNumber])}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     ) : (
                       <div className="muted">실시간 주문 상품 상세가 없습니다.</div>
                     )}
-                  </div>
+                  </OrderTicketSection>
                 </div>
 
                 <div className="detail-box">
