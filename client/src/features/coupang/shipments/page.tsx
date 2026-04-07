@@ -233,7 +233,7 @@ const ORDER_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OrderStatusCardK
   { value: "FINAL_DELIVERY", label: "배송완료", toneClassName: "success" },
   { value: "NONE_TRACKING", label: "추적없음", toneClassName: "attention" },
   { value: "SHIPMENT_STOP_REQUESTED", label: "출고중지 요청", toneClassName: "danger" },
-  { value: "SHIPMENT_STOP_HANDLED", label: "출고중지 처리됨", toneClassName: "attention" },
+  { value: "SHIPMENT_STOP_HANDLED", label: "출고중지완료", toneClassName: "attention" },
   { value: "CANCEL", label: "취소", toneClassName: "danger" },
   { value: "RETURN", label: "반품", toneClassName: "danger" },
   { value: "EXCHANGE", label: "교환", toneClassName: "attention" },
@@ -600,6 +600,7 @@ function getShipmentSortValue(
     const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
       summary: row.customerServiceIssueSummary,
       count: row.customerServiceIssueCount,
+      breakdown: row.customerServiceIssueBreakdown,
     });
     const customerServiceSortKey =
       hasCustomerServiceIssue ? "0" : row.customerServiceState === "unknown" ? "2" : "1";
@@ -847,11 +848,15 @@ function getShipmentExcelExportScopeLabel(scope: ShipmentExcelExportScope) {
 }
 
 function hasShipmentClaimIssue(
-  row: Pick<CoupangShipmentWorksheetRow, "customerServiceIssueSummary" | "customerServiceIssueCount">,
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  >,
 ) {
   return hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
+    breakdown: row.customerServiceIssueBreakdown,
   });
 }
 
@@ -955,6 +960,7 @@ function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
   const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
+    breakdown: row.customerServiceIssueBreakdown,
   });
   const customerServiceLabel = formatShipmentWorksheetCustomerServiceLabel({
     summary: row.customerServiceIssueSummary,

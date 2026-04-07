@@ -146,6 +146,7 @@ export function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
     !hasCoupangCustomerServiceIssue({
       summary: row.customerServiceIssueSummary,
       count: row.customerServiceIssueCount,
+      breakdown: row.customerServiceIssueBreakdown,
     }) &&
     (row.availableActions.includes("uploadInvoice") ||
       row.availableActions.includes("updateInvoice"))

@@ -106,6 +106,9 @@ function buildReturnReceipt(input: {
   productName: string;
   status?: string;
   releaseStatus?: string | null;
+  releaseStatusName?: string | null;
+  completeConfirmDate?: string | null;
+  completeConfirmType?: string | null;
 }) {
   return {
     receiptId: input.receiptId,
@@ -113,6 +116,8 @@ function buildReturnReceipt(input: {
     status: input.status ?? "RECEIPT",
     cancelType: input.cancelType,
     releaseStatus: input.releaseStatus,
+    completeConfirmDate: input.completeConfirmDate ?? null,
+    completeConfirmType: input.completeConfirmType ?? null,
     createdAt: "2026-03-26T09:00:00+09:00",
     returnItems: [
       {
@@ -121,6 +126,7 @@ function buildReturnReceipt(input: {
         shipmentBoxId: input.shipmentBoxId,
         cancelCount: 1,
         releaseStatus: input.releaseStatus,
+        releaseStatusName: input.releaseStatusName,
       },
     ],
   };
@@ -775,7 +781,53 @@ describe("coupang order service", () => {
       expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
     ]);
     expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지 요청");
-    expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지 처리됨");
+    expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지완료");
+  });
+
+  it("classifies completed cancel rows as shipment-stop handled even outside request statuses", async () => {
+    mockOrderApi({
+      returns: [],
+      cancels: [
+        buildReturnReceipt({
+          receiptId: "R-STOP-COMPLETE",
+          orderId: "O-711",
+          shipmentBoxId: "711",
+          vendorItemId: "V-711",
+          cancelType: "CANCEL",
+          productName: "Stop Complete",
+          status: "CANCEL_COMPLETE",
+          releaseStatus: null,
+          releaseStatusName: "출고 완료",
+          completeConfirmDate: "2026-03-27T09:10:00+09:00",
+          completeConfirmType: "VENDOR",
+        }),
+      ],
+      exchanges: [],
+    });
+
+    const result = await getOrderCustomerServiceSummary({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-28",
+      createdAtTo: "2026-03-29",
+      items: [
+        {
+          rowKey: "711:V-711",
+          orderId: "O-711",
+          shipmentBoxId: "711",
+          vendorItemId: "V-711",
+          sellerProductId: "P-V-711",
+        },
+      ],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      customerServiceIssueCount: 1,
+      customerServiceState: "ready",
+      customerServiceIssueBreakdown: [
+        expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
+      ],
+    });
+    expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지완료");
   });
 
   it("reuses the 10-minute cache for repeated CS summary lookups", async () => {

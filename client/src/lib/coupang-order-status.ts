@@ -8,7 +8,7 @@ const COUPANG_ORDER_STATUS_LABELS: Record<string, string> = {
   FINAL_DELIVERY: "배송완료",
   NONE_TRACKING: "추적없음",
   SHIPMENT_STOP_REQUESTED: "출고중지 요청",
-  SHIPMENT_STOP_HANDLED: "출고중지 처리됨",
+  SHIPMENT_STOP_HANDLED: "출고중지완료",
   CANCEL: "취소",
   RETURN: "반품",
   EXCHANGE: "교환",
@@ -29,6 +29,10 @@ const CUSTOMER_SERVICE_STATUS_CODE_BY_TYPE = {
   return: "RETURN",
   exchange: "EXCHANGE",
 } as const;
+
+function normalizeLegacySummary(summary: string | null | undefined) {
+  return (summary ?? "").trim().replaceAll("출고중지 처리됨", "출고중지완료");
+}
 
 export function normalizeCoupangOrderStatus(value: string | null | undefined) {
   const normalized = (value ?? "").trim().toUpperCase();
@@ -52,7 +56,7 @@ function resolveCustomerServiceStatusFromBreakdown(
 }
 
 function resolveCustomerServiceStatusFromSummary(summary: string | null | undefined) {
-  const normalizedSummary = (summary ?? "").trim().toLowerCase();
+  const normalizedSummary = normalizeLegacySummary(summary).toLowerCase();
   if (!normalizedSummary) {
     return null;
   }
@@ -65,7 +69,7 @@ function resolveCustomerServiceStatusFromSummary(summary: string | null | undefi
   }
 
   if (
-    normalizedSummary.includes("출고중지 처리됨") ||
+    normalizedSummary.includes("출고중지완료") ||
     normalizedSummary.includes("shipment_stop_handled")
   ) {
     return "SHIPMENT_STOP_HANDLED";

@@ -224,6 +224,7 @@ function getShipmentSortValue(
     const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
       summary: row.customerServiceIssueSummary,
       count: row.customerServiceIssueCount,
+      breakdown: row.customerServiceIssueBreakdown,
     });
     const customerServiceSortKey =
       hasCustomerServiceIssue ? "0" : row.customerServiceState === "unknown" ? "2" : "1";
@@ -502,6 +503,7 @@ export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow)
   const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
+    breakdown: row.customerServiceIssueBreakdown,
   });
   const customerServiceLabel = formatShipmentWorksheetCustomerServiceLabel({
     summary: row.customerServiceIssueSummary,

@@ -66,6 +66,7 @@ function buildReturnRow() {
     receiptType: "RETURN",
     returnDeliveryType: "SELLER",
     releaseStatus: "RELEASED",
+    releaseStatusName: "출고 완료",
     productName: "Stored Product",
     sellerProductId: "P-100",
     sellerProductName: "Stored Product",

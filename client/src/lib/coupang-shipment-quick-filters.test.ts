@@ -168,6 +168,35 @@ describe("buildShipmentQuickFilterResult", () => {
     ).toBe("SHIPMENT_STOP_REQUESTED");
   });
 
+  it("treats shipment-stop handled rows as blocked from ready-to-send invoices", () => {
+    const result = buildShipmentQuickFilterResult(
+      [
+        createRow({
+          id: "handled-claim",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "333",
+          customerServiceIssueSummary: "출고중지완료 1건",
+          customerServiceIssueCount: 1,
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_handled", count: 1, label: "출고중지완료 1건" },
+          ],
+        }),
+        createRow({
+          id: "ready-row",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "444",
+        }),
+      ],
+      {
+        invoiceStatusCard: "all",
+        orderStatusCard: "all",
+        outputStatusCard: "all",
+      },
+    );
+
+    expect(result.invoiceReadyRows.map((row) => row.id)).toEqual(["ready-row"]);
+  });
+
   it("excludes claim rows from invoice-ready rows", () => {
     const result = buildShipmentQuickFilterResult(
       [

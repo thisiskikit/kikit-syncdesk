@@ -78,6 +78,25 @@ describe("formatCoupangCustomerServiceLabel", () => {
       }),
     ).toBeNull();
   });
+
+  it("normalizes shipment-stop handled labels to 출고중지완료", () => {
+    expect(
+      formatCoupangCustomerServiceLabel({
+        summary: "출고중지 처리됨 1건",
+        count: 1,
+        state: "ready",
+      }),
+    ).toBe("CS 출고중지완료 1건");
+
+    expect(
+      formatCoupangCustomerServiceLabel({
+        summary: null,
+        count: 1,
+        state: "ready",
+        breakdown: [{ type: "shipment_stop_handled", count: 1 }],
+      }),
+    ).toBe("CS 출고중지완료 1건");
+  });
 });
 
 describe("formatShipmentWorksheetCustomerServiceLabel", () => {
@@ -106,6 +125,7 @@ describe("getShipmentWorksheetCustomerServiceSearchText", () => {
       getShipmentWorksheetCustomerServiceSearchText({
         customerServiceIssueCount: 0,
         customerServiceIssueSummary: null,
+        customerServiceIssueBreakdown: [],
         customerServiceState: "stale",
       }),
     ).toBe("");
@@ -113,10 +133,11 @@ describe("getShipmentWorksheetCustomerServiceSearchText", () => {
     expect(
       getShipmentWorksheetCustomerServiceSearchText({
         customerServiceIssueCount: 1,
-        customerServiceIssueSummary: "issue",
+        customerServiceIssueSummary: null,
+        customerServiceIssueBreakdown: [{ type: "shipment_stop_handled", count: 1, label: "" }],
         customerServiceState: "ready",
       }),
-    ).toContain("CS");
+    ).toContain("출고중지완료");
   });
 });
 

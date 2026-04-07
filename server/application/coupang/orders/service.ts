@@ -1184,6 +1184,7 @@ function normalizeReturnRows(
           receiptType: asString(receipt.receiptType),
           returnDeliveryType: asString(receipt.returnDeliveryType),
           releaseStatus: asString(item.releaseStatus),
+          releaseStatusName: asString(item.releaseStatusName),
           productName:
             asString(item.sellerProductName) ??
             asString(item.vendorItemPackageName) ??

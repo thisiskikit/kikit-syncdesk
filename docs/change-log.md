@@ -73,7 +73,7 @@ This file records repository changes that are considered complete only when the 
   - the COUPANG orders page still contains older mixed-language UI copy outside this task's behavioral changes
   - browser-level manual verification for order `16100182558956` / receiver `민지후` was not run in this task
 - Next work:
-  - manually verify the COUPANG orders and shipment pages show `출고중지 요청` or `출고중지 처리됨` for a live matching order
+  - manually verify the COUPANG orders and shipment pages show `출고중지 요청` or `출고중지완료` for a live matching order
   - consider cleaning legacy COUPANG order-page copy so all visible Korean labels are normalized
 - Verification:
   - passed: `npm run check`

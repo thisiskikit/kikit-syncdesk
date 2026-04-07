@@ -44,7 +44,7 @@
 | App shell | Active | `client/src/App.tsx` | Top navigation, workspace tabs, operations toaster, and route switching are wired. |
 | NAVER workspace | Mostly active | `client/src/App.tsx` | Products, bulk price, orders, shipment, claims, inquiries, settlements, stats, seller info, and logs are connected. `Product Edit` and `Grouped Products` still render placeholder pages. |
 | COUPANG workspace | Active | `client/src/App.tsx` | Connection, logistics, products, product edit, bulk price, library, control, orders, shipments, cancel/refunds, returns, exchanges, inquiries, coupons, settlements, rocket growth, and logs are connected. |
-| COUPANG claim-aware order and shipment blocking | Active | `client/src/pages/coupang-orders.tsx`, `client/src/features/coupang/shipments/page.tsx`, `server/services/coupang/customer-service-issues.ts`, `server/services/coupang/shipment-worksheet-service.ts` | Orders now load CS/claim data by default, shipment-stop requested/handled states are surfaced in shared status helpers, stale worksheet claim state is refreshed on read, and claim-bearing rows are excluded from preparing and invoice transmission actions. |
+| COUPANG claim-aware order and shipment blocking | Active | `client/src/pages/coupang-orders.tsx`, `client/src/features/coupang/shipments/page.tsx`, `server/services/coupang/customer-service-issues.ts`, `server/services/coupang/shipment-worksheet-service.ts` | Orders now load CS/claim data by default, shipment-stop requested and shipment-stop completed states are surfaced in shared status helpers, stale worksheet claim state is refreshed on read, and claim-bearing rows are excluded from preparing and invoice transmission actions. |
 | Shared Draft / Runs engine | Active with mixed persistence | `client/src/App.tsx`, `server/storage.ts` | Catalog, drafts, runs, and field sync routes exist, but shared engine runtime storage is still in memory. |
 | Settings / Operations | Active | `client/src/App.tsx`, `server/routes.ts` | Settings hub, channel connection settings, operation center, logs, and UI state APIs are mounted. |
 | PostgreSQL-backed work data | Active when `DATABASE_URL` exists | `server/services/shared/work-data-db.ts`, `shared/schema.ts` | Settings, logs, shipment worksheets, field sync, library, and bulk price tables are provisioned here. |
@@ -78,7 +78,8 @@
   - preset selections are cleared only after the preset list query confirms the saved preset no longer exists
 - COUPANG claim-aware orders and shipments:
   - `GET /api/coupang/orders` now requests customer-service lookup by default instead of returning only unknown CS state
-  - shipment-stop requested and shipment-stop handled claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
+  - shipment-stop requested and shipment-stop completed claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
+  - completed cancel rows can now be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals instead of only the request-status set
   - shipment worksheet reads refresh claim state when saved rows are stale or unknown, without requiring a full recollect
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
 - NAVER bulk price preview behavior:

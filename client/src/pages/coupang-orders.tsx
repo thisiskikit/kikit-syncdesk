@@ -136,11 +136,15 @@ function resolveOrderDisplayStatus(
 }
 
 function hasOrderClaimIssue(
-  row: Pick<CoupangOrderRow, "customerServiceIssueSummary" | "customerServiceIssueCount">,
+  row: Pick<
+    CoupangOrderRow,
+    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  >,
 ) {
   return hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
+    breakdown: row.customerServiceIssueBreakdown,
   });
 }
 
@@ -190,6 +194,27 @@ function buildBatchFailureDetails(result: CoupangBatchActionResponse) {
   return result.items
     .filter((item) => item.status !== "succeeded")
     .map((item) => `${item.orderId ?? item.targetId}: ${item.message}`);
+}
+
+function getOrderActionHint(
+  row: Pick<
+    CoupangOrderRow,
+    | "availableActions"
+    | "status"
+    | "orderId"
+    | "shipmentBoxId"
+    | "customerServiceIssueSummary"
+    | "customerServiceIssueCount"
+    | "customerServiceIssueBreakdown"
+  >,
+) {
+  if (hasOrderClaimIssue(row)) {
+    return `${getOrderClaimSummary(row)}로 상품준비중 처리 제외`;
+  }
+
+  return row.availableActions.includes("markPreparing")
+    ? "상품준비중 처리 가능"
+    : "상태 변경 대기";
 }
 
 export default function CoupangOrdersPage() {
@@ -382,17 +407,19 @@ export default function CoupangOrdersPage() {
     summary: detailRow?.customerServiceIssueSummary,
     count: detailRow?.customerServiceIssueCount,
     state: detailRow?.customerServiceState,
+    breakdown: detailRow?.customerServiceIssueBreakdown,
   });
+  const detailResolvedStatus = detailRow ? resolveOrderDisplayStatus(detailRow) : null;
 
   return (
     <div className="page">
       <div className="hero">
         <div className="hero-badges">
           <StatusBadge tone="live" label="실연동" />
-          <StatusBadge tone="coming" label="CS 수동 조회" />
+          <StatusBadge tone="coming" label="CS 자동 반영" />
         </div>
         <h1>COUPANG 주문 / 출고</h1>
-        <p>목록은 빠르게 불러오고, CS 상태는 필요할 때만 수동으로 반영합니다.</p>
+        <p>주문 목록 로드 시 클레임 상태를 함께 반영하고, 필요하면 수동 재조회로 최신화할 수 있습니다.</p>
       </div>
 
       <div className="card">
@@ -414,7 +441,7 @@ export default function CoupangOrdersPage() {
             {ordersQuery.isFetching ? "불러오는 중..." : "새로고침"}
           </button>
           <button className="button secondary" onClick={() => void loadCustomerServiceSummary()} disabled={!filters.selectedStoreId || !allItems.length || busyAction !== null}>
-            {busyAction === "customer-service" ? "CS 조회 중..." : "CS 상태 불러오기"}
+            {busyAction === "customer-service" ? "CS 조회 중..." : "CS 상태 재조회"}
           </button>
         </div>
       </div>
@@ -436,7 +463,7 @@ export default function CoupangOrdersPage() {
             {busyAction === "prepare" ? "상품준비중 처리 중..." : `상품준비중 처리 (${prepareReadyRows.length})`}
           </button>
           <button className="button ghost" onClick={() => setSelectedRowIds(new Set())} disabled={!selectedRows.length || busyAction !== null}>선택 해제</button>
-          <div className="muted">기본 목록은 CS를 자동 조회하지 않습니다. 필요할 때만 버튼을 눌러 주세요.</div>
+          <div className="muted">기본 목록에서 CS/클레임 상태를 자동 반영합니다. 재조회 버튼은 최신 상태를 다시 확인할 때만 사용하세요.</div>
         </div>
       </div>
 
@@ -446,21 +473,41 @@ export default function CoupangOrdersPage() {
             <table className="table">
               <thead><tr><th style={{ width: 48 }}><input type="checkbox" checked={visibleItems.length > 0 && visibleItems.every((row) => selectedRowIds.has(row.id))} onChange={(event) => setSelectedRowIds((current) => { const next = new Set(current); visibleItems.forEach((row) => event.target.checked ? next.add(row.id) : next.delete(row.id)); return next; })} /></th><th>주문</th><th>상품</th><th>상태</th><th>금액</th><th>수령 / 배송</th><th>작업</th></tr></thead>
               <tbody>
-                {visibleItems.map((item) => {
-                  const resolvedStatus = resolveOrderDisplayStatus(item);
-                  const hasClaimIssue = hasOrderClaimIssue(item);
+                {visibleItems.map((sourceItem) => {
+                  const resolvedStatus = resolveOrderDisplayStatus(sourceItem);
+                  const hasClaimIssue = hasOrderClaimIssue(sourceItem);
+                  const item =
+                    resolvedStatus && resolvedStatus !== sourceItem.status
+                      ? {
+                          ...sourceItem,
+                          status: resolvedStatus,
+                          availableActions: hasClaimIssue
+                            ? sourceItem.availableActions.filter((action) => action !== "markPreparing")
+                            : sourceItem.availableActions,
+                        }
+                      : hasClaimIssue
+                        ? {
+                            ...sourceItem,
+                            availableActions: sourceItem.availableActions.filter(
+                              (action) => action !== "markPreparing",
+                            ),
+                          }
+                        : sourceItem;
                   const csLabel = formatCoupangCustomerServiceLabel({
-                    summary: item.customerServiceIssueSummary,
-                    count: item.customerServiceIssueCount,
-                    state: item.customerServiceState,
-                    breakdown: item.customerServiceIssueBreakdown,
+                    summary: sourceItem.customerServiceIssueSummary,
+                    count: sourceItem.customerServiceIssueCount,
+                    state: sourceItem.customerServiceState,
+                    breakdown: sourceItem.customerServiceIssueBreakdown,
                   });
                   const csToneClass = getCoupangCustomerServiceToneClass({
-                    summary: item.customerServiceIssueSummary,
-                    breakdown: item.customerServiceIssueBreakdown,
+                    summary: sourceItem.customerServiceIssueSummary,
+                    breakdown: sourceItem.customerServiceIssueBreakdown,
                   });
+                  const rowTitle = hasClaimIssue
+                    ? getOrderActionHint(sourceItem)
+                    : formatStatus(resolvedStatus);
                   return (
-                    <tr key={item.id} className={hasClaimIssue ? `order-row-${csToneClass}` : undefined} title={formatStatus(resolvedStatus)}>
+                    <tr key={item.id} className={hasClaimIssue ? `order-row-${csToneClass}` : undefined} title={rowTitle}>
                       <td><input type="checkbox" checked={selectedRowIds.has(item.id)} onChange={(event) => setSelectedRowIds((current) => { const next = new Set(current); event.target.checked ? next.add(item.id) : next.delete(item.id); return next; })} /></td>
                       <td><div><strong>{item.orderId}</strong></div><div className="muted">배송번호 {item.shipmentBoxId}</div><div className="muted">주문일 {formatDate(item.orderedAt)}</div></td>
                       <td><div><strong>{item.productName}</strong></div><div className="muted">{item.optionName ?? "-"}</div><div className="muted">{formatTicketText(item.sellerProductName)} / {formatTicketText(item.vendorItemId)}</div></td>
@@ -481,8 +528,8 @@ export default function CoupangOrdersPage() {
         open={Boolean(detailRow)}
         title="주문 상세조회"
         subtitle={detailRow ? `주문번호 ${detailRow.orderId} / 배송번호 ${detailRow.shipmentBoxId}` : undefined}
-        headerAside={detailRow ? <div className="order-ticket-header-meta"><div className={`status-pill ${(detailItem?.status ?? detailRow.status ?? "").toLowerCase()}`}>{formatStatus(detailItem?.status ?? detailRow.status)}</div>{detailLabel ? <div className="order-status-note cs">{detailLabel}</div> : null}</div> : null}
-        tabs={[{ id: "detail", label: "상세", content: detailQuery.isLoading && !detailQuery.data ? <div className="feedback"><strong>상세 정보를 불러오는 중입니다.</strong></div> : detailQuery.error ? <div className="feedback error"><strong>상세 정보를 불러오지 못했습니다.</strong><div>{(detailQuery.error as Error).message}</div></div> : !detailItem ? <div className="empty">주문 상세 정보가 없습니다.</div> : <div className="detail-grid"><div className="detail-card"><strong>기본 정보</strong><p>주문번호: {detailItem.orderId}</p><p>배송번호: {detailItem.shipmentBoxId}</p><p>주문상태: {formatStatus(detailItem.status)}</p><p>주문일: {formatDate(detailItem.orderedAt)}</p><p>결제일: {formatDate(detailItem.paidAt)}</p></div><div className="detail-card"><strong>고객 / 배송</strong><p>주문자: {formatTicketText(detailItem.orderer.name)}</p><p>연락처: {formatTicketText(detailItem.orderer.safeNumber)}</p><p>수령자: {formatTicketText(detailItem.receiver.name)}</p><p>수령지: {formatTicketText([detailItem.receiver.addr1, detailItem.receiver.addr2].filter(Boolean).join(" "))}</p><p>송장: {formatTicketText(detailItem.invoiceNumber)}</p></div><div className="detail-card"><strong>CS / 클레임</strong><p>목록 상태: {detailLabel ?? "CS 이슈 없음"}</p><p>취소/반품: {formatNumber(detailItem.relatedReturnRequests.length)}건</p><p>교환: {formatNumber(detailItem.relatedExchangeRequests.length)}건</p>{detailQuery.data?.message ? <p>안내: {detailQuery.data.message}</p> : null}</div><div className="detail-card"><strong>상품</strong>{detailItem.items.length ? detailItem.items.map((item) => <p key={item.id}>{item.productName} / {formatTicketText(item.optionName)} / {formatTicketText(item.quantity == null ? null : `${formatNumber(item.quantity)}개`)}</p>) : <p>상품 정보 없음</p>}</div></div> }]}
+        headerAside={detailRow ? <div className="order-ticket-header-meta"><div className={`status-pill ${(detailResolvedStatus ?? detailItem?.status ?? detailRow.status ?? "").toLowerCase()}`}>{formatStatus(detailResolvedStatus ?? detailItem?.status ?? detailRow.status)}</div>{detailLabel ? <div className="order-status-note cs">{detailLabel}</div> : null}</div> : null}
+        tabs={[{ id: "detail", label: "상세", content: detailQuery.isLoading && !detailQuery.data ? <div className="feedback"><strong>상세 정보를 불러오는 중입니다.</strong></div> : detailQuery.error ? <div className="feedback error"><strong>상세 정보를 불러오지 못했습니다.</strong><div>{(detailQuery.error as Error).message}</div></div> : !detailItem ? <div className="empty">주문 상세 정보가 없습니다.</div> : <div className="detail-grid"><div className="detail-card"><strong>기본 정보</strong><p>주문번호: {detailItem.orderId}</p><p>배송번호: {detailItem.shipmentBoxId}</p><p>주문상태: {formatStatus(detailResolvedStatus ?? detailItem.status)}</p><p>주문일: {formatDate(detailItem.orderedAt)}</p><p>결제일: {formatDate(detailItem.paidAt)}</p></div><div className="detail-card"><strong>고객 / 배송</strong><p>주문자: {formatTicketText(detailItem.orderer.name)}</p><p>연락처: {formatTicketText(detailItem.orderer.safeNumber)}</p><p>수령자: {formatTicketText(detailItem.receiver.name)}</p><p>수령지: {formatTicketText([detailItem.receiver.addr1, detailItem.receiver.addr2].filter(Boolean).join(" "))}</p><p>송장: {formatTicketText(detailItem.invoiceNumber)}</p></div><div className="detail-card"><strong>CS / 클레임</strong><p>목록 상태: {detailLabel ?? "CS 이슈 없음"}</p><p>취소/반품: {formatNumber(detailItem.relatedReturnRequests.length)}건</p><p>교환: {formatNumber(detailItem.relatedExchangeRequests.length)}건</p>{detailQuery.data?.message ? <p>안내: {detailQuery.data.message}</p> : null}</div><div className="detail-card"><strong>상품</strong>{detailItem.items.length ? detailItem.items.map((item) => <p key={item.id}>{item.productName} / {formatTicketText(item.optionName)} / {formatTicketText(item.quantity == null ? null : `${formatNumber(item.quantity)}개`)}</p>) : <p>상품 정보 없음</p>}</div></div> }]}
         onClose={() => setDetailRowId(null)}
       />
     </div>

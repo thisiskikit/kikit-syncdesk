@@ -669,6 +669,7 @@ export interface CoupangReturnRow {
   receiptType: string | null;
   returnDeliveryType: string | null;
   releaseStatus: string | null;
+  releaseStatusName: string | null;
   productName: string;
   sellerProductId: string | null;
   sellerProductName: string | null;

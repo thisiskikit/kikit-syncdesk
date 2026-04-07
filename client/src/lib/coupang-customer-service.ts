@@ -8,19 +8,17 @@ import type {
 
 type CustomerServiceCarrier = {
   customerServiceIssueCount: number;
-  customerServiceIssueSummary: string | null;
   customerServiceState: CoupangCustomerServiceState;
-  customerServiceFetchedAt: string | null;
 };
+
+type CustomerServiceBreakdownInputItem = Pick<CoupangCustomerServiceIssueBreakdownItem, "type"> &
+  Partial<Pick<CoupangCustomerServiceIssueBreakdownItem, "count">>;
 
 type CustomerServiceLabelInput = {
   summary: string | null | undefined;
   count: number | null | undefined;
   state?: CoupangCustomerServiceState | null | undefined;
-  breakdown?:
-    | readonly Pick<CoupangCustomerServiceIssueBreakdownItem, "type">[]
-    | null
-    | undefined;
+  breakdown?: readonly CustomerServiceBreakdownInputItem[] | null | undefined;
 };
 
 const ISSUE_PRIORITY = [
@@ -31,6 +29,31 @@ const ISSUE_PRIORITY = [
   "exchange",
 ] as const satisfies readonly CoupangCustomerServiceIssueBreakdownItem["type"][];
 
+const ISSUE_LABELS: Record<CoupangCustomerServiceIssueBreakdownItem["type"], string> = {
+  shipment_stop_requested: "출고중지 요청",
+  shipment_stop_handled: "출고중지완료",
+  cancel: "취소",
+  return: "반품",
+  exchange: "교환",
+};
+
+function normalizeLegacySummary(summary: string | null | undefined) {
+  return (summary ?? "").trim().replaceAll("출고중지 처리됨", "출고중지완료");
+}
+
+function formatBreakdownSummary(
+  breakdown: readonly CustomerServiceBreakdownInputItem[] | null | undefined,
+) {
+  if (!breakdown?.length) {
+    return null;
+  }
+
+  return breakdown
+    .filter((item) => (item.count ?? 1) > 0)
+    .map((item) => `${ISSUE_LABELS[item.type]} ${item.count ?? 1}건`)
+    .join(" / ");
+}
+
 function resolvePrimaryIssueType(
   input: Pick<CustomerServiceLabelInput, "summary" | "breakdown">,
 ): CoupangCustomerServiceIssueBreakdownItem["type"] | null {
@@ -40,7 +63,7 @@ function resolvePrimaryIssueType(
     }
   }
 
-  const normalizedSummary = (input.summary ?? "").trim().toLowerCase();
+  const normalizedSummary = normalizeLegacySummary(input.summary).toLowerCase();
   if (!normalizedSummary) {
     return null;
   }
@@ -49,7 +72,7 @@ function resolvePrimaryIssueType(
     return "shipment_stop_requested";
   }
 
-  if (normalizedSummary.includes("출고중지 처리됨")) {
+  if (normalizedSummary.includes("출고중지완료")) {
     return "shipment_stop_handled";
   }
 
@@ -69,12 +92,12 @@ function resolvePrimaryIssueType(
 }
 
 export function hasCoupangCustomerServiceIssue(
-  input: Pick<CustomerServiceLabelInput, "summary" | "count">,
+  input: Pick<CustomerServiceLabelInput, "summary" | "count" | "breakdown">,
 ) {
-  const summary = (input.summary ?? "").trim();
+  const summary = normalizeLegacySummary(input.summary);
   const count = input.count ?? 0;
 
-  return Boolean(summary) || count > 0;
+  return Boolean(summary) || count > 0 || Boolean(input.breakdown?.length);
 }
 
 export function getCoupangCustomerServiceToneClass(
@@ -98,7 +121,8 @@ export function getCoupangCustomerServiceToneClass(
 }
 
 export function formatCoupangCustomerServiceLabel(input: CustomerServiceLabelInput) {
-  const summary = (input.summary ?? "").trim() || null;
+  const summary =
+    formatBreakdownSummary(input.breakdown) ?? (normalizeLegacySummary(input.summary) || null);
   const count = input.count ?? 0;
   const state = input.state ?? "ready";
 
@@ -139,9 +163,7 @@ export function getCoupangCustomerServiceStateText(state: CoupangCustomerService
   }
 }
 
-export function countRowsWithCustomerServiceIssues(
-  rows: Array<Pick<CustomerServiceCarrier, "customerServiceIssueCount" | "customerServiceState">>,
-) {
+export function countRowsWithCustomerServiceIssues(rows: Array<CustomerServiceCarrier>) {
   return rows.filter(
     (row) => row.customerServiceState !== "unknown" && row.customerServiceIssueCount > 0,
   ).length;
@@ -179,12 +201,16 @@ export function mergeCoupangOrderCustomerServiceSummary(
 export function getShipmentWorksheetCustomerServiceSearchText(
   row: Pick<
     CoupangShipmentWorksheetRow,
-    "customerServiceIssueCount" | "customerServiceIssueSummary" | "customerServiceState"
+    | "customerServiceIssueCount"
+    | "customerServiceIssueSummary"
+    | "customerServiceIssueBreakdown"
+    | "customerServiceState"
   >,
 ) {
   const label = formatShipmentWorksheetCustomerServiceLabel({
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
+    breakdown: row.customerServiceIssueBreakdown,
     state: row.customerServiceState,
   });
 
