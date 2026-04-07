@@ -94,6 +94,7 @@ import {
   type NaverPreviewSortField,
   type NaverPreviewSortState,
   type SettingsStoresResponse,
+  type UiSectionKey,
   type UiState,
   isMatchingPreviewRefreshJob,
 } from "./state";
@@ -247,12 +248,6 @@ export default function NaverBulkPricePage() {
     null,
   );
   const [previewPage, setPreviewPage] = useState(1);
-  const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
-  const [sourcePresetName, setSourcePresetName] = useState("");
-  const [sourcePresetMemo, setSourcePresetMemo] = useState("");
-  const [selectedRulePresetId, setSelectedRulePresetId] = useState("");
-  const [rulePresetName, setRulePresetName] = useState("");
-  const [rulePresetMemo, setRulePresetMemo] = useState("");
   const [fixedAdjustmentMode, setFixedAdjustmentMode] = useState<FixedAdjustmentMode>(
     resolveFixedAdjustmentMode(DEFAULT_STATE.fixedAdjustment),
   );
@@ -291,10 +286,35 @@ export default function NaverBulkPricePage() {
   const naverStores = (storesQuery.data?.items ?? []).filter(
     (item): item is ChannelStoreSummary & { channel: "naver" } => item.channel === "naver",
   );
+  const selectedSourcePresetId = uiState.selectedSourcePresetId;
+  const sourcePresetName = uiState.sourcePresetName;
+  const sourcePresetMemo = uiState.sourcePresetMemo;
+  const selectedRulePresetId = uiState.selectedRulePresetId;
+  const rulePresetName = uiState.rulePresetName;
+  const rulePresetMemo = uiState.rulePresetMemo;
   const selectedSourcePreset =
     sourcePresets.find((item) => item.id === selectedSourcePresetId) ?? null;
   const selectedRulePreset =
     rulePresets.find((item) => item.id === selectedRulePresetId) ?? null;
+
+  function updatePresetUiState(
+    patch: Partial<
+      Pick<
+        UiState,
+        | "selectedSourcePresetId"
+        | "sourcePresetName"
+        | "sourcePresetMemo"
+        | "selectedRulePresetId"
+        | "rulePresetName"
+        | "rulePresetMemo"
+      >
+    >,
+  ) {
+    setUiState((current) => ({
+      ...current,
+      ...patch,
+    }));
+  }
 
   useEffect(() => {
     if (!state.storeId && naverStores[0]) {
@@ -306,24 +326,28 @@ export default function NaverBulkPricePage() {
   }, [naverStores, setState, state.storeId]);
 
   useEffect(() => {
-    if (!selectedSourcePresetId || selectedSourcePreset) {
+    if (!selectedSourcePresetId || !sourcePresetsQuery.isSuccess || selectedSourcePreset) {
       return;
     }
 
-    setSelectedSourcePresetId("");
-    setSourcePresetName("");
-    setSourcePresetMemo("");
-  }, [selectedSourcePreset, selectedSourcePresetId]);
+    updatePresetUiState({
+      selectedSourcePresetId: "",
+      sourcePresetName: "",
+      sourcePresetMemo: "",
+    });
+  }, [selectedSourcePreset, selectedSourcePresetId, sourcePresetsQuery.isSuccess]);
 
   useEffect(() => {
-    if (!selectedRulePresetId || selectedRulePreset) {
+    if (!selectedRulePresetId || !rulePresetsQuery.isSuccess || selectedRulePreset) {
       return;
     }
 
-    setSelectedRulePresetId("");
-    setRulePresetName("");
-    setRulePresetMemo("");
-  }, [selectedRulePreset, selectedRulePresetId]);
+    updatePresetUiState({
+      selectedRulePresetId: "",
+      rulePresetName: "",
+      rulePresetMemo: "",
+    });
+  }, [rulePresetsQuery.isSuccess, selectedRulePreset, selectedRulePresetId]);
 
   useEffect(() => {
     if (!routeRunId || routeRunId === activeRunId) {
@@ -388,9 +412,11 @@ export default function NaverBulkPricePage() {
   }
 
   function applySourcePreset(preset: NaverBulkPriceSourcePreset) {
-    setSelectedSourcePresetId(preset.id);
-    setSourcePresetName(preset.name);
-    setSourcePresetMemo(preset.memo);
+    updatePresetUiState({
+      selectedSourcePresetId: preset.id,
+      sourcePresetName: preset.name,
+      sourcePresetMemo: preset.memo,
+    });
     setState((current) => ({
       ...current,
       storeId: preset.sourceConfig.storeId,
@@ -407,9 +433,11 @@ export default function NaverBulkPricePage() {
   }
 
   function applyRulePreset(preset: NaverBulkPriceRulePreset) {
-    setSelectedRulePresetId(preset.id);
-    setRulePresetName(preset.name);
-    setRulePresetMemo(preset.memo);
+    updatePresetUiState({
+      selectedRulePresetId: preset.id,
+      rulePresetName: preset.name,
+      rulePresetMemo: preset.memo,
+    });
     setState((current) => ({
       ...current,
       fixedAdjustment: preset.rules.fixedAdjustment,
@@ -1119,9 +1147,11 @@ export default function NaverBulkPricePage() {
         sourceConfig: currentSourceConfig,
       }),
     onSuccess: async (preset) => {
-      setSelectedSourcePresetId(preset.id);
-      setSourcePresetName(preset.name);
-      setSourcePresetMemo(preset.memo);
+      updatePresetUiState({
+        selectedSourcePresetId: preset.id,
+        sourcePresetName: preset.name,
+        sourcePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/source-presets"],
       });
@@ -1140,8 +1170,10 @@ export default function NaverBulkPricePage() {
         },
       ),
     onSuccess: async (preset) => {
-      setSourcePresetName(preset.name);
-      setSourcePresetMemo(preset.memo);
+      updatePresetUiState({
+        sourcePresetName: preset.name,
+        sourcePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/source-presets"],
       });
@@ -1155,9 +1187,11 @@ export default function NaverBulkPricePage() {
         `/api/naver/bulk-price/source-presets/${selectedSourcePresetId}`,
       ),
     onSuccess: async () => {
-      setSelectedSourcePresetId("");
-      setSourcePresetName("");
-      setSourcePresetMemo("");
+      updatePresetUiState({
+        selectedSourcePresetId: "",
+        sourcePresetName: "",
+        sourcePresetMemo: "",
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/source-presets"],
       });
@@ -1172,9 +1206,11 @@ export default function NaverBulkPricePage() {
         rules: currentRuleSet,
       }),
     onSuccess: async (preset) => {
-      setSelectedRulePresetId(preset.id);
-      setRulePresetName(preset.name);
-      setRulePresetMemo(preset.memo);
+      updatePresetUiState({
+        selectedRulePresetId: preset.id,
+        rulePresetName: preset.name,
+        rulePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/rule-presets"],
       });
@@ -1193,8 +1229,10 @@ export default function NaverBulkPricePage() {
         },
       ),
     onSuccess: async (preset) => {
-      setRulePresetName(preset.name);
-      setRulePresetMemo(preset.memo);
+      updatePresetUiState({
+        rulePresetName: preset.name,
+        rulePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/rule-presets"],
       });
@@ -1208,9 +1246,11 @@ export default function NaverBulkPricePage() {
         `/api/naver/bulk-price/rule-presets/${selectedRulePresetId}`,
       ),
     onSuccess: async () => {
-      setSelectedRulePresetId("");
-      setRulePresetName("");
-      setRulePresetMemo("");
+      updatePresetUiState({
+        selectedRulePresetId: "",
+        rulePresetName: "",
+        rulePresetMemo: "",
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/naver/bulk-price/rule-presets"],
       });
@@ -1363,7 +1403,7 @@ export default function NaverBulkPricePage() {
     resumeMutation.isPending ||
     stopMutation.isPending;
 
-  const toggleUiSection = (key: keyof UiState) => {
+  const toggleUiSection = (key: UiSectionKey) => {
     setUiState((current) => ({
       ...current,
       [key]: !current[key],
@@ -1426,9 +1466,11 @@ export default function NaverBulkPricePage() {
                   onChange={(event) => {
                     const nextId = event.target.value;
                     if (!nextId) {
-                      setSelectedSourcePresetId("");
-                      setSourcePresetName("");
-                      setSourcePresetMemo("");
+                      updatePresetUiState({
+                        selectedSourcePresetId: "",
+                        sourcePresetName: "",
+                        sourcePresetMemo: "",
+                      });
                       return;
                     }
 
@@ -1451,7 +1493,11 @@ export default function NaverBulkPricePage() {
                 <span>Name</span>
                 <input
                   value={sourcePresetName}
-                  onChange={(event) => setSourcePresetName(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      sourcePresetName: event.target.value,
+                    })
+                  }
                   placeholder="Default source preset"
                 />
               </label>
@@ -1459,7 +1505,11 @@ export default function NaverBulkPricePage() {
                 <span>Memo</span>
                 <textarea
                   value={sourcePresetMemo}
-                  onChange={(event) => setSourcePresetMemo(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      sourcePresetMemo: event.target.value,
+                    })
+                  }
                   rows={3}
                   placeholder="Describe the source table and matching rule."
                 />
@@ -1797,9 +1847,11 @@ export default function NaverBulkPricePage() {
                   onChange={(event) => {
                     const nextId = event.target.value;
                     if (!nextId) {
-                      setSelectedRulePresetId("");
-                      setRulePresetName("");
-                      setRulePresetMemo("");
+                      updatePresetUiState({
+                        selectedRulePresetId: "",
+                        rulePresetName: "",
+                        rulePresetMemo: "",
+                      });
                       return;
                     }
 
@@ -1822,7 +1874,11 @@ export default function NaverBulkPricePage() {
                 <span>Name</span>
                 <input
                   value={rulePresetName}
-                  onChange={(event) => setRulePresetName(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      rulePresetName: event.target.value,
+                    })
+                  }
                   placeholder="Default rule preset"
                 />
               </label>
@@ -1830,7 +1886,11 @@ export default function NaverBulkPricePage() {
                 <span>Memo</span>
                 <textarea
                   value={rulePresetMemo}
-                  onChange={(event) => setRulePresetMemo(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      rulePresetMemo: event.target.value,
+                    })
+                  }
                   rows={3}
                   placeholder="Describe the pricing rule."
                 />

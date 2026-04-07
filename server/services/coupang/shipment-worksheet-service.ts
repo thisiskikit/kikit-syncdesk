@@ -506,6 +506,7 @@ function resolveWorksheetCustomerServiceState(
     return {
       customerServiceIssueCount: 0,
       customerServiceIssueSummary: null,
+      customerServiceIssueBreakdown: [],
       customerServiceState: "unknown" as const,
       customerServiceFetchedAt: null,
     };
@@ -516,6 +517,7 @@ function resolveWorksheetCustomerServiceState(
     return {
       customerServiceIssueCount: row.customerServiceIssueCount ?? 0,
       customerServiceIssueSummary: row.customerServiceIssueSummary ?? null,
+      customerServiceIssueBreakdown: row.customerServiceIssueBreakdown ?? [],
       customerServiceState: "unknown" as const,
       customerServiceFetchedAt: null,
     };
@@ -524,6 +526,7 @@ function resolveWorksheetCustomerServiceState(
   return {
     customerServiceIssueCount: row.customerServiceIssueCount ?? 0,
     customerServiceIssueSummary: row.customerServiceIssueSummary ?? null,
+    customerServiceIssueBreakdown: row.customerServiceIssueBreakdown ?? [],
     customerServiceState: isTimestampOlderThanMs(fetchedAt, nowIso, CUSTOMER_SERVICE_READY_TTL_MS)
       ? ("stale" as const)
       : ("ready" as const),
@@ -751,6 +754,9 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
           customerServiceIssueSummary: shouldPreserveExistingIssue
             ? row.customerServiceIssueSummary
             : summary.customerServiceIssueSummary,
+          customerServiceIssueBreakdown: shouldPreserveExistingIssue
+            ? row.customerServiceIssueBreakdown
+            : summary.customerServiceIssueBreakdown,
           customerServiceState: shouldPreserveExistingIssue
             ? row.customerServiceState
             : summary.customerServiceState,
@@ -972,6 +978,27 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     ? Math.max(0, Math.trunc(row.customerServiceIssueCount))
     : 0;
   const customerServiceIssueSummary = normalizeWhitespace(row.customerServiceIssueSummary);
+  const customerServiceIssueBreakdown = Array.isArray(row.customerServiceIssueBreakdown)
+    ? (() => {
+        const items = row.customerServiceIssueBreakdown;
+        const hasInvalidItem = items.some(
+          (item) =>
+            !item ||
+            (item.type !== "cancel" && item.type !== "return" && item.type !== "exchange") ||
+            !Number.isFinite(item.count) ||
+            typeof item.label !== "string",
+        );
+        return hasInvalidItem
+          ? items.filter(
+              (item): item is typeof item =>
+                Boolean(item) &&
+                (item.type === "cancel" || item.type === "return" || item.type === "exchange") &&
+                Number.isFinite(item.count) &&
+                typeof item.label === "string",
+            )
+          : items;
+      })()
+    : [];
   const coupangDeliveryCompanyCode = null;
   const coupangInvoiceNumber = null;
   const coupangInvoiceUploadedAt = null;
@@ -981,6 +1008,7 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     exposedProductName === row.exposedProductName &&
     customerServiceIssueCount === row.customerServiceIssueCount &&
     customerServiceIssueSummary === row.customerServiceIssueSummary &&
+    customerServiceIssueBreakdown === row.customerServiceIssueBreakdown &&
     coupangDeliveryCompanyCode === row.coupangDeliveryCompanyCode &&
     coupangInvoiceNumber === row.coupangInvoiceNumber &&
     coupangInvoiceUploadedAt === row.coupangInvoiceUploadedAt
@@ -994,6 +1022,7 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     exposedProductName,
     customerServiceIssueCount,
     customerServiceIssueSummary,
+    customerServiceIssueBreakdown,
     coupangDeliveryCompanyCode,
     coupangInvoiceNumber,
     coupangInvoiceUploadedAt,
@@ -1514,6 +1543,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       orderStatus: normalizeStatusFilter(row.status),
       customerServiceIssueCount: customerServiceIssueState.customerServiceIssueCount,
       customerServiceIssueSummary: customerServiceIssueState.customerServiceIssueSummary,
+      customerServiceIssueBreakdown: customerServiceIssueState.customerServiceIssueBreakdown,
       customerServiceState: customerServiceIssueState.customerServiceState,
       customerServiceFetchedAt: customerServiceIssueState.customerServiceFetchedAt,
       orderedAtRaw,
@@ -1651,6 +1681,10 @@ function normalizePatchAgainstRow(
 }
 
 export async function patchShipmentWorksheet(input: PatchCoupangShipmentWorksheetInput) {
+  if (!input.items.length) {
+    throw new Error("업데이트할 배송 시트 항목이 없습니다.");
+  }
+
   const store = await getStoreOrThrow(input.storeId);
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
   const rowBySourceKey = new Map(currentSheet.items.map((row) => [row.sourceKey, row] as const));

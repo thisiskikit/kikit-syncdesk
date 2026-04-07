@@ -1,0 +1,227 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e7]: KIKIT Channel Control v1
+        - generic [ref=e8]: Operations console / shared draft engine / work center
+      - navigation "Workspace menu" [ref=e9]:
+        - button "Dashboard" [ref=e10] [cursor=pointer]
+        - button "NAVER" [ref=e11] [cursor=pointer]
+        - button "COUPANG" [ref=e12] [cursor=pointer]
+        - button "Draft / Runs" [ref=e13] [cursor=pointer]
+        - button "Settings" [ref=e14] [cursor=pointer]
+        - button "Work Center" [ref=e15] [cursor=pointer]
+    - generic [ref=e16]:
+      - tablist "Workspace tabs" [ref=e17]:
+        - generic [ref=e18]:
+          - tab "COUPANG Shipments" [selected] [ref=e19] [cursor=pointer]:
+            - generic [ref=e20]: COUPANG Shipments
+          - button "Close COUPANG Shipments" [ref=e21] [cursor=pointer]: x
+      - generic [ref=e22]:
+        - button "다른 탭 닫기" [disabled] [ref=e23]
+        - button "모두 닫기" [ref=e24] [cursor=pointer]
+  - main [ref=e25]:
+    - tabpanel [ref=e27]:
+      - generic [ref=e28]:
+        - complementary [ref=e29]:
+          - generic [ref=e30]:
+            - generic [ref=e31]: COUPANG
+            - strong [ref=e32]: COUPANG Workspace
+            - generic [ref=e33]: Run connection, product, pricing, order, shipping, claims, and settlement workflows for COUPANG.
+          - navigation "COUPANG main menu" [ref=e34]:
+            - link "Shipment / Dispatch 실연동" [ref=e35] [cursor=pointer]:
+              - /url: /coupang/shipments
+              - generic [ref=e36]: Shipment / Dispatch
+              - generic [ref=e37]: 실연동
+            - link "Orders / Outbound 실연동" [ref=e38] [cursor=pointer]:
+              - /url: /coupang/orders
+              - generic [ref=e39]: Orders / Outbound
+              - generic [ref=e40]: 실연동
+            - link "Products 실연동" [ref=e41] [cursor=pointer]:
+              - /url: /coupang/products
+              - generic [ref=e42]: Products
+              - generic [ref=e43]: 실연동
+            - link "Price / Stock / Sale 실연동" [ref=e44] [cursor=pointer]:
+              - /url: /coupang/control
+              - generic [ref=e45]: Price / Stock / Sale
+              - generic [ref=e46]: 실연동
+            - link "Bulk Price 실연동" [ref=e47] [cursor=pointer]:
+              - /url: /coupang/bulk-price
+              - generic [ref=e48]: Bulk Price
+              - generic [ref=e49]: 실연동
+            - link "Connection 실연동" [ref=e50] [cursor=pointer]:
+              - /url: /coupang/connection
+              - generic [ref=e51]: Connection
+              - generic [ref=e52]: 실연동
+          - generic [ref=e53]:
+            - generic [ref=e54]: 보조 메뉴
+            - navigation "COUPANG secondary menu" [ref=e55]:
+              - link "Category / Logistics 실연동" [ref=e56] [cursor=pointer]:
+                - /url: /coupang/logistics
+                - generic [ref=e57]: Category / Logistics
+                - generic [ref=e58]: 실연동
+              - link "Cancel / Refund 실연동" [ref=e59] [cursor=pointer]:
+                - /url: /coupang/cancel-refunds
+                - generic [ref=e60]: Cancel / Refund
+                - generic [ref=e61]: 실연동
+              - link "Returns 실연동" [ref=e62] [cursor=pointer]:
+                - /url: /coupang/returns
+                - generic [ref=e63]: Returns
+                - generic [ref=e64]: 실연동
+              - link "Exchanges 실연동" [ref=e65] [cursor=pointer]:
+                - /url: /coupang/exchanges
+                - generic [ref=e66]: Exchanges
+                - generic [ref=e67]: 실연동
+              - link "Inquiries / CS 실연동" [ref=e68] [cursor=pointer]:
+                - /url: /coupang/inquiries
+                - generic [ref=e69]: Inquiries / CS
+                - generic [ref=e70]: 실연동
+        - generic [ref=e72]:
+          - generic [ref=e74]:
+            - generic [ref=e75]:
+              - generic [ref=e76]:
+                - generic [ref=e77]: 대체 데이터
+                - generic [ref=e78]: 셀픽 워크시트
+              - heading "쿠팡 배송/송장" [level=1] [ref=e79]
+              - paragraph [ref=e80]: 배송 시트를 셀픽 헤더 규칙으로 수집하고, 표 안 붙여넣기와 셀픽주문번호 기준 송장 전송을 한 화면에서 처리합니다.
+            - generic [ref=e82]:
+              - button "빠른 수집" [ref=e83] [cursor=pointer]
+              - button "선택 송장 전송" [disabled] [ref=e84]
+              - button "송장 입력" [disabled] [ref=e85]
+              - button "선택 행 엑셀 다운로드" [disabled] [ref=e86]
+              - button "미출력건 전부 다운로드" [disabled] [ref=e87]
+              - group [ref=e88]:
+                - generic "관리 작업" [ref=e89] [cursor=pointer]
+          - generic [ref=e90]:
+            - generic [ref=e91]:
+              - combobox [ref=e92]:
+                - option "스토어 선택"
+                - option "쿠팡_올케이팝" [selected]
+              - textbox [ref=e93]: 2026-03-31
+              - textbox [ref=e94]: 2026-04-05
+              - combobox [ref=e95]:
+                - option "전체 상태" [selected]
+                - option "주문접수"
+                - option "상품준비중"
+                - option "출고완료"
+                - option "배송중"
+                - option "배송완료"
+                - option "추적없음"
+              - textbox "셀픽주문번호, 상품명, 수령자명, 송장번호 검색" [ref=e96]
+            - generic [ref=e97]:
+              - combobox "목록 건수" [ref=e98]:
+                - option "10건"
+                - option "20건" [selected]
+                - option "50건"
+              - button "워크시트 새로고침" [disabled] [ref=e99]:
+                - img [ref=e100]
+          - generic [ref=e105]:
+            - generic [ref=e106]:
+              - generic [ref=e107]: 전체
+              - generic [ref=e108]: "0"
+            - generic [ref=e109]:
+              - generic [ref=e110]: 현재 목록
+              - generic [ref=e111]: "0"
+            - generic [ref=e112]:
+              - generic [ref=e113]: 전송 대상
+              - generic [ref=e114]: "0"
+            - generic [ref=e115]:
+              - generic [ref=e116]: 미저장 변경
+              - generic [ref=e117]: "0"
+          - generic [ref=e118]:
+            - generic [ref=e119]:
+              - generic [ref=e120]:
+                - text: 전송
+                - generic [ref=e121]: 0건
+              - generic [ref=e122]:
+                - button "전체 0" [pressed] [ref=e123] [cursor=pointer]:
+                  - generic [ref=e124]: 전체
+                  - strong [ref=e125]: "0"
+                - button "입력 전 0" [ref=e126] [cursor=pointer]:
+                  - generic [ref=e127]: 입력 전
+                  - strong [ref=e128]: "0"
+                - button "전송 전 0" [ref=e129] [cursor=pointer]:
+                  - generic [ref=e130]: 전송 전
+                  - strong [ref=e131]: "0"
+                - button "송장 전송 중 0" [ref=e132] [cursor=pointer]:
+                  - generic [ref=e133]: 송장 전송 중
+                  - strong [ref=e134]: "0"
+                - button "전송 실패 0" [ref=e135] [cursor=pointer]:
+                  - generic [ref=e136]: 전송 실패
+                  - strong [ref=e137]: "0"
+                - button "전송 0" [ref=e138] [cursor=pointer]:
+                  - generic [ref=e139]: 전송
+                  - strong [ref=e140]: "0"
+            - generic [ref=e141]:
+              - generic [ref=e142]:
+                - text: 출력
+                - generic [ref=e143]: 0건
+              - generic [ref=e144]:
+                - button "전체 0" [ref=e145] [cursor=pointer]:
+                  - generic [ref=e146]: 전체
+                  - strong [ref=e147]: "0"
+                - button "미출력 0" [pressed] [ref=e148] [cursor=pointer]:
+                  - generic [ref=e149]: 미출력
+                  - strong [ref=e150]: "0"
+                - button "출력 완료 0" [ref=e151] [cursor=pointer]:
+                  - generic [ref=e152]: 출력 완료
+                  - strong [ref=e153]: "0"
+            - generic [ref=e154]:
+              - generic [ref=e155]:
+                - text: 주문
+                - generic [ref=e156]: 0건
+              - generic [ref=e157]:
+                - button "전체 0" [pressed] [ref=e158] [cursor=pointer]:
+                  - generic [ref=e159]: 전체
+                  - strong [ref=e160]: "0"
+                - button "주문접수 0" [ref=e161] [cursor=pointer]:
+                  - generic [ref=e162]: 주문접수
+                  - strong [ref=e163]: "0"
+                - button "상품준비중 0" [ref=e164] [cursor=pointer]:
+                  - generic [ref=e165]: 상품준비중
+                  - strong [ref=e166]: "0"
+                - button "출고완료 0" [ref=e167] [cursor=pointer]:
+                  - generic [ref=e168]: 출고완료
+                  - strong [ref=e169]: "0"
+                - button "배송중 0" [ref=e170] [cursor=pointer]:
+                  - generic [ref=e171]: 배송중
+                  - strong [ref=e172]: "0"
+                - button "배송완료 0" [ref=e173] [cursor=pointer]:
+                  - generic [ref=e174]: 배송완료
+                  - strong [ref=e175]: "0"
+                - button "추적없음 0" [ref=e176] [cursor=pointer]:
+                  - generic [ref=e177]: 추적없음
+                  - strong [ref=e178]: "0"
+                - button "취소 0" [ref=e179] [cursor=pointer]:
+                  - generic [ref=e180]: 취소
+                  - strong [ref=e181]: "0"
+                - button "반품 0" [ref=e182] [cursor=pointer]:
+                  - generic [ref=e183]: 반품
+                  - strong [ref=e184]: "0"
+                - button "교환 0" [ref=e185] [cursor=pointer]:
+                  - generic [ref=e186]: 교환
+                  - strong [ref=e187]: "0"
+          - generic [ref=e188]:
+            - generic [ref=e189]:
+              - generic [ref=e190]:
+                - heading "셀픽 워크시트" [level=2] [ref=e191]
+                - generic [ref=e192]: "표 안에서 `Ctrl+V`로 붙여넣을 수 있습니다. 일반 값은 선택한 셀부터 반영되고, `셀픽주문번호 | 택배사 | 송장번호` 형식은 주문번호 기준으로 자동 매칭합니다."
+                - generic [ref=e193]: 행을 클릭하면 메모, 현재 상태, 쿠팡 클레임 상세를 팝업으로 확인할 수 있습니다.
+              - generic [ref=e194]:
+                - generic [ref=e195]:
+                  - button "기본 보기" [ref=e196] [cursor=pointer]
+                  - button "송장 입력하기" [ref=e197] [cursor=pointer]
+                - button "컬럼 설정" [ref=e198] [cursor=pointer]
+            - generic [ref=e199]: 배송 시트를 불러오는 중입니다...
+        - separator [ref=e200]
+  - generic [ref=e201]:
+    - button "Task Status No active jobs Hide" [expanded] [ref=e202] [cursor=pointer]:
+      - generic [ref=e203]:
+        - strong [ref=e204]: Task Status
+        - generic [ref=e205]: No active jobs
+      - generic [ref=e206]: Hide
+    - generic [ref=e208]:
+      - generic [ref=e209]:
+        - strong [ref=e210]: Running Now
+        - generic [ref=e211]: "0"
+      - generic [ref=e212]: No jobs are currently running. This panel stays visible across tabs.

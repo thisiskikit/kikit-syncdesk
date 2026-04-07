@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { desc, eq } from "drizzle-orm";
 import type { ConnectionTestResult } from "@shared/channel-settings";
@@ -17,6 +18,7 @@ import {
   toDateOrNull,
   toIsoString,
 } from "../services/shared/work-data-db";
+import { db } from "../storage";
 import type {
   CoupangSettingsStorePort,
   StoredCoupangStore,
@@ -27,6 +29,11 @@ export type { StoredCoupangStore } from "../interfaces/coupang-settings-store";
 type PersistedCoupangSettings = {
   version: 1;
   stores: StoredCoupangStore[];
+};
+
+const defaultData: PersistedCoupangSettings = {
+  version: 1,
+  stores: [],
 };
 
 function maskSecret(secret: string) {
@@ -127,6 +134,14 @@ function normalizePersistedSettings(value: PersistedCoupangSettings | null) {
   };
 }
 
+function sortStoresByUpdatedAtDesc(stores: StoredCoupangStore[]) {
+  return [...stores].sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt);
+    const rightTime = Date.parse(right.updatedAt);
+    return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
+  });
+}
+
 export function normalizeCoupangBaseUrl(value?: string | null) {
   const raw = (value || COUPANG_DEFAULT_BASE_URL).trim();
 
@@ -197,15 +212,192 @@ function toSummary(store: StoredCoupangStore): CoupangStoreSummary {
   };
 }
 
-class CoupangSettingsStore {
-  private readonly filePath = path.resolve(
-    process.cwd(),
-    process.env.COUPANG_SETTINGS_FILE || "data/coupang-settings.json",
-  );
+function buildNextStoredStore(
+  input: UpsertCoupangStoreInput,
+  existing: StoredCoupangStore | null,
+  timestamp = new Date(),
+): StoredCoupangStore {
+  const normalizedBaseUrl = normalizeCoupangBaseUrl(input.baseUrl);
+  const shipmentPlatformKey = normalizeShipmentPlatformKey(input.shipmentPlatformKey);
+  const nextSecret =
+    input.credentials.secretKey && input.credentials.secretKey.length > 0
+      ? input.credentials.secretKey
+      : existing?.credentials.secretKey ?? "";
 
+  if (!nextSecret) {
+    throw new Error("secretKey is required.");
+  }
+
+  return {
+    id: existing?.id ?? randomUUID(),
+    channel: "coupang",
+    storeName: input.storeName.trim(),
+    vendorId: input.vendorId.trim(),
+    shipmentPlatformKey,
+    credentials: {
+      accessKey: input.credentials.accessKey.trim(),
+      secretKey: nextSecret,
+    },
+    baseUrl: normalizedBaseUrl,
+    connectionTest:
+      existing &&
+      existing.vendorId === input.vendorId.trim() &&
+      existing.credentials.accessKey === input.credentials.accessKey.trim() &&
+      existing.credentials.secretKey === nextSecret &&
+      existing.baseUrl === normalizedBaseUrl
+        ? existing.connectionTest
+        : {
+            status: "idle",
+            testedAt: null,
+            message: null,
+          },
+    createdAt: existing?.createdAt ?? timestamp.toISOString(),
+    updatedAt: timestamp.toISOString(),
+  };
+}
+
+function buildConnectionTestUpdatedStore(
+  store: StoredCoupangStore,
+  result: ConnectionTestResult,
+): StoredCoupangStore {
+  return {
+    ...store,
+    connectionTest: {
+      status: result.status,
+      testedAt: result.testedAt,
+      message: result.message,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export class CoupangSettingsStore {
+  private readonly filePath: string;
+  private readonly legacyMode: boolean;
+
+  private cache: PersistedCoupangSettings | null = null;
+  private writePromise = Promise.resolve();
   private initializePromise: Promise<void> | null = null;
 
+  constructor(filePath?: string) {
+    this.filePath = path.resolve(
+      process.cwd(),
+      filePath ?? process.env.COUPANG_SETTINGS_FILE ?? "data/coupang-settings.json",
+    );
+    this.legacyMode = typeof filePath === "string" || !db;
+  }
+
+  private async loadLegacy() {
+    if (this.cache) {
+      return this.cache;
+    }
+
+    try {
+      const raw = await readFile(this.filePath, "utf-8");
+      this.cache = normalizePersistedSettings(JSON.parse(raw) as PersistedCoupangSettings);
+    } catch (error) {
+      const code =
+        typeof error === "object" && error && "code" in error
+          ? String((error as { code?: string }).code)
+          : null;
+
+      if (code !== "ENOENT") {
+        throw error;
+      }
+
+      this.cache = structuredClone(defaultData);
+    }
+
+    return this.cache;
+  }
+
+  private async persistLegacy(nextData: PersistedCoupangSettings) {
+    this.cache = {
+      version: 1,
+      stores: sortStoresByUpdatedAtDesc(nextData.stores),
+    };
+    const payload = JSON.stringify(this.cache, null, 2);
+
+    this.writePromise = this.writePromise.then(async () => {
+      await mkdir(path.dirname(this.filePath), { recursive: true });
+      await writeFile(this.filePath, payload, "utf-8");
+    });
+
+    await this.writePromise;
+  }
+
+  private async listLegacyStores() {
+    const data = await this.loadLegacy();
+    return sortStoresByUpdatedAtDesc(data.stores);
+  }
+
+  private async getLegacyStore(id: string) {
+    const stores = await this.listLegacyStores();
+    return stores.find((store) => store.id === id) ?? null;
+  }
+
+  private async saveLegacyStore(store: StoredCoupangStore) {
+    const data = await this.loadLegacy();
+
+    await this.persistLegacy({
+      version: 1,
+      stores: [store, ...data.stores.filter((entry) => entry.id !== store.id)],
+    });
+  }
+
+  private async syncLegacyToDatabase() {
+    if (this.legacyMode || !db) {
+      return;
+    }
+
+    const data = await this.loadLegacy();
+    if (!data.stores.length) {
+      return;
+    }
+
+    const database = assertWorkDataDatabaseEnabled();
+
+    for (const store of data.stores) {
+      await database
+        .insert(coupangStoreSettings)
+        .values({
+          id: store.id,
+          channel: "coupang",
+          storeName: store.storeName,
+          vendorId: store.vendorId,
+          shipmentPlatformKey: store.shipmentPlatformKey ?? null,
+          accessKey: store.credentials.accessKey,
+          secretKey: store.credentials.secretKey,
+          baseUrl: store.baseUrl,
+          connectionStatus: store.connectionTest.status,
+          connectionTestedAt: toDateOrNull(store.connectionTest.testedAt),
+          connectionMessage: store.connectionTest.message,
+          createdAt: toDateOrNull(store.createdAt) ?? new Date(),
+          updatedAt: toDateOrNull(store.updatedAt) ?? new Date(),
+        })
+        .onConflictDoUpdate({
+          target: coupangStoreSettings.id,
+          set: {
+            storeName: store.storeName,
+            vendorId: store.vendorId,
+            shipmentPlatformKey: store.shipmentPlatformKey ?? null,
+            accessKey: store.credentials.accessKey,
+            secretKey: store.credentials.secretKey,
+            baseUrl: store.baseUrl,
+            connectionStatus: store.connectionTest.status,
+            connectionTestedAt: toDateOrNull(store.connectionTest.testedAt),
+            connectionMessage: store.connectionTest.message,
+            updatedAt: toDateOrNull(store.updatedAt) ?? new Date(),
+          },
+        });
+    }
+  }
+
   private async ensureInitialized() {
+    if (this.legacyMode) {
+      return;
+    }
+
     if (!this.initializePromise) {
       this.initializePromise = (async () => {
         await ensureWorkDataTables();
@@ -271,91 +463,76 @@ class CoupangSettingsStore {
   }
 
   async listStoreSummaries() {
-    await this.ensureInitialized();
-    const database = assertWorkDataDatabaseEnabled();
-    const rows = await database
-      .select()
-      .from(coupangStoreSettings)
-      .orderBy(desc(coupangStoreSettings.updatedAt));
+    if (this.legacyMode) {
+      return (await this.listLegacyStores()).map((store) => toSummary(store));
+    }
 
-    return rows.map((row) => toSummary(toStoredStore(row)));
+    await this.ensureInitialized();
+    try {
+      await this.syncLegacyToDatabase();
+      const database = assertWorkDataDatabaseEnabled();
+      const rows = await database
+        .select()
+        .from(coupangStoreSettings)
+        .orderBy(desc(coupangStoreSettings.updatedAt));
+      const stores = rows.map((row) => toStoredStore(row));
+
+      await this.persistLegacy({
+        version: 1,
+        stores,
+      });
+
+      return stores.map((store) => toSummary(store));
+    } catch {
+      return (await this.listLegacyStores()).map((store) => toSummary(store));
+    }
   }
 
   async getStore(id: string) {
-    await this.ensureInitialized();
-    const database = assertWorkDataDatabaseEnabled();
-    const rows = await database
-      .select()
-      .from(coupangStoreSettings)
-      .where(eq(coupangStoreSettings.id, id))
-      .limit(1);
+    if (this.legacyMode) {
+      return this.getLegacyStore(id);
+    }
 
-    return rows[0] ? toStoredStore(rows[0]) : null;
+    await this.ensureInitialized();
+    try {
+      await this.syncLegacyToDatabase();
+      const database = assertWorkDataDatabaseEnabled();
+      const rows = await database
+        .select()
+        .from(coupangStoreSettings)
+        .where(eq(coupangStoreSettings.id, id))
+        .limit(1);
+      const store = rows[0] ? toStoredStore(rows[0]) : null;
+
+      if (store) {
+        await this.saveLegacyStore(store);
+      }
+
+      return store;
+    } catch {
+      return this.getLegacyStore(id);
+    }
   }
 
   async saveStore(input: UpsertCoupangStoreInput) {
-    await this.ensureInitialized();
-    const database = assertWorkDataDatabaseEnabled();
     const existing = input.id ? await this.getStore(input.id) : null;
     const timestamp = new Date();
-    const normalizedBaseUrl = normalizeCoupangBaseUrl(input.baseUrl);
-    const shipmentPlatformKey = normalizeShipmentPlatformKey(input.shipmentPlatformKey);
-    const nextSecret =
-      input.credentials.secretKey && input.credentials.secretKey.length > 0
-        ? input.credentials.secretKey
-        : existing?.credentials.secretKey ?? "";
+    const nextStore = buildNextStoredStore(input, existing, timestamp);
 
-    if (!nextSecret) {
-      throw new Error("secretKey is required.");
+    if (this.legacyMode) {
+      await this.saveLegacyStore(nextStore);
+      return toSummary(nextStore);
     }
 
-    const nextStore: StoredCoupangStore = {
-      id: existing?.id ?? randomUUID(),
-      channel: "coupang",
-      storeName: input.storeName.trim(),
-      vendorId: input.vendorId.trim(),
-      shipmentPlatformKey,
-      credentials: {
-        accessKey: input.credentials.accessKey.trim(),
-        secretKey: nextSecret,
-      },
-      baseUrl: normalizedBaseUrl,
-      connectionTest:
-        existing &&
-        existing.vendorId === input.vendorId.trim() &&
-        existing.credentials.accessKey === input.credentials.accessKey.trim() &&
-        existing.credentials.secretKey === nextSecret &&
-        existing.baseUrl === normalizedBaseUrl
-          ? existing.connectionTest
-          : {
-              status: "idle",
-              testedAt: null,
-              message: null,
-            },
-      createdAt: existing?.createdAt ?? timestamp.toISOString(),
-      updatedAt: timestamp.toISOString(),
-    };
-
-    await database
-      .insert(coupangStoreSettings)
-      .values({
-        id: nextStore.id,
-        channel: "coupang",
-        storeName: nextStore.storeName,
-        vendorId: nextStore.vendorId,
-        shipmentPlatformKey: nextStore.shipmentPlatformKey ?? null,
-        accessKey: nextStore.credentials.accessKey,
-        secretKey: nextStore.credentials.secretKey,
-        baseUrl: nextStore.baseUrl,
-        connectionStatus: nextStore.connectionTest.status,
-        connectionTestedAt: toDateOrNull(nextStore.connectionTest.testedAt),
-        connectionMessage: nextStore.connectionTest.message,
-        createdAt: toDateOrNull(nextStore.createdAt) ?? timestamp,
-        updatedAt: timestamp,
-      })
-      .onConflictDoUpdate({
-        target: coupangStoreSettings.id,
-        set: {
+    await this.ensureInitialized();
+    try {
+      await this.syncLegacyToDatabase();
+      const database = assertWorkDataDatabaseEnabled();
+      await database
+        .insert(coupangStoreSettings)
+        .values({
+          id: nextStore.id,
+          channel: "coupang",
           storeName: nextStore.storeName,
           vendorId: nextStore.vendorId,
           shipmentPlatformKey: nextStore.shipmentPlatformKey ?? null,
@@ -365,41 +542,67 @@ class CoupangSettingsStore {
           connectionStatus: nextStore.connectionTest.status,
           connectionTestedAt: toDateOrNull(nextStore.connectionTest.testedAt),
           connectionMessage: nextStore.connectionTest.message,
+          createdAt: toDateOrNull(nextStore.createdAt) ?? timestamp,
           updatedAt: timestamp,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: coupangStoreSettings.id,
+          set: {
+            storeName: nextStore.storeName,
+            vendorId: nextStore.vendorId,
+            shipmentPlatformKey: nextStore.shipmentPlatformKey ?? null,
+            accessKey: nextStore.credentials.accessKey,
+            secretKey: nextStore.credentials.secretKey,
+            baseUrl: nextStore.baseUrl,
+            connectionStatus: nextStore.connectionTest.status,
+            connectionTestedAt: toDateOrNull(nextStore.connectionTest.testedAt),
+            connectionMessage: nextStore.connectionTest.message,
+            updatedAt: timestamp,
+          },
+        });
+    } catch {
+      await this.saveLegacyStore(nextStore);
+      return toSummary(nextStore);
+    }
+
+    await this.saveLegacyStore(nextStore);
 
     return toSummary(nextStore);
   }
 
   async updateConnectionTest(storeId: string, result: ConnectionTestResult) {
-    await this.ensureInitialized();
     const target = await this.getStore(storeId);
 
     if (!target) {
       return null;
     }
 
-    const nextStore: StoredCoupangStore = {
-      ...target,
-      connectionTest: {
-        status: result.status,
-        testedAt: result.testedAt,
-        message: result.message,
-      },
-      updatedAt: new Date().toISOString(),
-    };
+    const nextStore = buildConnectionTestUpdatedStore(target, result);
 
-    const database = assertWorkDataDatabaseEnabled();
-    await database
-      .update(coupangStoreSettings)
-      .set({
-        connectionStatus: result.status,
-        connectionTestedAt: toDateOrNull(result.testedAt),
-        connectionMessage: result.message,
-        updatedAt: toDateOrNull(nextStore.updatedAt) ?? new Date(),
-      })
-      .where(eq(coupangStoreSettings.id, storeId));
+    if (this.legacyMode) {
+      await this.saveLegacyStore(nextStore);
+      return toSummary(nextStore);
+    }
+
+    await this.ensureInitialized();
+    try {
+      await this.syncLegacyToDatabase();
+      const database = assertWorkDataDatabaseEnabled();
+      await database
+        .update(coupangStoreSettings)
+        .set({
+          connectionStatus: result.status,
+          connectionTestedAt: toDateOrNull(result.testedAt),
+          connectionMessage: result.message,
+          updatedAt: toDateOrNull(nextStore.updatedAt) ?? new Date(),
+        })
+        .where(eq(coupangStoreSettings.id, storeId));
+    } catch {
+      await this.saveLegacyStore(nextStore);
+      return toSummary(nextStore);
+    }
+
+    await this.saveLegacyStore(nextStore);
 
     return toSummary(nextStore);
   }

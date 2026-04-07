@@ -135,11 +135,24 @@ function parseRetryAfterMs(res: Response) {
   return Math.max(0, retryAt - Date.now());
 }
 
+function formatRetryAfterMessage(retryAfterMs: number | null) {
+  if (retryAfterMs === null) {
+    return " Retry in a moment.";
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return ` Retry after about ${retryAfterSeconds}s.`;
+}
+
 function buildHtmlResponseMessage(res: Response) {
   const label = getResponseLabel(res);
 
   if (res.status === 429) {
-    return `Request to ${label} was rate-limited by the server. Retry in a moment.`;
+    const apiBaseHint = getConfiguredApiBaseUrl()
+      ? ""
+      : " If the frontend and backend are deployed separately, verify VITE_API_BASE_URL points to the backend origin.";
+
+    return `Request to ${label} was rate-limited before the JSON API responded.${formatRetryAfterMessage(parseRetryAfterMs(res))}${apiBaseHint}`;
   }
 
   const statusLabel = res.status ? ` (${res.status}${res.statusText ? ` ${res.statusText}` : ""})` : "";

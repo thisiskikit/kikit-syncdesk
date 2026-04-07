@@ -29,6 +29,7 @@ import {
   toDateOrNull,
   toIsoString,
 } from "../shared/work-data-db";
+import { db } from "../../storage";
 
 type PersistedNaverBulkPriceStore = {
   version: 1;
@@ -248,7 +249,7 @@ export class NaverBulkPriceStore {
 
   constructor(filePath?: string) {
     this.filePath = path.resolve(process.cwd(), filePath ?? process.env.NAVER_BULK_PRICE_FILE ?? "data/naver-bulk-price.json");
-    this.legacyMode = typeof filePath === "string";
+    this.legacyMode = typeof filePath === "string" || !db;
   }
 
   private async loadLegacy() {
@@ -272,6 +273,18 @@ export class NaverBulkPriceStore {
       await writeFile(this.filePath, payload, "utf-8");
     });
     await this.writePromise;
+  }
+
+  private async syncPresetSnapshotToFile(patch: {
+    sourcePresets?: NaverBulkPriceSourcePreset[];
+    rulePresets?: NaverBulkPriceRulePreset[];
+  }) {
+    const current = clone(await this.loadLegacy());
+    await this.persistLegacy({
+      ...current,
+      sourcePresets: patch.sourcePresets ? sortSourcePresets(patch.sourcePresets) : current.sourcePresets,
+      rulePresets: patch.rulePresets ? sortRulePresets(patch.rulePresets) : current.rulePresets,
+    });
   }
 
   private async mutateLegacy<T>(callback: (data: PersistedNaverBulkPriceStore) => Promise<T> | T) {
@@ -337,6 +350,9 @@ export class NaverBulkPriceStore {
     const timestamp = new Date();
     const preset: NaverBulkPriceSourcePreset = { id: randomUUID(), name: input.name, memo: input.memo, sourceConfig: input.sourceConfig, createdAt: timestamp.toISOString(), updatedAt: timestamp.toISOString() };
     await assertWorkDataDatabaseEnabled().insert(naverBulkPriceSourcePresets).values({ id: preset.id, name: preset.name, memo: preset.memo, sourceConfigJson: preset.sourceConfig, createdAt: timestamp, updatedAt: timestamp });
+    await this.syncPresetSnapshotToFile({
+      sourcePresets: await this.listSourcePresets(),
+    });
     return preset;
   }
 
@@ -354,6 +370,9 @@ export class NaverBulkPriceStore {
     if (!current) return null;
     const next: NaverBulkPriceSourcePreset = { ...current, name: input.name, memo: input.memo, sourceConfig: input.sourceConfig, updatedAt: new Date().toISOString() };
     await assertWorkDataDatabaseEnabled().update(naverBulkPriceSourcePresets).set({ name: next.name, memo: next.memo, sourceConfigJson: next.sourceConfig, updatedAt: toDateOrNull(next.updatedAt) ?? new Date() }).where(eq(naverBulkPriceSourcePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      sourcePresets: await this.listSourcePresets(),
+    });
     return next;
   }
 
@@ -369,6 +388,9 @@ export class NaverBulkPriceStore {
     const current = (await this.listSourcePresets()).find((item) => item.id === id);
     if (!current) return null;
     await assertWorkDataDatabaseEnabled().delete(naverBulkPriceSourcePresets).where(eq(naverBulkPriceSourcePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      sourcePresets: (await this.listSourcePresets()).filter((item) => item.id !== id),
+    });
     return current;
   }
 
@@ -391,6 +413,9 @@ export class NaverBulkPriceStore {
     const timestamp = new Date();
     const preset: NaverBulkPriceRulePreset = { id: randomUUID(), name: input.name, memo: input.memo, rules: input.rules, createdAt: timestamp.toISOString(), updatedAt: timestamp.toISOString() };
     await assertWorkDataDatabaseEnabled().insert(naverBulkPriceRulePresets).values({ id: preset.id, name: preset.name, memo: preset.memo, rulesJson: preset.rules, createdAt: timestamp, updatedAt: timestamp });
+    await this.syncPresetSnapshotToFile({
+      rulePresets: await this.listRulePresets(),
+    });
     return preset;
   }
 
@@ -408,6 +433,9 @@ export class NaverBulkPriceStore {
     if (!current) return null;
     const next: NaverBulkPriceRulePreset = { ...current, name: input.name, memo: input.memo, rules: input.rules, updatedAt: new Date().toISOString() };
     await assertWorkDataDatabaseEnabled().update(naverBulkPriceRulePresets).set({ name: next.name, memo: next.memo, rulesJson: next.rules, updatedAt: toDateOrNull(next.updatedAt) ?? new Date() }).where(eq(naverBulkPriceRulePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      rulePresets: await this.listRulePresets(),
+    });
     return next;
   }
 
@@ -423,6 +451,9 @@ export class NaverBulkPriceStore {
     const current = (await this.listRulePresets()).find((item) => item.id === id);
     if (!current) return null;
     await assertWorkDataDatabaseEnabled().delete(naverBulkPriceRulePresets).where(eq(naverBulkPriceRulePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      rulePresets: (await this.listRulePresets()).filter((item) => item.id !== id),
+    });
     return current;
   }
 

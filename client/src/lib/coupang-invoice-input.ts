@@ -28,6 +28,21 @@ function normalizeMatrix(text: string) {
     .filter((row) => row.some((cell) => cell.length > 0));
 }
 
+function trimOuterEmptyCells(row: string[]) {
+  let start = 0;
+  let end = row.length;
+
+  while (start < end && !row[start]?.trim()) {
+    start += 1;
+  }
+
+  while (end > start && !row[end - 1]?.trim()) {
+    end -= 1;
+  }
+
+  return row.slice(start, end);
+}
+
 function normalizeHeader(value: string) {
   return value.replace(/\s+/g, "");
 }
@@ -39,6 +54,48 @@ function looksLikeSelpickOrderNumber(value: string) {
   }
 
   return /^[A-Z]\d{8}[A-Z]\d{4,}$/.test(normalized) || /^[A-Z0-9-]{12,}$/.test(normalized);
+}
+
+function resolveNoHeaderRowValues(row: string[]) {
+  const cells = trimOuterEmptyCells(row).map((cell) => cell.trim());
+
+  if (cells.length >= 4) {
+    if (looksLikeSelpickOrderNumber(cells[1] ?? "") && !looksLikeSelpickOrderNumber(cells[2] ?? "")) {
+      return {
+        deliveryCompanyCode: cells[2] ?? "",
+        invoiceNumber: cells[3] ?? "",
+        selpickOrderNumber: cells[1] ?? "",
+      };
+    }
+
+    if (looksLikeSelpickOrderNumber(cells[2] ?? "") && !looksLikeSelpickOrderNumber(cells[1] ?? "")) {
+      return {
+        deliveryCompanyCode: cells[1] ?? "",
+        invoiceNumber: cells[3] ?? "",
+        selpickOrderNumber: cells[2] ?? "",
+      };
+    }
+  }
+
+  if (cells.length >= 3) {
+    if (looksLikeSelpickOrderNumber(cells[0] ?? "") && !looksLikeSelpickOrderNumber(cells[1] ?? "")) {
+      return {
+        deliveryCompanyCode: cells[1] ?? "",
+        invoiceNumber: cells[2] ?? "",
+        selpickOrderNumber: cells[0] ?? "",
+      };
+    }
+
+    if (looksLikeSelpickOrderNumber(cells[2] ?? "") && !looksLikeSelpickOrderNumber(cells[0] ?? "")) {
+      return {
+        deliveryCompanyCode: cells[0] ?? "",
+        invoiceNumber: cells[1] ?? "",
+        selpickOrderNumber: cells[2] ?? "",
+      };
+    }
+  }
+
+  return null;
 }
 
 function resolveRowValues(
@@ -55,14 +112,9 @@ function resolveRowValues(
   let selpickOrderNumber = row[indexes.selpickOrderNumberIndex]?.trim() ?? "";
 
   if (!indexes.hasDetectedHeader) {
-    if (row.length >= 4) {
-      [, deliveryCompanyCode, selpickOrderNumber, invoiceNumber] = row.map((cell) => cell.trim());
-    } else if (
-      row.length >= 3 &&
-      looksLikeSelpickOrderNumber(row[0] ?? "") &&
-      !looksLikeSelpickOrderNumber(row[2] ?? "")
-    ) {
-      [selpickOrderNumber, deliveryCompanyCode, invoiceNumber] = row.map((cell) => cell.trim());
+    const resolved = resolveNoHeaderRowValues(row);
+    if (resolved) {
+      ({ deliveryCompanyCode, invoiceNumber, selpickOrderNumber } = resolved);
     }
   }
 

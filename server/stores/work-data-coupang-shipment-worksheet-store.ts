@@ -120,6 +120,27 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
       : 0,
     customerServiceIssueSummary:
       typeof row.customerServiceIssueSummary === "string" ? row.customerServiceIssueSummary : null,
+    customerServiceIssueBreakdown: Array.isArray(row.customerServiceIssueBreakdown)
+      ? (() => {
+          const items = row.customerServiceIssueBreakdown;
+          const hasInvalidItem = items.some(
+            (item) =>
+              !item ||
+              (item.type !== "cancel" && item.type !== "return" && item.type !== "exchange") ||
+              !Number.isFinite(item.count) ||
+              typeof item.label !== "string",
+          );
+          return hasInvalidItem
+            ? items.filter(
+                (item): item is CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"][number] =>
+                  Boolean(item) &&
+                  (item.type === "cancel" || item.type === "return" || item.type === "exchange") &&
+                  Number.isFinite(item.count) &&
+                  typeof item.label === "string",
+              )
+            : items;
+        })()
+      : [],
     customerServiceState:
       row.customerServiceState === "ready" ||
       row.customerServiceState === "stale" ||

@@ -10,9 +10,11 @@ import {
   type NaverOrderListResponse,
   type NaverOrderRow,
 } from "@shared/naver-orders";
-import { channelSettingsStore } from "./channel-settings-store";
-import { recordExternalRequestEvent } from "./logs/service";
-import { issueNaverAccessToken } from "./naver-auth";
+import {
+  createNaverRequestContext as createSharedNaverRequestContext,
+  requestNaverJsonWithContext as requestSharedNaverJsonWithContext,
+  type NaverRequestContext,
+} from "./naver-api-client";
 import {
   toNaverClaimStatusLabel,
   toNaverClaimTypeLabel,
@@ -20,8 +22,6 @@ import {
 } from "./naver-order-labels";
 import { createStaleResponseCache } from "./shared/stale-response-cache";
 
-const NAVER_API_BASE_URL =
-  process.env.NAVER_COMMERCE_API_BASE_URL || "https://api.commerce.naver.com/external";
 const NAVER_CHANGED_STATUS_LIMIT = 300;
 const NAVER_ORDER_DETAIL_LIMIT = 300;
 const NAVER_ORDER_ACTION_CONCURRENCY = 4;
@@ -40,13 +40,6 @@ const PRODUCT_ORDER_STATUS_LABELS: Record<string, string> = {
   PREPARE: "상품 준비 중",
 };
 
-type StoredNaverStore = NonNullable<Awaited<ReturnType<typeof channelSettingsStore.getStore>>>;
-
-type NaverRequestContext = {
-  store: StoredNaverStore;
-  authorization: string;
-};
-
 type ChangedStatusRecord = {
   productOrderId: string;
   orderId: string | null;
@@ -61,6 +54,8 @@ type ChangedStatusPage = {
   moreFrom: string | null;
   moreSequence: string | null;
 };
+
+type StoredNaverStore = NaverRequestContext["store"];
 
 const naverOrderListCache = createStaleResponseCache<NaverOrderListResponse>(
   NAVER_ORDER_LIST_CACHE_TTL_MS,
@@ -154,34 +149,6 @@ function buildAddressText(address: Record<string, unknown> | null) {
     firstString(address, [["baseAddress"], ["address1"], ["address"]]),
     firstString(address, [["detailedAddress"], ["addressDetail"], ["address2"]]),
   ]);
-}
-
-function isHtmlPayload(text: string, contentType: string | null) {
-  const normalized = text.trim().toLowerCase();
-
-  return (
-    (contentType || "").toLowerCase().includes("text/html") ||
-    normalized.startsWith("<!doctype html") ||
-    normalized.startsWith("<html") ||
-    normalized.startsWith("<body")
-  );
-}
-
-function extractErrorMessage(payload: unknown, fallbackStatus: number) {
-  if (!payload || typeof payload !== "object") {
-    return `NAVER order API request failed (${fallbackStatus}).`;
-  }
-
-  const message =
-    ("message" in payload && typeof payload.message === "string" && payload.message) ||
-    ("error_description" in payload &&
-      typeof payload.error_description === "string" &&
-      payload.error_description) ||
-    ("error" in payload && typeof payload.error === "string" && payload.error) ||
-    ("code" in payload && typeof payload.code === "string" && payload.code) ||
-    null;
-
-  return message || `NAVER order API request failed (${fallbackStatus}).`;
 }
 
 function clampMaxItems(value: number | null | undefined) {
@@ -512,7 +479,9 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 async function getNaverStoreOrThrow(storeId: string) {
-  const store = await channelSettingsStore.getStore(storeId);
+  const store = (await createSharedNaverRequestContext(storeId)).store as StoredNaverStore;
+  return store;
+  /*
 
   if (!store) {
     throw new Error("NAVER 스토어 설정을 찾을 수 없습니다.");
@@ -523,19 +492,11 @@ async function getNaverStoreOrThrow(storeId: string) {
   }
 
   return store as StoredNaverStore;
+  */
 }
 
 async function createNaverRequestContext(storeId: string): Promise<NaverRequestContext> {
-  const store = await getNaverStoreOrThrow(storeId);
-  const token = await issueNaverAccessToken({
-    clientId: store.credentials.clientId,
-    clientSecret: store.credentials.clientSecret,
-  });
-
-  return {
-    store,
-    authorization: `${token.tokenType} ${token.accessToken}`,
-  };
+  return createSharedNaverRequestContext(storeId);
 }
 
 async function requestNaverJsonWithContext<T>(input: {
@@ -544,6 +505,8 @@ async function requestNaverJsonWithContext<T>(input: {
   path: string;
   body?: unknown;
 }) {
+  return requestSharedNaverJsonWithContext<T>(input);
+  /*
   const startedAt = Date.now();
   let response: Response | null = null;
 
@@ -605,6 +568,7 @@ async function requestNaverJsonWithContext<T>(input: {
     });
     throw error;
   }
+  */
 }
 
 function normalizeChangedStatusPage(payload: unknown): ChangedStatusPage {

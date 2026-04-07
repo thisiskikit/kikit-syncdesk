@@ -3,6 +3,7 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import {
   buildShipmentQuickFilterResult,
   getInvoiceStatusCardKey,
+  getOrderStatusCardKey,
   pruneShipmentSelectedRowIds,
 } from "@/lib/coupang-shipment-quick-filters";
 
@@ -56,6 +57,7 @@ function createRow(
     orderStatus: "ACCEPT",
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
+    customerServiceIssueBreakdown: [],
     orderedAtRaw: null,
     lastOrderHydratedAt: null,
     lastProductHydratedAt: null,
@@ -140,6 +142,18 @@ describe("getInvoiceStatusCardKey", () => {
 });
 
 describe("buildShipmentQuickFilterResult", () => {
+  it("treats CS breakdown-only rows as cancel/return/exchange status cards", () => {
+    expect(
+      getOrderStatusCardKey(
+        createRow({
+          orderStatus: "ACCEPT",
+          customerServiceIssueSummary: null,
+          customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "반품 1건" }],
+        }),
+      ),
+    ).toBe("RETURN");
+  });
+
   it("uses opposite-group facet rows for each card count", () => {
     const rows = [
       createRow({

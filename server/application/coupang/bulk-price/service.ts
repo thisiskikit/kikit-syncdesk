@@ -119,6 +119,7 @@ type BulkPriceServiceDeps = {
     saleStatus: BulkPriceTargetSaleStatus;
     skipBackgroundHydration?: boolean;
   }) => Promise<{ message: string }>;
+  runWorkerConcurrency?: number;
 };
 
 type RunController = {
@@ -143,6 +144,7 @@ type PreviewSession = {
 
 const RECENT_RUN_CHANGE_LIMIT = 5;
 const COUPANG_RESTOCK_QUANTITY = 102;
+const DEFAULT_RUN_WORKER_CONCURRENCY = 2;
 const DEFAULT_PREVIEW_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_PREVIEW_SESSION_LIMIT = 2;
 const DEFAULT_PREVIEW_PAGE_SIZE = 100;
@@ -221,6 +223,20 @@ function normalizeMatchCode(value: unknown) {
   }
 
   return null;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (!raw?.trim()) {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
 }
 
 function parseNumericSourceValue(value: unknown) {
@@ -1701,6 +1717,10 @@ export class CoupangBulkPriceService {
     return DEFAULT_PREVIEW_CACHE_TTL_MS;
   }
 
+  private getRunWorkerConcurrency() {
+    return Math.max(1, this.deps.runWorkerConcurrency ?? DEFAULT_RUN_WORKER_CONCURRENCY);
+  }
+
   private getPreviewSessionLimit() {
     return DEFAULT_PREVIEW_SESSION_LIMIT;
   }
@@ -2415,7 +2435,10 @@ export class CoupangBulkPriceService {
     });
 
     await withCoupangExplorerHydrationSuspended(run.storeId, async () => {
-      const workerCount = Math.max(1, Math.min(2, controller.queuedItemIds.length));
+      const workerCount = Math.max(
+        1,
+        Math.min(this.getRunWorkerConcurrency(), controller.queuedItemIds.length),
+      );
       const workers = Array.from({ length: workerCount }, async () =>
         this.processRunWorker(controller, run.storeId),
       );
@@ -2773,6 +2796,10 @@ export const coupangBulkPriceService = new CoupangBulkPriceService({
   store: coupangBulkPriceStore,
   loadSourceMetadata: fetchBulkPriceSourceMetadata,
   buildPreview: buildBulkPricePreview,
+  runWorkerConcurrency: readPositiveIntegerEnv(
+    "COUPANG_BULK_PRICE_RUN_WORKER_CONCURRENCY",
+    DEFAULT_RUN_WORKER_CONCURRENCY,
+  ),
   applyPriceUpdate: async (input) =>
     updateOptionPrice({
       storeId: input.storeId,

@@ -20,16 +20,19 @@ import type {
   NaverBulkPriceTargetSaleStatus,
 } from "@shared/naver-bulk-price";
 import {
-  channelSettingsStore,
-  issueNaverAccessToken,
+  NaverApiError,
+  createNaverRequestContext,
+  requestNaverJsonWithContext,
+  type NaverRequestContext,
+} from "../../../services/naver-api-client";
+import {
   listProductLibraryMemosByStore,
   naverProductCacheStore,
   naverProductSellerBarcodeCacheStore,
-  recordExternalRequestEvent,
 } from "../../../infra/naver/product-deps";
 
-const NAVER_API_BASE_URL =
-  process.env.NAVER_COMMERCE_API_BASE_URL || "https://api.commerce.naver.com/external";
+type StoredNaverStore = NaverRequestContext["store"];
+
 const NAVER_PRODUCT_SEARCH_PAGE_SIZE_MAX = NAVER_PRODUCT_LIST_PAGE_SIZE_MAX;
 const NAVER_PRODUCT_FETCH_RETRY_COUNT = 4;
 const NAVER_PRODUCT_FETCH_RETRY_DELAY_MS = 1_200;
@@ -61,8 +64,6 @@ const DISPLAY_STATUS_LABELS: Record<string, string> = {
   ON: "Displaying",
   SUSPENSION: "Display suspended",
 };
-
-type StoredNaverStore = NonNullable<Awaited<ReturnType<typeof channelSettingsStore.getStore>>>;
 
 type NaverChannelProductListRow = Record<string, unknown>;
 type NaverProductGroup = {
@@ -101,11 +102,6 @@ type ConfirmedPricePreview = Pick<
   | "optionHandlingMessage"
   | "modifiedAt"
 >;
-
-type NaverRequestContext = {
-  store: StoredNaverStore;
-  authorization: string;
-};
 
 type NaverProductSnapshotProgress = {
   phase: "loading_naver_products" | "enriching_barcodes";
@@ -465,7 +461,12 @@ function normalizeMaxItems(value: number | null | undefined) {
   return Math.min(normalized, NAVER_PRODUCT_LIST_MAX_ITEMS_LIMIT);
 }
 
-function isRetryableNaverProductRequestError(message: string) {
+function isRetryableNaverProductRequestError(error: unknown) {
+  if (error instanceof NaverApiError) {
+    return false;
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? "");
   const normalized = message.toLowerCase();
 
   return (
@@ -476,102 +477,6 @@ function isRetryableNaverProductRequestError(message: string) {
     normalized.includes("too many") ||
     normalized.includes("temporar")
   );
-}
-
-async function getNaverStoreOrThrow(storeId: string) {
-  const store = await channelSettingsStore.getStore(storeId);
-
-  if (!store) {
-    throw new Error("Naver store settings not found.");
-  }
-
-  if (store.channel !== "naver") {
-    throw new Error("Selected store is not a NAVER store.");
-  }
-
-  return store as StoredNaverStore;
-}
-
-async function createNaverRequestContext(storeId: string): Promise<NaverRequestContext> {
-  const store = await getNaverStoreOrThrow(storeId);
-  const token = await issueNaverAccessToken({
-    clientId: store.credentials.clientId,
-    clientSecret: store.credentials.clientSecret,
-  });
-
-  return {
-    store,
-    authorization: `${token.tokenType} ${token.accessToken}`,
-  };
-}
-
-async function requestNaverJsonWithContext<T>(input: {
-  context: NaverRequestContext;
-  method: "GET" | "POST" | "PUT";
-  path: string;
-  body?: Record<string, unknown>;
-}) {
-  const startedAt = Date.now();
-  let response: Response | null = null;
-
-  try {
-    response = await fetch(`${NAVER_API_BASE_URL}${input.path}`, {
-      method: input.method,
-      headers: {
-        Accept: "application/json",
-        Authorization: input.context.authorization,
-        ...(input.body ? { "Content-Type": "application/json" } : {}),
-      },
-      body: input.body ? JSON.stringify(input.body) : undefined,
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    const text = await response.text();
-    let payload: unknown = null;
-
-    if (text) {
-      if (isHtmlPayload(text, response.headers.get("content-type"))) {
-        throw new Error(
-          `Expected JSON from NAVER Commerce API ${input.path}, but received HTML. Check NAVER_COMMERCE_API_BASE_URL and your NAVER store credentials.`,
-        );
-      }
-
-      try {
-        payload = JSON.parse(text) as unknown;
-      } catch {
-        payload = { message: text };
-      }
-    }
-
-    if (!response.ok) {
-      throw new Error(extractErrorMessage(payload, response.status));
-    }
-
-    void recordExternalRequestEvent({
-      provider: "naver",
-      method: input.method,
-      path: input.path,
-      statusCode: response.status,
-      durationMs: Date.now() - startedAt,
-      storeId: input.context.store.id,
-    });
-
-    return {
-      store: input.context.store,
-      payload: (payload ?? null) as T,
-    };
-  } catch (error) {
-    void recordExternalRequestEvent({
-      provider: "naver",
-      method: input.method,
-      path: input.path,
-      statusCode: response?.status ?? null,
-      durationMs: Date.now() - startedAt,
-      storeId: input.context.store.id,
-      error,
-    });
-    throw error;
-  }
 }
 
 async function requestNaverJson<T>(input: {
@@ -705,12 +610,8 @@ async function fetchSellerBarcodeByOriginProductNo(input: {
         setCachedSellerBarcode(input.context.store.id, input.originProductNo, sellerBarcode);
         return sellerBarcode;
       } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to load NAVER seller barcode.";
         const canRetry =
-          isRetryableNaverProductRequestError(message) &&
+          isRetryableNaverProductRequestError(error) &&
           attempt < NAVER_PRODUCT_BARCODE_FETCH_RETRY_COUNT;
 
         if (!canRetry) {
@@ -1330,10 +1231,8 @@ async function searchNaverProductsPageWithRetry(input: {
     try {
       return await searchNaverProductsPage(input);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to load NAVER product list.";
       const canRetry =
-        isRetryableNaverProductRequestError(message) &&
+        isRetryableNaverProductRequestError(error) &&
         attempt < NAVER_PRODUCT_FETCH_RETRY_COUNT;
 
       if (!canRetry) {
@@ -1792,10 +1691,8 @@ async function applyConfirmedSalePriceUpdate(input: {
       });
       break;
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to update NAVER sale price.";
       const canRetry =
-        isRetryableNaverProductRequestError(message) &&
+        isRetryableNaverProductRequestError(error) &&
         attempt < NAVER_PRODUCT_UPDATE_RETRY_COUNT;
 
       if (!canRetry) {
@@ -1933,12 +1830,8 @@ async function applyConfirmedSaleStatusUpdate(input: {
       });
       break;
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to update NAVER sale status.";
       const canRetry =
-        isRetryableNaverProductRequestError(message) &&
+        isRetryableNaverProductRequestError(error) &&
         attempt < NAVER_PRODUCT_UPDATE_RETRY_COUNT;
 
       if (!canRetry) {
@@ -2024,12 +1917,8 @@ async function applyConfirmedChannelProductAvailabilityUpdate(input: {
         }),
       };
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to update NAVER availability.";
       const canRetry =
-        isRetryableNaverProductRequestError(message) &&
+        isRetryableNaverProductRequestError(error) &&
         attempt < NAVER_PRODUCT_UPDATE_RETRY_COUNT;
 
       if (!canRetry) {

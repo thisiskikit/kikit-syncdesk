@@ -16,17 +16,17 @@ import {
   type NaverReleaseExchangeHoldTarget,
   type NaverReleaseReturnHoldTarget,
 } from "@shared/naver-claims";
-import { channelSettingsStore } from "./channel-settings-store";
-import { recordExternalRequestEvent } from "./logs/service";
-import { issueNaverAccessToken } from "./naver-auth";
+import {
+  createNaverRequestContext as createSharedNaverRequestContext,
+  requestNaverJsonWithContext as requestSharedNaverJsonWithContext,
+  type NaverRequestContext,
+} from "./naver-api-client";
 import {
   NAVER_CLAIM_STATUS_LABELS as SHARED_NAVER_CLAIM_STATUS_LABELS,
   NAVER_PRODUCT_ORDER_STATUS_LABELS as SHARED_NAVER_PRODUCT_ORDER_STATUS_LABELS,
 } from "./naver-order-labels";
 import { createStaleResponseCache } from "./shared/stale-response-cache";
 
-const NAVER_API_BASE_URL =
-  process.env.NAVER_COMMERCE_API_BASE_URL || "https://api.commerce.naver.com/external";
 const NAVER_CHANGED_STATUS_LIMIT = 300;
 const NAVER_CLAIM_DETAIL_LIMIT = 300;
 const NAVER_CLAIM_ACTION_CONCURRENCY = 4;
@@ -61,12 +61,7 @@ const CLAIM_STATUS_LABELS: Record<string, string> = {
   EXCHANGED: "교환 완료",
 };
 
-type StoredNaverStore = NonNullable<Awaited<ReturnType<typeof channelSettingsStore.getStore>>>;
-
-type NaverRequestContext = {
-  store: StoredNaverStore;
-  authorization: string;
-};
+type StoredNaverStore = NaverRequestContext["store"];
 
 type ChangedStatusRecord = {
   productOrderId: string;
@@ -335,7 +330,9 @@ async function mapWithConcurrency<TItem, TResult>(
 }
 
 async function getNaverStoreOrThrow(storeId: string) {
-  const store = await channelSettingsStore.getStore(storeId);
+  const store = (await createSharedNaverRequestContext(storeId)).store as StoredNaverStore;
+  return store;
+  /*
 
   if (!store) {
     throw new Error("NAVER 스토어 설정을 찾을 수 없습니다.");
@@ -346,19 +343,11 @@ async function getNaverStoreOrThrow(storeId: string) {
   }
 
   return store as StoredNaverStore;
+  */
 }
 
 async function createNaverRequestContext(storeId: string): Promise<NaverRequestContext> {
-  const store = await getNaverStoreOrThrow(storeId);
-  const token = await issueNaverAccessToken({
-    clientId: store.credentials.clientId,
-    clientSecret: store.credentials.clientSecret,
-  });
-
-  return {
-    store,
-    authorization: `${token.tokenType} ${token.accessToken}`,
-  };
+  return createSharedNaverRequestContext(storeId);
 }
 
 async function requestNaverJsonWithContext<T>(input: {
@@ -367,6 +356,8 @@ async function requestNaverJsonWithContext<T>(input: {
   path: string;
   body?: unknown;
 }) {
+  return requestSharedNaverJsonWithContext<T>(input);
+  /*
   const startedAt = Date.now();
   let response: Response | null = null;
 
@@ -428,6 +419,7 @@ async function requestNaverJsonWithContext<T>(input: {
     });
     throw error;
   }
+  */
 }
 
 async function fetchChangedStatusPage(input: {

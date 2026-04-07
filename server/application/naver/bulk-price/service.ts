@@ -162,7 +162,7 @@ type PreviewCandidateCacheEntry = {
   ttlMs: number;
 };
 
-const DEFAULT_RUN_WORKER_CONCURRENCY = 5;
+const DEFAULT_RUN_WORKER_CONCURRENCY = 2;
 const DEFAULT_PREVIEW_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_PREVIEW_CANDIDATE_CACHE_TTL_MS = 60_000;
 const SELLER_BARCODE_PREVIEW_CANDIDATE_CACHE_TTL_MS = 5_000;
@@ -175,6 +175,20 @@ const PREVIEW_REFRESH_JOB_TTL_MS = 10 * 60_000;
 
 const previewCandidateCache = new Map<string, PreviewCandidateCacheEntry>();
 const previewCandidateRequests = new Map<string, Promise<NaverPreviewCandidate[]>>();
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (!raw?.trim()) {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
+}
 
 function normalizePresetName(value: string) {
   const normalized = value.trim();
@@ -2632,6 +2646,10 @@ export const naverBulkPriceService = new NaverBulkPriceService({
   store: naverBulkPriceStore,
   loadSourceMetadata: fetchBulkPriceSourceMetadata,
   buildPreview: buildNaverBulkPricePreview,
+  runWorkerConcurrency: readPositiveIntegerEnv(
+    "NAVER_BULK_PRICE_RUN_WORKER_CONCURRENCY",
+    DEFAULT_RUN_WORKER_CONCURRENCY,
+  ),
   applyPriceUpdate: async (input) =>
     input.preview
       ? updateNaverProductSalePriceFromPreview({

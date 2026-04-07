@@ -143,6 +143,7 @@ function buildWorksheetRow(input: {
   lastProductHydratedAt?: string | null;
   customerServiceIssueCount?: number;
   customerServiceIssueSummary?: string | null;
+  customerServiceIssueBreakdown?: CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"];
   customerServiceState?: "unknown" | "ready" | "stale";
   customerServiceFetchedAt?: string | null;
   deliveryRequest?: string | null;
@@ -200,6 +201,7 @@ function buildWorksheetRow(input: {
     orderStatus: input.status ?? "INSTRUCT",
     customerServiceIssueCount: input.customerServiceIssueCount ?? 0,
     customerServiceIssueSummary: input.customerServiceIssueSummary ?? null,
+    customerServiceIssueBreakdown: input.customerServiceIssueBreakdown ?? [],
     customerServiceState: input.customerServiceState ?? "unknown",
     customerServiceFetchedAt: input.customerServiceFetchedAt ?? null,
     orderedAtRaw: "2026-03-26T09:00:00+09:00",

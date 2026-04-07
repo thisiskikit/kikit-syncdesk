@@ -89,14 +89,16 @@ async function runStartupStep<T>(step: string, task: () => Promise<T> | T) {
   }
 }
 
+async function runStartupRecoveries() {
+  await runStartupStep("resumeQueuedRuns", () => resumeQueuedRuns());
+  await runStartupStep("recoverBulkPriceRuns", () => recoverBulkPriceRuns());
+  await runStartupStep("recoverNaverBulkPriceRuns", () => recoverNaverBulkPriceRuns());
+}
+
 async function start() {
   const startupStartedAt = Date.now();
   const shouldServeClientStatic =
     process.env.NODE_ENV === "production" && process.env.SERVE_CLIENT_STATIC !== "false";
-
-  await runStartupStep("resumeQueuedRuns", () => resumeQueuedRuns());
-  await runStartupStep("recoverBulkPriceRuns", () => recoverBulkPriceRuns());
-  await runStartupStep("recoverNaverBulkPriceRuns", () => recoverNaverBulkPriceRuns());
 
   if (shouldServeClientStatic) {
     await runStartupStep("serveStatic", () => {
@@ -127,6 +129,14 @@ async function start() {
       port,
       nodeEnv: process.env.NODE_ENV || "development",
     },
+  });
+
+  void runStartupRecoveries().catch((error) => {
+    void recordSystemErrorEvent({
+      source: "startupRecovery",
+      error,
+    });
+    console.error(error);
   });
 }
 

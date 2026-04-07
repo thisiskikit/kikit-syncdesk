@@ -1749,7 +1749,7 @@ textarea {
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  z-index: 30;
+  z-index: 80;
 }
 
 .csv-dialog {

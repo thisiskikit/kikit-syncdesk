@@ -1000,6 +1000,72 @@ describe("bulk price run lifecycle", () => {
     expect(completed.latestRecords[0]?.appliedPrice).toBe(950);
   });
 
+  it("limits run workers using the configured concurrency", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "bulk-price-run-"));
+    process.env.COUPANG_BULK_PRICE_FILE = path.join(tmpDir, "store.json");
+    const store = new CoupangBulkPriceStore(process.env.COUPANG_BULK_PRICE_FILE);
+    const deferredById = new Map(
+      ["v1", "v2"].map((id) => [id, deferred()] as const),
+    );
+    const started: string[] = [];
+    let activeCount = 0;
+    let maxActiveCount = 0;
+
+    const service = new CoupangBulkPriceService({
+      store,
+      loadSourceMetadata: async () => ({
+        configured: true,
+        databaseUrlAvailable: true,
+        tables: [],
+        columns: [],
+        sampleRows: [],
+        requestedTable: null,
+        fetchedAt: new Date().toISOString(),
+      }),
+      buildPreview: async () => createPreviewResponse(["v1", "v2"]),
+      runWorkerConcurrency: 1,
+      applyPriceUpdate: async ({ vendorItemId }) => {
+        started.push(vendorItemId);
+        activeCount += 1;
+        maxActiveCount = Math.max(maxActiveCount, activeCount);
+        await deferredById.get(vendorItemId)?.promise;
+        activeCount -= 1;
+        return { message: `updated ${vendorItemId}` };
+      },
+      applyInventoryUpdate: async () => ({ message: "inventory updated" }),
+      applySaleStatusUpdate: async () => ({ message: "sale status updated" }),
+    });
+
+    const preview = await service.preview({
+      sourceConfig: createSourceConfig(),
+      rules: createRules(),
+    });
+    const created = await service.createRun({
+      previewId: preview.previewId,
+      items: ["v1", "v2"].map((vendorItemId) => ({
+        vendorItemId,
+        manualOverridePrice: null,
+      })),
+    });
+
+    await waitForCondition(async () => started.length === 1);
+    expect(started).toEqual(["v1"]);
+
+    deferredById.get("v1")?.resolve();
+
+    await waitForCondition(async () => started.length === 2);
+    expect(started).toEqual(["v1", "v2"]);
+
+    deferredById.get("v2")?.resolve();
+
+    await waitForCondition(async () => {
+      const detail = await service.getRunDetail(created.run.id);
+      return detail.run.summary.succeeded === 2;
+    });
+
+    expect(maxActiveCount).toBe(1);
+  });
+
   it(
     "pauses, resumes, and stops queued items with concurrency two",
     async () => {

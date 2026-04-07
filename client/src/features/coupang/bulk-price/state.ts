@@ -38,7 +38,19 @@ export type BulkPriceUiState = {
   rulePresetOpen: boolean;
   formulaOpen: boolean;
   previewMatchedOnly: boolean;
+  selectedSourcePresetId: string;
+  sourcePresetName: string;
+  sourcePresetMemo: string;
+  selectedRulePresetId: string;
+  rulePresetName: string;
+  rulePresetMemo: string;
 };
+
+export type BulkPriceUiSectionKey =
+  | "sourcePresetOpen"
+  | "sourceSampleOpen"
+  | "rulePresetOpen"
+  | "formulaOpen";
 
 export type DisplayRow = BulkPricePreviewResponse["rows"][number] & {
   displayStatus: string;
@@ -96,6 +108,12 @@ export const DEFAULT_UI_STATE: BulkPriceUiState = {
   rulePresetOpen: true,
   formulaOpen: false,
   previewMatchedOnly: true,
+  selectedSourcePresetId: "",
+  sourcePresetName: "",
+  sourcePresetMemo: "",
+  selectedRulePresetId: "",
+  rulePresetName: "",
+  rulePresetMemo: "",
 };
 
 export const DEFAULT_PREVIEW_SORT: CoupangPreviewSortState = {

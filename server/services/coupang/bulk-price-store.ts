@@ -29,6 +29,7 @@ import {
   toDateOrNull,
   toIsoString,
 } from "../shared/work-data-db";
+import { db } from "../../storage";
 
 type PersistedBulkPriceStore = {
   version: 1;
@@ -373,7 +374,7 @@ export class CoupangBulkPriceStore {
       process.cwd(),
       filePath ?? process.env.COUPANG_BULK_PRICE_FILE ?? "data/coupang-bulk-price.json",
     );
-    this.legacyMode = typeof filePath === "string";
+    this.legacyMode = typeof filePath === "string" || !db;
   }
 
   private async loadLegacy() {
@@ -400,6 +401,18 @@ export class CoupangBulkPriceStore {
       await writeFile(this.filePath, payload, "utf-8");
     });
     await this.writePromise;
+  }
+
+  private async syncPresetSnapshotToFile(patch: {
+    profiles?: BulkPriceSourcePreset[];
+    rulePresets?: BulkPriceRulePreset[];
+  }) {
+    const current = clone(await this.loadLegacy());
+    await this.persistLegacy({
+      ...current,
+      profiles: patch.profiles ? sortSourcePresets(patch.profiles) : current.profiles,
+      rulePresets: patch.rulePresets ? sortRulePresets(patch.rulePresets) : current.rulePresets,
+    });
   }
 
   private async mutateLegacy<T>(callback: (data: PersistedBulkPriceStore) => Promise<T> | T) {
@@ -551,6 +564,9 @@ export class CoupangBulkPriceStore {
     const timestamp = new Date();
     const preset: BulkPriceSourcePreset = { id: randomUUID(), name: input.name, memo: input.memo, sourceConfig: input.sourceConfig, createdAt: timestamp.toISOString(), updatedAt: timestamp.toISOString() };
     await assertWorkDataDatabaseEnabled().insert(coupangBulkPriceSourcePresets).values({ id: preset.id, name: preset.name, memo: preset.memo, sourceConfigJson: preset.sourceConfig, createdAt: timestamp, updatedAt: timestamp });
+    await this.syncPresetSnapshotToFile({
+      profiles: await this.listSourcePresets(),
+    });
     return preset;
   }
 
@@ -568,6 +584,9 @@ export class CoupangBulkPriceStore {
     if (!current) return null;
     const next: BulkPriceSourcePreset = { ...current, name: input.name, memo: input.memo, sourceConfig: input.sourceConfig, updatedAt: new Date().toISOString() };
     await assertWorkDataDatabaseEnabled().update(coupangBulkPriceSourcePresets).set({ name: next.name, memo: next.memo, sourceConfigJson: next.sourceConfig, updatedAt: toDateOrNull(next.updatedAt) ?? new Date() }).where(eq(coupangBulkPriceSourcePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      profiles: await this.listSourcePresets(),
+    });
     return next;
   }
 
@@ -583,6 +602,9 @@ export class CoupangBulkPriceStore {
     const current = (await this.listSourcePresets()).find((item) => item.id === id);
     if (!current) return null;
     await assertWorkDataDatabaseEnabled().delete(coupangBulkPriceSourcePresets).where(eq(coupangBulkPriceSourcePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      profiles: (await this.listSourcePresets()).filter((item) => item.id !== id),
+    });
     return current;
   }
 
@@ -605,6 +627,9 @@ export class CoupangBulkPriceStore {
     const timestamp = new Date();
     const preset: BulkPriceRulePreset = { id: randomUUID(), name: input.name, memo: input.memo, rules: input.rules, createdAt: timestamp.toISOString(), updatedAt: timestamp.toISOString() };
     await assertWorkDataDatabaseEnabled().insert(coupangBulkPriceRulePresets).values({ id: preset.id, name: preset.name, memo: preset.memo, rulesJson: preset.rules, createdAt: timestamp, updatedAt: timestamp });
+    await this.syncPresetSnapshotToFile({
+      rulePresets: await this.listRulePresets(),
+    });
     return preset;
   }
 
@@ -622,6 +647,9 @@ export class CoupangBulkPriceStore {
     if (!current) return null;
     const next: BulkPriceRulePreset = { ...current, name: input.name, memo: input.memo, rules: input.rules, updatedAt: new Date().toISOString() };
     await assertWorkDataDatabaseEnabled().update(coupangBulkPriceRulePresets).set({ name: next.name, memo: next.memo, rulesJson: next.rules, updatedAt: toDateOrNull(next.updatedAt) ?? new Date() }).where(eq(coupangBulkPriceRulePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      rulePresets: await this.listRulePresets(),
+    });
     return next;
   }
 
@@ -637,6 +665,9 @@ export class CoupangBulkPriceStore {
     const current = (await this.listRulePresets()).find((item) => item.id === id);
     if (!current) return null;
     await assertWorkDataDatabaseEnabled().delete(coupangBulkPriceRulePresets).where(eq(coupangBulkPriceRulePresets.id, id));
+    await this.syncPresetSnapshotToFile({
+      rulePresets: (await this.listRulePresets()).filter((item) => item.id !== id),
+    });
     return current;
   }
 

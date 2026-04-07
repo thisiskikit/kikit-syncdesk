@@ -2,6 +2,63 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import { SELPICK_ORDER_NUMBER_PATTERN } from "./worksheet-config";
 import { applyEditableCell } from "./worksheet-row-helpers";
 
+function trimOuterEmptyCells(row: string[]) {
+  let start = 0;
+  let end = row.length;
+
+  while (start < end && !row[start]?.trim()) {
+    start += 1;
+  }
+
+  while (end > start && !row[end - 1]?.trim()) {
+    end -= 1;
+  }
+
+  return row.slice(start, end);
+}
+
+function resolveInvoiceClipboardColumns(columns: string[]) {
+  const cells = trimOuterEmptyCells(columns).map((value) => value.trim());
+
+  if (cells.length === 3) {
+    if (SELPICK_ORDER_NUMBER_PATTERN.test(cells[0] ?? "")) {
+      return {
+        selpickOrderNumber: cells[0] ?? "",
+        deliveryCompanyCode: cells[1] ?? "",
+        invoiceNumber: cells[2] ?? "",
+      };
+    }
+
+    if (SELPICK_ORDER_NUMBER_PATTERN.test(cells[2] ?? "")) {
+      return {
+        selpickOrderNumber: cells[2] ?? "",
+        deliveryCompanyCode: cells[0] ?? "",
+        invoiceNumber: cells[1] ?? "",
+      };
+    }
+  }
+
+  if (cells.length >= 4) {
+    if (SELPICK_ORDER_NUMBER_PATTERN.test(cells[1] ?? "")) {
+      return {
+        selpickOrderNumber: cells[1] ?? "",
+        deliveryCompanyCode: cells[2] ?? "",
+        invoiceNumber: cells[3] ?? "",
+      };
+    }
+
+    if (SELPICK_ORDER_NUMBER_PATTERN.test(cells[2] ?? "")) {
+      return {
+        selpickOrderNumber: cells[2] ?? "",
+        deliveryCompanyCode: cells[1] ?? "",
+        invoiceNumber: cells[3] ?? "",
+      };
+    }
+  }
+
+  return null;
+}
+
 export function looksLikeInvoiceClipboard(text: string) {
   const lines = text
     .split(/\r?\n/)
@@ -10,18 +67,14 @@ export function looksLikeInvoiceClipboard(text: string) {
 
   for (const line of lines) {
     const delimiter = line.includes("\t") ? "\t" : ",";
-    const columns = line.split(delimiter).map((value) => value.trim());
+    const columns = trimOuterEmptyCells(line.split(delimiter).map((value) => value.trim()));
     const normalizedHeader = columns.map((value) => value.replace(/\s+/g, ""));
 
     if (normalizedHeader.includes("셀픽주문번호")) {
       return true;
     }
 
-    if (columns.length === 3 && SELPICK_ORDER_NUMBER_PATTERN.test(columns[0] ?? "")) {
-      return true;
-    }
-
-    if (columns.length >= 4 && SELPICK_ORDER_NUMBER_PATTERN.test(columns[2] ?? "")) {
+    if (resolveInvoiceClipboardColumns(columns)) {
       return true;
     }
   }
@@ -42,7 +95,7 @@ export function parseInvoiceClipboardRows(
 
   for (const line of lines) {
     const delimiter = line.includes("\t") ? "\t" : ",";
-    const columns = line.split(delimiter).map((value) => value.trim());
+    const columns = trimOuterEmptyCells(line.split(delimiter).map((value) => value.trim()));
     const normalizedHeader = columns.map((value) => value.replace(/\s+/g, ""));
 
     if (
@@ -53,19 +106,13 @@ export function parseInvoiceClipboardRows(
       continue;
     }
 
-    let selpickOrderNumber = "";
-    let deliveryCompanyCode = "";
-    let invoiceNumber = "";
-
-    if (columns.length === 3) {
-      [selpickOrderNumber, deliveryCompanyCode, invoiceNumber] = columns;
-    } else if (columns.length >= 4) {
-      [, deliveryCompanyCode, selpickOrderNumber, invoiceNumber] = columns;
-    } else {
-      issues.push(`열 수를 해석할 수 없습니다: ${line}`);
+    const resolved = resolveInvoiceClipboardColumns(columns);
+    if (!resolved) {
+      issues.push(`행을 해석할 수 없습니다: ${line}`);
       continue;
     }
 
+    const { selpickOrderNumber, deliveryCompanyCode, invoiceNumber } = resolved;
     const row = rowBySelpickOrderNumber.get(selpickOrderNumber);
     if (!row) {
       issues.push(`현재 시트에 없는 셀픽주문번호입니다: ${selpickOrderNumber}`);

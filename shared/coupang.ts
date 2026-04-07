@@ -1034,6 +1034,7 @@ export interface CoupangShipmentWorksheetRow {
   orderStatus: string | null;
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
+  customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
   customerServiceState: CoupangCustomerServiceState;
   customerServiceFetchedAt: string | null;
   orderedAtRaw: string | null;

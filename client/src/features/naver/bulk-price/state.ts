@@ -41,7 +41,19 @@ export type UiState = {
   rulePresetOpen: boolean;
   formulaOpen: boolean;
   previewMatchedOnly: boolean;
+  selectedSourcePresetId: string;
+  sourcePresetName: string;
+  sourcePresetMemo: string;
+  selectedRulePresetId: string;
+  rulePresetName: string;
+  rulePresetMemo: string;
 };
+
+export type UiSectionKey =
+  | "sourcePresetOpen"
+  | "sourceSampleOpen"
+  | "rulePresetOpen"
+  | "formulaOpen";
 
 export type DisplayRow = NaverBulkPricePreviewRow & {
   displayStatus: string;
@@ -98,6 +110,12 @@ export const DEFAULT_UI_STATE: UiState = {
   rulePresetOpen: true,
   formulaOpen: true,
   previewMatchedOnly: true,
+  selectedSourcePresetId: "",
+  sourcePresetName: "",
+  sourcePresetMemo: "",
+  selectedRulePresetId: "",
+  rulePresetName: "",
+  rulePresetMemo: "",
 };
 
 export const DEFAULT_PREVIEW_SORT: NaverPreviewSortState = {

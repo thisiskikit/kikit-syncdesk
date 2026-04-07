@@ -179,11 +179,15 @@ export function normalizeOutputStatusCardKey(
 }
 
 export function getOrderStatusCardKey(
-  row: Pick<CoupangShipmentWorksheetRow, "orderStatus" | "customerServiceIssueSummary">,
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary"
+  >,
 ): Exclude<OrderStatusCardKey, "all"> | null {
   return getOrderStatusValueKey(
     resolveCoupangDisplayOrderStatus({
       orderStatus: row.orderStatus,
+      customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
       customerServiceIssueSummary: row.customerServiceIssueSummary,
     }),
   );
@@ -225,7 +229,10 @@ export function matchesInvoiceStatusCard(
 }
 
 export function matchesOrderStatusCard(
-  row: Pick<CoupangShipmentWorksheetRow, "orderStatus" | "customerServiceIssueSummary">,
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary"
+  >,
   cardKey: OrderStatusCardKey,
 ) {
   return cardKey === "all" || getOrderStatusCardKey(row) === cardKey;

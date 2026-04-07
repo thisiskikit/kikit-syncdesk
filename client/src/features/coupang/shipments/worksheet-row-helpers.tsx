@@ -485,6 +485,7 @@ function getOrderStatusToneClass(value: string | null | undefined) {
 function resolveWorksheetOrderStatus(row: CoupangShipmentWorksheetRow) {
   return resolveCoupangDisplayOrderStatus({
     orderStatus: row.orderStatus,
+    customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
     customerServiceIssueSummary: row.customerServiceIssueSummary,
   });
 }

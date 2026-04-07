@@ -69,6 +69,7 @@ import {
   buildPreviewQueryKey,
   type ActivePreviewSession,
   type BulkPriceUiState,
+  type BulkPriceUiSectionKey,
   type CoupangPreviewSortField,
   type CoupangPreviewSortState,
   type CoupangStoresResponse,
@@ -107,12 +108,6 @@ export default function CoupangBulkPricePage() {
   );
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [previewPage, setPreviewPage] = useState(1);
-  const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
-  const [sourcePresetName, setSourcePresetName] = useState("");
-  const [sourcePresetMemo, setSourcePresetMemo] = useState("");
-  const [selectedRulePresetId, setSelectedRulePresetId] = useState("");
-  const [rulePresetName, setRulePresetName] = useState("");
-  const [rulePresetMemo, setRulePresetMemo] = useState("");
   const [fixedAdjustmentMode, setFixedAdjustmentMode] = useState<FixedAdjustmentMode>(
     resolveFixedAdjustmentMode(DEFAULT_STATE.fixedAdjustment),
   );
@@ -137,10 +132,35 @@ export default function CoupangBulkPricePage() {
 
   const sourcePresets = sourcePresetsQuery.data?.items ?? [];
   const rulePresets = rulePresetsQuery.data?.items ?? [];
+  const selectedSourcePresetId = uiState.selectedSourcePresetId;
+  const sourcePresetName = uiState.sourcePresetName;
+  const sourcePresetMemo = uiState.sourcePresetMemo;
+  const selectedRulePresetId = uiState.selectedRulePresetId;
+  const rulePresetName = uiState.rulePresetName;
+  const rulePresetMemo = uiState.rulePresetMemo;
   const selectedSourcePreset =
     sourcePresets.find((item) => item.id === selectedSourcePresetId) ?? null;
   const selectedRulePreset =
     rulePresets.find((item) => item.id === selectedRulePresetId) ?? null;
+
+  function updatePresetUiState(
+    patch: Partial<
+      Pick<
+        BulkPriceUiState,
+        | "selectedSourcePresetId"
+        | "sourcePresetName"
+        | "sourcePresetMemo"
+        | "selectedRulePresetId"
+        | "rulePresetName"
+        | "rulePresetMemo"
+      >
+    >,
+  ) {
+    setUiState((current) => ({
+      ...current,
+      ...patch,
+    }));
+  }
 
   const storesQuery = useQuery({
     queryKey: ["/api/coupang/stores"],
@@ -159,7 +179,7 @@ export default function CoupangBulkPricePage() {
   }, [setState, state.storeId, stores]);
 
   useEffect(() => {
-    if (!selectedSourcePresetId) {
+    if (!selectedSourcePresetId || !sourcePresetsQuery.isSuccess) {
       return;
     }
 
@@ -167,13 +187,15 @@ export default function CoupangBulkPricePage() {
       return;
     }
 
-    setSelectedSourcePresetId("");
-    setSourcePresetName("");
-    setSourcePresetMemo("");
-  }, [selectedSourcePreset, selectedSourcePresetId]);
+    updatePresetUiState({
+      selectedSourcePresetId: "",
+      sourcePresetName: "",
+      sourcePresetMemo: "",
+    });
+  }, [selectedSourcePreset, selectedSourcePresetId, sourcePresetsQuery.isSuccess]);
 
   useEffect(() => {
-    if (!selectedRulePresetId) {
+    if (!selectedRulePresetId || !rulePresetsQuery.isSuccess) {
       return;
     }
 
@@ -181,10 +203,12 @@ export default function CoupangBulkPricePage() {
       return;
     }
 
-    setSelectedRulePresetId("");
-    setRulePresetName("");
-    setRulePresetMemo("");
-  }, [selectedRulePreset, selectedRulePresetId]);
+    updatePresetUiState({
+      selectedRulePresetId: "",
+      rulePresetName: "",
+      rulePresetMemo: "",
+    });
+  }, [rulePresetsQuery.isSuccess, selectedRulePreset, selectedRulePresetId]);
 
   useEffect(() => {
     if (!routeRunId || routeRunId === activeRunId) {
@@ -249,9 +273,11 @@ export default function CoupangBulkPricePage() {
   }
 
   function applySourcePreset(preset: BulkPriceSourcePreset) {
-    setSelectedSourcePresetId(preset.id);
-    setSourcePresetName(preset.name);
-    setSourcePresetMemo(preset.memo);
+    updatePresetUiState({
+      selectedSourcePresetId: preset.id,
+      sourcePresetName: preset.name,
+      sourcePresetMemo: preset.memo,
+    });
     setState((current) => ({
       ...current,
       storeId: preset.sourceConfig.storeId,
@@ -268,9 +294,11 @@ export default function CoupangBulkPricePage() {
   }
 
   function applyRulePreset(preset: BulkPriceRulePreset) {
-    setSelectedRulePresetId(preset.id);
-    setRulePresetName(preset.name);
-    setRulePresetMemo(preset.memo);
+    updatePresetUiState({
+      selectedRulePresetId: preset.id,
+      rulePresetName: preset.name,
+      rulePresetMemo: preset.memo,
+    });
     setState((current) => ({
       ...current,
       fixedAdjustment: preset.rules.fixedAdjustment,
@@ -563,9 +591,11 @@ export default function CoupangBulkPricePage() {
         sourceConfig: currentSourceConfig,
       }),
     onSuccess: async (preset) => {
-      setSelectedSourcePresetId(preset.id);
-      setSourcePresetName(preset.name);
-      setSourcePresetMemo(preset.memo);
+      updatePresetUiState({
+        selectedSourcePresetId: preset.id,
+        sourcePresetName: preset.name,
+        sourcePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/source-presets"],
       });
@@ -584,8 +614,10 @@ export default function CoupangBulkPricePage() {
         },
       ),
     onSuccess: async (preset) => {
-      setSourcePresetName(preset.name);
-      setSourcePresetMemo(preset.memo);
+      updatePresetUiState({
+        sourcePresetName: preset.name,
+        sourcePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/source-presets"],
       });
@@ -599,9 +631,11 @@ export default function CoupangBulkPricePage() {
         `/api/coupang/bulk-price/source-presets/${selectedSourcePresetId}`,
       ),
     onSuccess: async () => {
-      setSelectedSourcePresetId("");
-      setSourcePresetName("");
-      setSourcePresetMemo("");
+      updatePresetUiState({
+        selectedSourcePresetId: "",
+        sourcePresetName: "",
+        sourcePresetMemo: "",
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/source-presets"],
       });
@@ -616,9 +650,11 @@ export default function CoupangBulkPricePage() {
         rules: currentRuleSet,
       }),
     onSuccess: async (preset) => {
-      setSelectedRulePresetId(preset.id);
-      setRulePresetName(preset.name);
-      setRulePresetMemo(preset.memo);
+      updatePresetUiState({
+        selectedRulePresetId: preset.id,
+        rulePresetName: preset.name,
+        rulePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/rule-presets"],
       });
@@ -637,8 +673,10 @@ export default function CoupangBulkPricePage() {
         },
       ),
     onSuccess: async (preset) => {
-      setRulePresetName(preset.name);
-      setRulePresetMemo(preset.memo);
+      updatePresetUiState({
+        rulePresetName: preset.name,
+        rulePresetMemo: preset.memo,
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/rule-presets"],
       });
@@ -652,9 +690,11 @@ export default function CoupangBulkPricePage() {
         `/api/coupang/bulk-price/rule-presets/${selectedRulePresetId}`,
       ),
     onSuccess: async () => {
-      setSelectedRulePresetId("");
-      setRulePresetName("");
-      setRulePresetMemo("");
+      updatePresetUiState({
+        selectedRulePresetId: "",
+        rulePresetName: "",
+        rulePresetMemo: "",
+      });
       await queryClient.invalidateQueries({
         queryKey: ["/api/coupang/bulk-price/rule-presets"],
       });
@@ -856,7 +896,7 @@ export default function CoupangBulkPricePage() {
     resumeMutation.isPending ||
     stopMutation.isPending;
 
-  const toggleUiSection = (key: keyof BulkPriceUiState) => {
+  const toggleUiSection = (key: BulkPriceUiSectionKey) => {
     setUiState((current) => ({
       ...current,
       [key]: !current[key],
@@ -918,9 +958,11 @@ export default function CoupangBulkPricePage() {
                   onChange={(event) => {
                     const nextId = event.target.value;
                     if (!nextId) {
-                      setSelectedSourcePresetId("");
-                      setSourcePresetName("");
-                      setSourcePresetMemo("");
+                      updatePresetUiState({
+                        selectedSourcePresetId: "",
+                        sourcePresetName: "",
+                        sourcePresetMemo: "",
+                      });
                       return;
                     }
 
@@ -945,7 +987,11 @@ export default function CoupangBulkPricePage() {
                 <span>Name</span>
                 <input
                   value={sourcePresetName}
-                  onChange={(event) => setSourcePresetName(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      sourcePresetName: event.target.value,
+                    })
+                  }
                   placeholder="Default source preset"
                 />
               </label>
@@ -953,7 +999,11 @@ export default function CoupangBulkPricePage() {
                 <span>Memo</span>
                 <textarea
                   value={sourcePresetMemo}
-                  onChange={(event) => setSourcePresetMemo(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      sourcePresetMemo: event.target.value,
+                    })
+                  }
                   placeholder="Describe the source table and match logic."
                   rows={3}
                 />
@@ -1295,9 +1345,11 @@ export default function CoupangBulkPricePage() {
                   onChange={(event) => {
                     const nextId = event.target.value;
                     if (!nextId) {
-                      setSelectedRulePresetId("");
-                      setRulePresetName("");
-                      setRulePresetMemo("");
+                      updatePresetUiState({
+                        selectedRulePresetId: "",
+                        rulePresetName: "",
+                        rulePresetMemo: "",
+                      });
                       return;
                     }
 
@@ -1322,7 +1374,11 @@ export default function CoupangBulkPricePage() {
                 <span>Name</span>
                 <input
                   value={rulePresetName}
-                  onChange={(event) => setRulePresetName(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      rulePresetName: event.target.value,
+                    })
+                  }
                   placeholder="Default rule preset"
                 />
               </label>
@@ -1330,7 +1386,11 @@ export default function CoupangBulkPricePage() {
                 <span>Memo</span>
                 <textarea
                   value={rulePresetMemo}
-                  onChange={(event) => setRulePresetMemo(event.target.value)}
+                  onChange={(event) =>
+                    updatePresetUiState({
+                      rulePresetMemo: event.target.value,
+                    })
+                  }
                   placeholder="Describe fees, margin, and discount rules."
                   rows={3}
                 />
