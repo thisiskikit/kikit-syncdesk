@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
+import type {
+  CoupangExchangeRow,
+  CoupangReturnRow,
+  CoupangShipmentWorksheetRow,
+} from "@shared/coupang";
 
 const {
   getStoreMock,
   listOrdersMock,
+  listReturnsMock,
+  listExchangesMock,
   getOrderCustomerServiceSummaryMock,
   getOrderDetailMock,
   markPreparingMock,
@@ -14,6 +20,8 @@ const {
 } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
   listOrdersMock: vi.fn(),
+  listReturnsMock: vi.fn(),
+  listExchangesMock: vi.fn(),
   getOrderCustomerServiceSummaryMock: vi.fn(),
   getOrderDetailMock: vi.fn(),
   markPreparingMock: vi.fn(),
@@ -30,6 +38,8 @@ vi.mock("./settings-store", () => ({
 
 vi.mock("./order-service", () => ({
   listOrders: listOrdersMock,
+  listReturns: listReturnsMock,
+  listExchanges: listExchangesMock,
   getOrderCustomerServiceSummary: getOrderCustomerServiceSummaryMock,
   getOrderDetail: getOrderDetailMock,
   markPreparing: markPreparingMock,
@@ -127,6 +137,90 @@ function buildOrderRow(input: {
     customerServiceState: "unknown" as const,
     customerServiceFetchedAt: null,
     availableActions: input.availableActions,
+  };
+}
+
+function buildReturnRow(
+  overrides: Partial<CoupangReturnRow> = {},
+): CoupangReturnRow {
+  return {
+    id: "return-1",
+    receiptId: "50000111",
+    orderId: "O-700",
+    status: "RETURNS_UNCHECKED",
+    cancelType: "RETURN",
+    receiptType: "RETURN",
+    returnDeliveryType: "SELLER",
+    releaseStatus: "RELEASED",
+    releaseStatusName: "COMPLETE",
+    productName: "Claim Product",
+    sellerProductId: "P-V-700",
+    sellerProductName: "Claim Product",
+    vendorItemId: "V-700",
+    vendorItemName: "Claim Product / Default",
+    shipmentBoxId: "700",
+    purchaseCount: 1,
+    cancelCount: 1,
+    createdAt: "2026-03-26T09:00:00+09:00",
+    modifiedAt: "2026-03-26T10:00:00+09:00",
+    completeConfirmDate: null,
+    completeConfirmType: null,
+    reasonCode: "BUYER_CHANGED_MIND",
+    reason: "BUYER_CHANGED_MIND",
+    faultByType: "BUYER",
+    preRefund: false,
+    requesterName: "Lee",
+    requesterPhone: "02-1234-5678",
+    requesterMobile: "010-1111-2222",
+    requesterAddress: "Seoul",
+    requesterPostCode: "12345",
+    deliveryCompanyCode: "CJGLS",
+    deliveryInvoiceNo: "RET-700",
+    retrievalChargeAmount: 3000,
+    canMarkShipmentStopped: false,
+    canMarkAlreadyShipped: false,
+    canApproveReturn: true,
+    canConfirmInbound: true,
+    canUploadCollectionInvoice: true,
+    ...overrides,
+  };
+}
+
+function buildExchangeRow(
+  overrides: Partial<CoupangExchangeRow> = {},
+): CoupangExchangeRow {
+  return {
+    exchangeId: "70000101",
+    orderId: "O-800",
+    status: "EXCHANGED",
+    orderDeliveryStatusCode: "DELIVERING",
+    collectStatus: "COLLECTED",
+    collectCompleteDate: "2026-03-26T09:00:00+09:00",
+    createdAt: "2026-03-26T08:00:00+09:00",
+    modifiedAt: "2026-03-26T11:00:00+09:00",
+    reasonCode: "SIZE",
+    reason: "SIZE_EXCHANGE",
+    reasonDetail: "REQUESTED_LARGER_SIZE",
+    productName: "Exchange Product",
+    vendorItemId: "V-800",
+    vendorItemName: "Exchange Product / Default",
+    sellerProductId: "P-V-800",
+    sellerProductName: "Exchange Product",
+    shipmentBoxId: "800",
+    originalShipmentBoxId: "800",
+    quantity: 1,
+    returnCustomerName: "Kim",
+    returnMobile: "010-2222-3333",
+    returnAddress: "Busan",
+    deliveryCustomerName: "Kim",
+    deliveryMobile: "010-2222-3333",
+    deliveryAddress: "Busan",
+    deliverCode: "CJGLS",
+    invoiceNumber: "EX-800",
+    canConfirmInbound: true,
+    canReject: true,
+    canUploadExchangeInvoice: true,
+    ...overrides,
   };
 }
 
@@ -247,6 +341,16 @@ describe("coupang shipment worksheet collection", () => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
     getStoreSheetMock.mockResolvedValue(buildEmptySheet());
+    listReturnsMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+    listExchangesMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
     getOrderCustomerServiceSummaryMock.mockResolvedValue({
       items: [],
       source: "live",
@@ -531,6 +635,143 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
+  it("adds a new worksheet row when quick collect finds a return-only claim", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+    listReturnsMock.mockResolvedValue({
+      items: [buildReturnRow()],
+      source: "live",
+      message: null,
+    });
+    getOrderDetailMock.mockResolvedValue({
+      item: null,
+      source: "fallback",
+      message: "order fallback",
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(listReturnsMock).toHaveBeenCalledWith({
+      storeId: "store-1",
+      cancelType: "ALL",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+    });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "700",
+      orderId: "O-700",
+      customerServiceIssueCount: 1,
+      customerServiceState: "ready",
+    });
+    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "return", count: 1 }),
+    ]);
+    expect(result.message).toContain("클레임");
+    expect(result.message).toContain("신규 1건");
+  });
+
+  it("classifies claim-only cancel completion rows as shipment-stop handled during quick collect", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+    listReturnsMock.mockResolvedValue({
+      items: [
+        buildReturnRow({
+          id: "cancel-1",
+          receiptId: "50000112",
+          orderId: "O-701",
+          shipmentBoxId: "701",
+          vendorItemId: "V-701",
+          sellerProductId: "P-V-701",
+          cancelType: "CANCEL",
+          status: "UC",
+          releaseStatus: "Y",
+          releaseStatusName: "COMPLETE",
+          completeConfirmDate: "2026-03-26T10:20:00+09:00",
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
+    ]);
+    expect(result.items[0]?.customerServiceState).toBe("ready");
+  });
+
+  it("merges matching quick-collect claims into the active order row without duplication", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "702:V-702",
+          shipmentBoxId: "702",
+          orderId: "O-702",
+          vendorItemId: "V-702",
+          status: "INSTRUCT",
+          productName: "Matched Claim Product",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    listReturnsMock.mockResolvedValue({
+      items: [
+        buildReturnRow({
+          id: "return-702",
+          receiptId: "50000113",
+          orderId: "O-702",
+          shipmentBoxId: "702",
+          vendorItemId: "V-702",
+          sellerProductId: "P-V-702",
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "INSTRUCT",
+      maxPerPage: 20,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.shipmentBoxId).toBe("702");
+    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "return", count: 1 }),
+    ]);
+    expect(result.syncSummary).toMatchObject({
+      fetchedCount: 1,
+      insertedCount: 1,
+      updatedCount: 0,
+    });
+  });
+
   it("keeps recent stored customer-service data as ready during collection", async () => {
     getStoreSheetMock.mockResolvedValue({
       ...buildEmptySheet(),
@@ -637,7 +878,7 @@ describe("coupang shipment worksheet collection", () => {
           vendorItemId: "V-563",
           customerServiceIssueCount: 1,
           customerServiceIssueSummary: "Old claim",
-          customerServiceIssueBreakdown: [{ type: "cancel", count: 1, label: "취소 1건" }],
+          customerServiceIssueBreakdown: [{ type: "cancel", count: 1, label: "Cancel 1" }],
           customerServiceState: "ready",
           customerServiceFetchedAt: "2026-03-26T10:15:00.000Z",
         }),
@@ -666,9 +907,9 @@ describe("coupang shipment worksheet collection", () => {
         {
           rowKey: "563:V-563",
           customerServiceIssueCount: 1,
-          customerServiceIssueSummary: "출고중지 요청 1건",
+          customerServiceIssueSummary: "Shipment stop requested 1",
           customerServiceIssueBreakdown: [
-            { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+            { type: "shipment_stop_requested", count: 1, label: "Shipment stop requested 1" },
           ],
           customerServiceState: "ready",
           customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
@@ -691,7 +932,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(setStoreSheetMock).toHaveBeenCalledTimes(1);
     expect(result.items[0]).toMatchObject({
       shipmentBoxId: "563",
-      customerServiceIssueSummary: "출고중지 요청 1건",
+      customerServiceIssueSummary: "Shipment stop requested 1",
       customerServiceState: "ready",
       customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
     });
@@ -736,9 +977,9 @@ describe("coupang shipment worksheet collection", () => {
         {
           rowKey: "564:V-564",
           customerServiceIssueCount: 1,
-          customerServiceIssueSummary: "諛섑뭹 1嫄?",
+          customerServiceIssueSummary: "Return 1",
           customerServiceIssueBreakdown: [
-            { type: "return", count: 1, label: "諛섑뭹 1嫄?" },
+            { type: "return", count: 1, label: "Return 1" },
           ],
           customerServiceState: "ready",
           customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
@@ -758,7 +999,7 @@ describe("coupang shipment worksheet collection", () => {
     );
     expect(result.items[0]).toMatchObject({
       shipmentBoxId: "564",
-      customerServiceIssueSummary: "諛섑뭹 1嫄?",
+      customerServiceIssueSummary: "Return 1",
       customerServiceState: "ready",
       customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
     });
@@ -804,7 +1045,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.productName).toBe("Deleted But Ordered Product");
     expect(result.items[0]?.optionName).toBe("Red");
-    expect(result.message).toContain("주문 원본값으로 보완");
+    expect(result.message).toContain("쿠팡 주문 원본값으로 보완");
   });
 
   it("merges incrementally and preserves manual invoice fields", async () => {
@@ -1041,3 +1282,4 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 });
+

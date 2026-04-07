@@ -83,6 +83,7 @@
   - shipment-stop requested and shipment-stop completed claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
   - completed cancel rows can now be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals instead of only the request-status set
   - shipment worksheet reads now force a fresh claim lookup even for recently `ready` rows, so the list can surface newly arrived return/cancel/shipment-stop claims before the user opens the detail popup
+  - shipment worksheet quick collect now also fetches live return/exchange claims and can add claim-only rows that no longer appear in the active order list
   - shipment worksheet detail responses now synthesize claim summary fields from live return/exchange lookups so the detail status box can override `상품준비중` immediately when the popup confirms a claim
   - the shipment page refetches the worksheet on mount and window refocus, and the shipment detail popup prefers detail-derived CS summary/state over persisted row values while patching the local worksheet cache so the list and popup stay aligned in the same session
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission

@@ -393,6 +393,19 @@ type ShipmentWorksheetCollectionCandidate = {
   currentRow: CoupangShipmentWorksheetRow | undefined;
   shouldHydrateOrder: boolean;
   shouldHydrateProduct: boolean;
+  claimOnly?: boolean;
+};
+
+type ShipmentWorksheetClaimGroup = {
+  sourceKey: string;
+  shipmentBoxId: string;
+  orderId: string;
+  vendorItemId: string | null;
+  sellerProductId: string | null;
+  returns: CoupangReturnRow[];
+  exchanges: CoupangExchangeRow[];
+  matchedCandidateSourceKey: string | null;
+  currentRow: CoupangShipmentWorksheetRow | undefined;
 };
 
 type ShipmentWorksheetSyncPlan = {
@@ -694,6 +707,166 @@ function shouldHydrateProductRow(
   }
 
   return !(normalizeWhitespace(currentRow.productName) && normalizeWhitespace(currentRow.optionName));
+}
+
+function resolveClaimSourceDescriptor(input: {
+  storeId: string;
+  shipmentBoxId?: string | null;
+  orderId?: string | null;
+  vendorItemId?: string | null;
+  sellerProductId?: string | null;
+  fallbackId: string;
+}) {
+  const shipmentBoxId =
+    normalizeWhitespace(input.shipmentBoxId) ??
+    normalizeWhitespace(input.orderId) ??
+    `claim-${input.fallbackId}`;
+  const itemKey =
+    normalizeWhitespace(input.vendorItemId) ??
+    normalizeWhitespace(input.sellerProductId) ??
+    `claim-${input.fallbackId}`;
+
+  return {
+    shipmentBoxId,
+    sourceKey: [input.storeId, shipmentBoxId, itemKey].join(":"),
+  };
+}
+
+function matchReturnClaimCandidate(
+  candidates: ShipmentWorksheetCollectionCandidate[],
+  request: CoupangReturnRow,
+) {
+  return (
+    candidates.find((candidate) =>
+      matchesReturnRequestToCustomerServiceTarget(candidate.row, request),
+    ) ?? null
+  );
+}
+
+function matchExchangeClaimCandidate(
+  candidates: ShipmentWorksheetCollectionCandidate[],
+  request: CoupangExchangeRow,
+) {
+  return (
+    candidates.find((candidate) =>
+      matchesExchangeRequestToCustomerServiceTarget(candidate.row, request),
+    ) ?? null
+  );
+}
+
+function matchReturnWorksheetRow(
+  rows: CoupangShipmentWorksheetRow[],
+  request: CoupangReturnRow,
+) {
+  return rows.find((row) => matchesReturnRequestToCustomerServiceTarget(row, request)) ?? null;
+}
+
+function matchExchangeWorksheetRow(
+  rows: CoupangShipmentWorksheetRow[],
+  request: CoupangExchangeRow,
+) {
+  return rows.find((row) => matchesExchangeRequestToCustomerServiceTarget(row, request)) ?? null;
+}
+
+function buildClaimOnlyCollectionRow(input: {
+  issueFetchedAt: string;
+  currentRow: CoupangShipmentWorksheetRow | undefined;
+  issueState: ReturnType<typeof buildCoupangCustomerServiceIssueState>;
+  claimGroup: ShipmentWorksheetClaimGroup;
+}): CoupangOrderRow {
+  const primaryReturn = input.claimGroup.returns[0] ?? null;
+  const primaryExchange = input.claimGroup.exchanges[0] ?? null;
+  const productName =
+    primaryReturn?.sellerProductName ??
+    primaryExchange?.sellerProductName ??
+    primaryReturn?.productName ??
+    primaryExchange?.productName ??
+    input.currentRow?.productName ??
+    "클레임 주문";
+  const optionName = normalizeWorksheetOptionName(
+    primaryReturn?.vendorItemName ?? primaryExchange?.vendorItemName ?? input.currentRow?.optionName,
+    productName,
+  );
+
+  return {
+    id: input.currentRow?.id ?? input.claimGroup.sourceKey,
+    shipmentBoxId: input.claimGroup.shipmentBoxId,
+    orderId: input.claimGroup.orderId,
+    orderedAt:
+      primaryReturn?.createdAt ??
+      primaryExchange?.createdAt ??
+      input.currentRow?.orderedAtRaw ??
+      null,
+    paidAt: null,
+    status:
+      input.currentRow?.orderStatus ??
+      normalizeStatusFilter(primaryReturn?.status ?? primaryExchange?.status ?? "CLAIM") ??
+      "CLAIM",
+    ordererName: input.currentRow?.ordererName ?? null,
+    receiverName:
+      primaryExchange?.deliveryCustomerName ??
+      primaryReturn?.requesterName ??
+      input.currentRow?.receiverBaseName ??
+      input.currentRow?.receiverName ??
+      "-",
+    receiverSafeNumber:
+      primaryExchange?.deliveryMobile ??
+      primaryReturn?.requesterMobile ??
+      primaryReturn?.requesterPhone ??
+      input.currentRow?.contact ??
+      null,
+    receiverAddress:
+      primaryExchange?.deliveryAddress ??
+      primaryReturn?.requesterAddress ??
+      input.currentRow?.receiverAddress ??
+      null,
+    receiverPostCode: primaryReturn?.requesterPostCode ?? null,
+    productName,
+    optionName,
+    sellerProductId: input.claimGroup.sellerProductId,
+    sellerProductName:
+      primaryReturn?.sellerProductName ??
+      primaryExchange?.sellerProductName ??
+      input.currentRow?.productName ??
+      productName,
+    vendorItemId: input.claimGroup.vendorItemId,
+    externalVendorSku: input.currentRow?.sellerProductCode ?? null,
+    quantity:
+      primaryReturn?.cancelCount ??
+      primaryReturn?.purchaseCount ??
+      primaryExchange?.quantity ??
+      input.currentRow?.quantity ??
+      1,
+    salesPrice: input.currentRow?.salePrice ?? null,
+    orderPrice: input.currentRow?.salePrice ?? null,
+    discountPrice: 0,
+    cancelCount: primaryReturn?.cancelCount ?? 0,
+    holdCountForCancel: 0,
+    deliveryCompanyName: null,
+    deliveryCompanyCode:
+      primaryExchange?.deliverCode ??
+      primaryReturn?.deliveryCompanyCode ??
+      input.currentRow?.coupangDeliveryCompanyCode ??
+      null,
+    invoiceNumber:
+      primaryExchange?.invoiceNumber ??
+      primaryReturn?.deliveryInvoiceNo ??
+      input.currentRow?.coupangInvoiceNumber ??
+      null,
+    invoiceNumberUploadDate: input.currentRow?.coupangInvoiceUploadedAt ?? null,
+    estimatedShippingDate: input.currentRow?.estimatedShippingDate ?? null,
+    inTransitDateTime: null,
+    deliveredDate: null,
+    shipmentType: null,
+    splitShipping: input.currentRow?.splitShipping ?? false,
+    ableSplitShipping: false,
+    customerServiceIssueCount: input.issueState.customerServiceIssueCount,
+    customerServiceIssueSummary: input.issueState.customerServiceIssueSummary,
+    customerServiceIssueBreakdown: input.issueState.customerServiceIssueBreakdown,
+    customerServiceState: "ready",
+    customerServiceFetchedAt: input.issueFetchedAt,
+    availableActions: input.currentRow?.availableActions ?? [],
+  };
 }
 
 function buildNextSyncState(
@@ -1004,7 +1177,11 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
         const hasInvalidItem = items.some(
           (item) =>
             !item ||
-            (item.type !== "cancel" && item.type !== "return" && item.type !== "exchange") ||
+            (item.type !== "shipment_stop_requested" &&
+              item.type !== "shipment_stop_handled" &&
+              item.type !== "cancel" &&
+              item.type !== "return" &&
+              item.type !== "exchange") ||
             !Number.isFinite(item.count) ||
             typeof item.label !== "string",
         );
@@ -1012,7 +1189,11 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
           ? items.filter(
               (item): item is typeof item =>
                 Boolean(item) &&
-                (item.type === "cancel" || item.type === "return" || item.type === "exchange") &&
+                (item.type === "shipment_stop_requested" ||
+                  item.type === "shipment_stop_handled" ||
+                  item.type === "cancel" ||
+                  item.type === "return" ||
+                  item.type === "exchange") &&
                 Number.isFinite(item.count) &&
                 typeof item.label === "string",
             )
@@ -1378,6 +1559,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
   const detailWarnings: string[] = [];
   const productWarnings: string[] = [];
+  const claimWarnings: string[] = [];
   const prepareMessages: string[] = [];
   const collectionCandidates = candidateRows.map((row) => {
     const sourceKey = buildSourceKey(input.storeId, row);
@@ -1391,6 +1573,225 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
     } satisfies ShipmentWorksheetCollectionCandidate;
   });
+  const collectionCandidateBySourceKey = new Map(
+    collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
+  );
+  const claimGroupsBySourceKey = new Map<string, ShipmentWorksheetClaimGroup>();
+  const [returnsLookup, exchangesLookup] = await Promise.allSettled([
+    listReturns({
+      storeId: input.storeId,
+      cancelType: "ALL",
+      createdAtFrom: syncPlan.fetchCreatedAtFrom,
+      createdAtTo: syncPlan.fetchCreatedAtTo,
+    }),
+    listExchanges({
+      storeId: input.storeId,
+      createdAtFrom: syncPlan.fetchCreatedAtFrom,
+      createdAtTo: syncPlan.fetchCreatedAtTo,
+      maxPerPage: 50,
+    }),
+  ]);
+
+  const appendClaimGroup = (inputGroup: {
+    sourceKey: string;
+    shipmentBoxId: string;
+    orderId: string;
+    vendorItemId: string | null;
+    sellerProductId: string | null;
+    currentRow: CoupangShipmentWorksheetRow | undefined;
+    matchedCandidateSourceKey: string | null;
+    returnRow?: CoupangReturnRow;
+    exchangeRow?: CoupangExchangeRow;
+  }) => {
+    const existing = claimGroupsBySourceKey.get(inputGroup.sourceKey);
+    if (existing) {
+      if (inputGroup.returnRow) {
+        existing.returns.push(inputGroup.returnRow);
+      }
+      if (inputGroup.exchangeRow) {
+        existing.exchanges.push(inputGroup.exchangeRow);
+      }
+      if (!existing.matchedCandidateSourceKey && inputGroup.matchedCandidateSourceKey) {
+        existing.matchedCandidateSourceKey = inputGroup.matchedCandidateSourceKey;
+      }
+      return;
+    }
+
+    claimGroupsBySourceKey.set(inputGroup.sourceKey, {
+      sourceKey: inputGroup.sourceKey,
+      shipmentBoxId: inputGroup.shipmentBoxId,
+      orderId: inputGroup.orderId,
+      vendorItemId: inputGroup.vendorItemId,
+      sellerProductId: inputGroup.sellerProductId,
+      returns: inputGroup.returnRow ? [inputGroup.returnRow] : [],
+      exchanges: inputGroup.exchangeRow ? [inputGroup.exchangeRow] : [],
+      matchedCandidateSourceKey: inputGroup.matchedCandidateSourceKey,
+      currentRow: inputGroup.currentRow,
+    });
+  };
+
+  if (returnsLookup.status === "fulfilled" && returnsLookup.value.source === "live") {
+    for (const request of returnsLookup.value.items) {
+      const matchedCandidate = matchReturnClaimCandidate(collectionCandidates, request);
+      const matchedWorksheetRow =
+        matchedCandidate?.currentRow ?? matchReturnWorksheetRow(currentSheet.items, request) ?? undefined;
+      const descriptor = matchedCandidate
+        ? {
+            sourceKey: matchedCandidate.sourceKey,
+            shipmentBoxId: matchedCandidate.row.shipmentBoxId,
+          }
+        : matchedWorksheetRow
+          ? {
+              sourceKey: matchedWorksheetRow.sourceKey,
+              shipmentBoxId: matchedWorksheetRow.shipmentBoxId,
+            }
+          : resolveClaimSourceDescriptor({
+              storeId: input.storeId,
+              shipmentBoxId: request.shipmentBoxId,
+              orderId: request.orderId,
+              vendorItemId: request.vendorItemId,
+              sellerProductId: request.sellerProductId,
+              fallbackId: request.receiptId,
+            });
+
+      appendClaimGroup({
+        sourceKey: descriptor.sourceKey,
+        shipmentBoxId: descriptor.shipmentBoxId,
+        orderId:
+          normalizeWhitespace(request.orderId) ??
+          matchedCandidate?.row.orderId ??
+          matchedWorksheetRow?.orderId ??
+          descriptor.shipmentBoxId,
+        vendorItemId:
+          normalizeWhitespace(request.vendorItemId) ??
+          matchedCandidate?.row.vendorItemId ??
+          matchedWorksheetRow?.vendorItemId ??
+          null,
+        sellerProductId:
+          normalizeWhitespace(request.sellerProductId) ??
+          matchedCandidate?.row.sellerProductId ??
+          matchedWorksheetRow?.sellerProductId ??
+          null,
+        currentRow: matchedWorksheetRow,
+        matchedCandidateSourceKey: matchedCandidate?.sourceKey ?? null,
+        returnRow: request,
+      });
+    }
+  } else {
+    claimWarnings.push(
+      returnsLookup.status === "fulfilled"
+        ? returnsLookup.value.message ?? "취소/반품 클레임을 빠른 수집에 반영하지 못했습니다."
+        : returnsLookup.reason instanceof Error
+          ? `취소/반품 클레임 조회에 실패했습니다. ${returnsLookup.reason.message}`
+          : "취소/반품 클레임 조회에 실패했습니다.",
+    );
+  }
+
+  if (exchangesLookup.status === "fulfilled" && exchangesLookup.value.source === "live") {
+    for (const request of exchangesLookup.value.items) {
+      const matchedCandidate = matchExchangeClaimCandidate(collectionCandidates, request);
+      const matchedWorksheetRow =
+        matchedCandidate?.currentRow ??
+        matchExchangeWorksheetRow(currentSheet.items, request) ??
+        undefined;
+      const descriptor = matchedCandidate
+        ? {
+            sourceKey: matchedCandidate.sourceKey,
+            shipmentBoxId: matchedCandidate.row.shipmentBoxId,
+          }
+        : matchedWorksheetRow
+          ? {
+              sourceKey: matchedWorksheetRow.sourceKey,
+              shipmentBoxId: matchedWorksheetRow.shipmentBoxId,
+            }
+          : resolveClaimSourceDescriptor({
+              storeId: input.storeId,
+              shipmentBoxId: request.originalShipmentBoxId ?? request.shipmentBoxId,
+              orderId: request.orderId,
+              vendorItemId: request.vendorItemId,
+              sellerProductId: request.sellerProductId,
+              fallbackId: request.exchangeId,
+            });
+
+      appendClaimGroup({
+        sourceKey: descriptor.sourceKey,
+        shipmentBoxId: descriptor.shipmentBoxId,
+        orderId:
+          normalizeWhitespace(request.orderId) ??
+          matchedCandidate?.row.orderId ??
+          matchedWorksheetRow?.orderId ??
+          descriptor.shipmentBoxId,
+        vendorItemId:
+          normalizeWhitespace(request.vendorItemId) ??
+          matchedCandidate?.row.vendorItemId ??
+          matchedWorksheetRow?.vendorItemId ??
+          null,
+        sellerProductId:
+          normalizeWhitespace(request.sellerProductId) ??
+          matchedCandidate?.row.sellerProductId ??
+          matchedWorksheetRow?.sellerProductId ??
+          null,
+        currentRow: matchedWorksheetRow,
+        matchedCandidateSourceKey: matchedCandidate?.sourceKey ?? null,
+        exchangeRow: request,
+      });
+    }
+  } else {
+    claimWarnings.push(
+      exchangesLookup.status === "fulfilled"
+        ? exchangesLookup.value.message ?? "교환 클레임을 빠른 수집에 반영하지 못했습니다."
+        : exchangesLookup.reason instanceof Error
+          ? `교환 클레임 조회에 실패했습니다. ${exchangesLookup.reason.message}`
+          : "교환 클레임 조회에 실패했습니다.",
+    );
+  }
+
+  const claimFetchedAt = now;
+  let quickCollectClaimInsertCount = 0;
+  let quickCollectClaimMatchedCount = 0;
+
+  for (const claimGroup of Array.from(claimGroupsBySourceKey.values())) {
+    const issueState = buildCoupangCustomerServiceIssueState({
+      relatedReturnRequests: claimGroup.returns,
+      relatedExchangeRequests: claimGroup.exchanges,
+    });
+
+    if (claimGroup.matchedCandidateSourceKey) {
+      const matchedCandidate = collectionCandidateBySourceKey.get(claimGroup.matchedCandidateSourceKey);
+      if (matchedCandidate) {
+        matchedCandidate.row = {
+          ...matchedCandidate.row,
+          ...issueState,
+          customerServiceState: "ready",
+          customerServiceFetchedAt: claimFetchedAt,
+        };
+        quickCollectClaimMatchedCount += 1;
+      }
+      continue;
+    }
+
+    const claimRow = buildClaimOnlyCollectionRow({
+      issueFetchedAt: claimFetchedAt,
+      currentRow: claimGroup.currentRow,
+      issueState,
+      claimGroup,
+    });
+    const sourceKey = claimGroup.sourceKey;
+    const currentRow = currentBySourceKey.get(sourceKey) ?? claimGroup.currentRow;
+
+    const nextCandidate = {
+      row: claimRow,
+      sourceKey,
+      currentRow,
+      shouldHydrateOrder: true,
+      shouldHydrateProduct: shouldHydrateProductRow(claimRow, currentRow),
+      claimOnly: true,
+    } satisfies ShipmentWorksheetCollectionCandidate;
+
+    collectionCandidates.push(nextCandidate);
+    collectionCandidateBySourceKey.set(sourceKey, nextCandidate);
+    quickCollectClaimInsertCount += 1;
+  }
   const prepareTargets = buildPrepareTargets(collectionCandidates);
   const preparedShipmentBoxIds = new Set<string>();
 
@@ -1560,7 +1961,18 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     const orderDate = toSeoulDateParts(orderedAtRaw ?? currentRow?.createdAt ?? now);
     const preserveDeliveryRequest = hasManualDeliveryRequest(currentRow);
     const refreshedDeliveryRequest = normalizeWhitespace(detail?.parcelPrintMessage);
-    const customerServiceIssueState = resolveWorksheetCustomerServiceState(currentRow, now);
+    const customerServiceIssueState =
+      row.customerServiceState === "ready" ||
+      row.customerServiceIssueCount > 0 ||
+      normalizeWhitespace(row.customerServiceIssueSummary)
+        ? {
+            customerServiceIssueCount: row.customerServiceIssueCount,
+            customerServiceIssueSummary: row.customerServiceIssueSummary,
+            customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+            customerServiceState: row.customerServiceState,
+            customerServiceFetchedAt: row.customerServiceFetchedAt,
+          }
+        : resolveWorksheetCustomerServiceState(currentRow, now);
     const coupangDeliveryCompanyCode = null;
     const coupangInvoiceNumber = null;
     const coupangInvoiceUploadedAt = null;
@@ -1675,6 +2087,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     storeId: input.storeId,
     rows: Array.from(mergedBySourceKey.values()),
     syncPlan,
+    forceRefresh: true,
   });
 
   const syncState = buildNextSyncState(
@@ -1684,7 +2097,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   );
   const syncSummary = buildSyncSummary({
     plan: syncPlan,
-    fetchedCount: candidateRows.length,
+    fetchedCount: collectionCandidates.length,
     insertedCount,
     updatedCount,
     skippedHydrationCount,
@@ -1697,6 +2110,10 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     message: mergeMessages([
       listResponse.message,
       platformKey.warning,
+      claimWarnings.length ? claimWarnings.join(" ") : null,
+      claimGroupsBySourceKey.size
+        ? `빠른 수집에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
+        : null,
       detailWarnings.length
         ? `주문 상세 ${detailWarnings.length}건은 일부 정보를 기존 값으로 유지했습니다.`
         : null,
