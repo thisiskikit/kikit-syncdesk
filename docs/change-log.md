@@ -67,6 +67,7 @@ This file records repository changes that are considered complete only when the 
   - patched the local shipment worksheet cache after detail lookup so the popup and row list stay aligned once a live claim is confirmed
   - changed shipment worksheet reads to force a fresh CS lookup instead of reusing the 10-minute summary cache, and refetch the worksheet again on mount/window refocus so claim state is visible before opening row detail
   - extended shipment worksheet quick collect to fetch live return/exchange claims and insert claim-only rows even when the active order list no longer contains that order
+  - excluded claim-bearing rows from shipment worksheet Excel downloads so only order rows are exported and marked as printed
 - Reason:
   - users need to notice cancel, return, exchange, and shipment-stop requests before sending invoices or moving rows into preparing
 - Impact scope:

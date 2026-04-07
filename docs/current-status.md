@@ -87,6 +87,7 @@
   - shipment worksheet detail responses now synthesize claim summary fields from live return/exchange lookups so the detail status box can override `상품준비중` immediately when the popup confirms a claim
   - the shipment page refetches the worksheet on mount and window refocus, and the shipment detail popup prefers detail-derived CS summary/state over persisted row values while patching the local worksheet cache so the list and popup stay aligned in the same session
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
+  - shipment worksheet Excel downloads now exclude claim-bearing rows, so only order rows are exported and marked as printed
 - NAVER bulk price preview behavior:
   - preview sessions and refresh jobs are kept in memory
   - preview cache TTL defaults to 5 minutes

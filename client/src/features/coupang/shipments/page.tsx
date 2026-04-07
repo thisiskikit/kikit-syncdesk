@@ -930,6 +930,25 @@ function buildInvoiceClaimBlockedDetails(
   );
 }
 
+function buildExcelClaimBlockedDetails(
+  rows: Array<
+    Pick<
+      CoupangShipmentWorksheetRow,
+      | "orderStatus"
+      | "orderId"
+      | "shipmentBoxId"
+      | "customerServiceIssueSummary"
+      | "customerServiceIssueCount"
+      | "customerServiceIssueBreakdown"
+    >
+  >,
+) {
+  return rows.map(
+    (row) =>
+      `주문 ${row.orderId || "-"} / 배송 ${row.shipmentBoxId || "-"} / ${getShipmentClaimSummary(row)}`,
+  );
+}
+
 function sortShipmentRowsForExcelExport(
   rows: readonly CoupangShipmentWorksheetRow[],
   sortKey: ShipmentExcelSortKey,
@@ -1363,6 +1382,14 @@ export default function CoupangShipmentsPage() {
     () => visibleRows.filter((row) => selectedRowIds.has(row.id)),
     [selectedRowIds, visibleRows],
   );
+  const selectedExportBlockedRows = useMemo(
+    () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
+    [selectedRows],
+  );
+  const selectedExportRows = useMemo(
+    () => selectedRows.filter((row) => !hasShipmentClaimIssue(row)),
+    [selectedRows],
+  );
   const selectedInvoiceBlockedRows = useMemo(
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
@@ -1370,6 +1397,14 @@ export default function CoupangShipmentsPage() {
   const notExportedRows = useMemo(
     () => draftRows.filter((row) => !row.exportedAt),
     [draftRows],
+  );
+  const notExportedClaimRows = useMemo(
+    () => notExportedRows.filter((row) => hasShipmentClaimIssue(row)),
+    [notExportedRows],
+  );
+  const notExportedDownloadRows = useMemo(
+    () => notExportedRows.filter((row) => !hasShipmentClaimIssue(row)),
+    [notExportedRows],
   );
   const dirtyCount = dirtySourceKeys.size;
   const dirtySet = useMemo(() => new Set(dirtySourceKeys), [dirtySourceKeys]);
@@ -1800,8 +1835,8 @@ export default function CoupangShipmentsPage() {
   const refreshActionDisabled =
     !filters.selectedStoreId || worksheetQuery.isFetching || busyAction !== null;
   const openInvoiceInputDisabled = !draftRows.length || busyAction !== null;
-  const openExcelExportDisabled = !selectedRows.length || busyAction !== null;
-  const openNotExportedExcelExportDisabled = !notExportedRows.length || busyAction !== null;
+  const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
+  const openNotExportedExcelExportDisabled = !notExportedDownloadRows.length || busyAction !== null;
 
   useEffect(() => {
     if (!detailRowId) {
@@ -2136,16 +2171,24 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    const targetRows = scope === "selected" ? selectedRows : notExportedRows;
+    const sourceRows = scope === "selected" ? selectedRows : notExportedRows;
+    const blockedClaimRows =
+      scope === "selected" ? selectedExportBlockedRows : notExportedClaimRows;
+    const blockedClaimDetails = buildExcelClaimBlockedDetails(blockedClaimRows);
+    const targetRows = scope === "selected" ? selectedExportRows : notExportedDownloadRows;
     if (!targetRows.length) {
       setFeedback({
         type: "warning",
         title: "엑셀 다운로드",
         message:
           scope === "selected"
-            ? "체크한 행이 없어 엑셀을 다운로드할 수 없습니다."
-            : "미출력 행이 없어 엑셀을 다운로드할 수 없습니다.",
-        details: [],
+            ? sourceRows.length
+              ? "클레임이 있는 주문은 엑셀 다운로드 대상에서 제외되어 다운로드할 주문건이 없습니다."
+              : "체크한 행이 없어 엑셀을 다운로드할 수 없습니다."
+            : sourceRows.length
+              ? "미출력 행 중 클레임이 있는 주문은 엑셀 다운로드 대상에서 제외되어 다운로드할 주문건이 없습니다."
+              : "미출력 행이 없어 엑셀을 다운로드할 수 없습니다.",
+        details: blockedClaimDetails.slice(0, 8),
       });
       return;
     }
@@ -2214,10 +2257,13 @@ export default function CoupangShipmentsPage() {
     }
 
     setFeedback({
-      type: "success",
+      type: blockedClaimRows.length ? "warning" : "success",
       title: "엑셀 다운로드 완료",
-      message: `${fileName} 파일을 ${getShipmentExcelSortLabel(sortKey)}으로 저장했고 ${getShipmentExcelExportScopeLabel(scope)} ${targetRows.length}행을 출력 완료로 표시했습니다.`,
-      details: [],
+      message:
+        blockedClaimRows.length > 0
+          ? `${fileName} 파일을 ${getShipmentExcelSortLabel(sortKey)}으로 저장했고 ${getShipmentExcelExportScopeLabel(scope)} 주문건 ${targetRows.length}행을 출력 완료로 표시했습니다. 클레임 ${blockedClaimRows.length}건은 다운로드에서 제외했습니다.`
+          : `${fileName} 파일을 ${getShipmentExcelSortLabel(sortKey)}으로 저장했고 ${getShipmentExcelExportScopeLabel(scope)} ${targetRows.length}행을 출력 완료로 표시했습니다.`,
+      details: blockedClaimDetails.slice(0, 8),
     });
   }
 
@@ -2951,6 +2997,16 @@ export default function CoupangShipmentsPage() {
               >
                 미출력건 전부 다운로드
               </button>
+              {selectedRows.length > 0 && selectedExportBlockedRows.length > 0 ? (
+                <div className="muted action-disabled-reason">
+                  선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
+                </div>
+              ) : null}
+              {notExportedRows.length > 0 && notExportedClaimRows.length > 0 ? (
+                <div className="muted action-disabled-reason">
+                  미출력 클레임 {notExportedClaimRows.length}건은 엑셀 다운로드에서 제외됩니다.
+                </div>
+              ) : null}
               {dirtyCount ? (
                 <button
                   className="button secondary"
@@ -3381,6 +3437,16 @@ export default function CoupangShipmentsPage() {
                 미출력건 전부 다운로드
               </button>
             </div>
+            {selectedRows.length > 0 && selectedExportBlockedRows.length > 0 ? (
+              <div className="muted action-disabled-reason">
+                선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
+              </div>
+            ) : null}
+            {notExportedRows.length > 0 && notExportedClaimRows.length > 0 ? (
+              <div className="muted action-disabled-reason">
+                미출력 클레임 {notExportedClaimRows.length}건은 엑셀 다운로드에서 제외됩니다.
+              </div>
+            ) : null}
           </div>
 
           <div className="column-settings-list">
@@ -3880,10 +3946,24 @@ export default function CoupangShipmentsPage() {
               <p className="muted shipment-export-dialog-note">
                 {getShipmentExcelExportScopeLabel(excelExportScope)}{" "}
                 {formatNumber(
-                  excelExportScope === "selected" ? selectedRows.length : notExportedRows.length,
+                  excelExportScope === "selected"
+                    ? selectedExportRows.length
+                    : notExportedDownloadRows.length,
                 )}
                 행을 엑셀로 내보내기 전에 정렬 기준을 선택해 주세요.
               </p>
+              {((excelExportScope === "selected" ? selectedExportBlockedRows : notExportedClaimRows)
+                .length > 0) ? (
+                <p className="muted shipment-export-dialog-note">
+                  클레임{" "}
+                  {formatNumber(
+                    excelExportScope === "selected"
+                      ? selectedExportBlockedRows.length
+                      : notExportedClaimRows.length,
+                  )}
+                  건은 엑셀 다운로드에서 자동 제외됩니다.
+                </p>
+              ) : null}
             </div>
             <div className="shipment-export-dialog-options">
               <button
