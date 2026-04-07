@@ -564,7 +564,12 @@ export interface CoupangProductMutationResponse {
   operation?: OperationLogEntry;
 }
 
-export type CoupangCustomerServiceIssueType = "cancel" | "return" | "exchange";
+export type CoupangCustomerServiceIssueType =
+  | "shipment_stop_requested"
+  | "shipment_stop_handled"
+  | "cancel"
+  | "return"
+  | "exchange";
 export type CoupangCustomerServiceState = "unknown" | "ready" | "stale";
 
 export interface CoupangCustomerServiceIssueBreakdownItem {

@@ -33,6 +33,53 @@ This file records repository changes that are considered complete only when the 
   - not run: `npm run test`
   - not run: `npm run build`
 
+## 2026-04-07 / COUPANG Claim-Aware Orders and Shipments
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/handlers/coupang/orders.ts`
+  - `server/services/coupang/customer-service-issues.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/order-service.test.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/lib/coupang-customer-service.ts`
+  - `client/src/lib/coupang-order-status.ts`
+  - `client/src/lib/coupang-shipment-quick-filters.ts`
+  - `client/src/lib/coupang-shipment-quick-filters.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
+  - `client/src/pages/coupang-orders.tsx`
+  - `client/src/lib/order-ticket.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - expanded COUPANG customer-service issue modeling to include shipment-stop requested/handled states
+  - made the orders list API include claim lookup by default
+  - refreshed shipment worksheet customer-service state on read when rows are stale or unknown
+  - blocked claim-bearing orders from `markPreparing` and blocked claim-bearing shipment rows from invoice transmission
+- Change content:
+  - added claim priority so shipment-stop requested/handled outrank cancel, return, exchange, and the base order status in shared display helpers
+  - updated shipment quick filters and worksheet status pills so shipment-stop rows are visible without a manual CS-only step
+  - surfaced skip/block reasons for invoice transmission and prepare flows using order or shipment identifiers plus the detected claim summary
+- Reason:
+  - users need to notice cancel, return, exchange, and shipment-stop requests before sending invoices or moving rows into preparing
+- Impact scope:
+  - COUPANG orders list behavior
+  - COUPANG shipment worksheet read behavior
+  - COUPANG shared claim/status display helpers
+- Remaining issues:
+  - the COUPANG orders page still contains older mixed-language UI copy outside this task's behavioral changes
+  - browser-level manual verification for order `16100182558956` / receiver `민지후` was not run in this task
+- Next work:
+  - manually verify the COUPANG orders and shipment pages show `출고중지 요청` or `출고중지 처리됨` for a live matching order
+  - consider cleaning legacy COUPANG order-page copy so all visible Korean labels are normalized
+- Verification:
+  - passed: `npm run check`
+  - passed: `npx vitest run client/src/lib/coupang-shipment-quick-filters.test.ts`
+  - passed: `npx vitest run --root . server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
+
 ## 2026-04-03 / Bulk-Price Preset Persistence
 
 - Change type:

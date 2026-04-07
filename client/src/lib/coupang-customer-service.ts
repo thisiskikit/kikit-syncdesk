@@ -1,4 +1,5 @@
 import type {
+  CoupangCustomerServiceIssueBreakdownItem,
   CoupangCustomerServiceState,
   CoupangCustomerServiceSummaryItem,
   CoupangOrderRow,
@@ -16,7 +17,56 @@ type CustomerServiceLabelInput = {
   summary: string | null | undefined;
   count: number | null | undefined;
   state?: CoupangCustomerServiceState | null | undefined;
+  breakdown?:
+    | readonly Pick<CoupangCustomerServiceIssueBreakdownItem, "type">[]
+    | null
+    | undefined;
 };
+
+const ISSUE_PRIORITY = [
+  "shipment_stop_requested",
+  "shipment_stop_handled",
+  "cancel",
+  "return",
+  "exchange",
+] as const satisfies readonly CoupangCustomerServiceIssueBreakdownItem["type"][];
+
+function resolvePrimaryIssueType(
+  input: Pick<CustomerServiceLabelInput, "summary" | "breakdown">,
+): CoupangCustomerServiceIssueBreakdownItem["type"] | null {
+  for (const type of ISSUE_PRIORITY) {
+    if (input.breakdown?.some((item) => item.type === type)) {
+      return type;
+    }
+  }
+
+  const normalizedSummary = (input.summary ?? "").trim().toLowerCase();
+  if (!normalizedSummary) {
+    return null;
+  }
+
+  if (normalizedSummary.includes("출고중지 요청")) {
+    return "shipment_stop_requested";
+  }
+
+  if (normalizedSummary.includes("출고중지 처리됨")) {
+    return "shipment_stop_handled";
+  }
+
+  if (normalizedSummary.includes("취소") || normalizedSummary.includes("cancel")) {
+    return "cancel";
+  }
+
+  if (normalizedSummary.includes("반품") || normalizedSummary.includes("return")) {
+    return "return";
+  }
+
+  if (normalizedSummary.includes("교환") || normalizedSummary.includes("exchange")) {
+    return "exchange";
+  }
+
+  return null;
+}
 
 export function hasCoupangCustomerServiceIssue(
   input: Pick<CustomerServiceLabelInput, "summary" | "count">,
@@ -25,6 +75,26 @@ export function hasCoupangCustomerServiceIssue(
   const count = input.count ?? 0;
 
   return Boolean(summary) || count > 0;
+}
+
+export function getCoupangCustomerServiceToneClass(
+  input: Pick<CustomerServiceLabelInput, "summary" | "breakdown">,
+) {
+  const primaryType = resolvePrimaryIssueType(input);
+
+  if (
+    primaryType === "shipment_stop_requested" ||
+    primaryType === "cancel" ||
+    primaryType === "return"
+  ) {
+    return "failed";
+  }
+
+  if (primaryType === "shipment_stop_handled" || primaryType === "exchange") {
+    return "attention";
+  }
+
+  return "attention";
 }
 
 export function formatCoupangCustomerServiceLabel(input: CustomerServiceLabelInput) {

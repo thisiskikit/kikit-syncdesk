@@ -2,6 +2,7 @@ import {
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { hasCoupangCustomerServiceIssue } from "@/lib/coupang-customer-service";
 import { resolveCoupangDisplayOrderStatus } from "@/lib/coupang-order-status";
 
 export type InvoiceStatusCardKey =
@@ -20,6 +21,8 @@ export type OrderStatusCardKey =
   | "DELIVERING"
   | "FINAL_DELIVERY"
   | "NONE_TRACKING"
+  | "SHIPMENT_STOP_REQUESTED"
+  | "SHIPMENT_STOP_HANDLED"
   | "CANCEL"
   | "RETURN"
   | "EXCHANGE";
@@ -60,6 +63,8 @@ const ORDER_STATUS_CARD_VALUE_KEYS = [
   "DELIVERING",
   "FINAL_DELIVERY",
   "NONE_TRACKING",
+  "SHIPMENT_STOP_REQUESTED",
+  "SHIPMENT_STOP_HANDLED",
   "CANCEL",
   "RETURN",
   "EXCHANGE",
@@ -138,6 +143,10 @@ export function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
     hasInvoicePayload(row) &&
     row.invoiceTransmissionStatus !== "pending" &&
     !hasAppliedInvoiceTransmission(row) &&
+    !hasCoupangCustomerServiceIssue({
+      summary: row.customerServiceIssueSummary,
+      count: row.customerServiceIssueCount,
+    }) &&
     (row.availableActions.includes("uploadInvoice") ||
       row.availableActions.includes("updateInvoice"))
   );

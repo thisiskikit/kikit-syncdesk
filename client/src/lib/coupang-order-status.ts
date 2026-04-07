@@ -7,18 +7,24 @@ const COUPANG_ORDER_STATUS_LABELS: Record<string, string> = {
   DELIVERING: "배송중",
   FINAL_DELIVERY: "배송완료",
   NONE_TRACKING: "추적없음",
+  SHIPMENT_STOP_REQUESTED: "출고중지 요청",
+  SHIPMENT_STOP_HANDLED: "출고중지 처리됨",
   CANCEL: "취소",
   RETURN: "반품",
   EXCHANGE: "교환",
 };
 
 const CUSTOMER_SERVICE_STATUS_PRIORITY = [
+  "shipment_stop_requested",
+  "shipment_stop_handled",
   "cancel",
   "return",
   "exchange",
 ] as const satisfies readonly CoupangCustomerServiceIssueBreakdownItem["type"][];
 
 const CUSTOMER_SERVICE_STATUS_CODE_BY_TYPE = {
+  shipment_stop_requested: "SHIPMENT_STOP_REQUESTED",
+  shipment_stop_handled: "SHIPMENT_STOP_HANDLED",
   cancel: "CANCEL",
   return: "RETURN",
   exchange: "EXCHANGE",
@@ -49,6 +55,20 @@ function resolveCustomerServiceStatusFromSummary(summary: string | null | undefi
   const normalizedSummary = (summary ?? "").trim().toLowerCase();
   if (!normalizedSummary) {
     return null;
+  }
+
+  if (
+    normalizedSummary.includes("출고중지 요청") ||
+    normalizedSummary.includes("shipment_stop_requested")
+  ) {
+    return "SHIPMENT_STOP_REQUESTED";
+  }
+
+  if (
+    normalizedSummary.includes("출고중지 처리됨") ||
+    normalizedSummary.includes("shipment_stop_handled")
+  ) {
+    return "SHIPMENT_STOP_HANDLED";
   }
 
   if (normalizedSummary.includes("취소") || normalizedSummary.includes("cancel")) {
@@ -105,11 +125,19 @@ export function getCoupangOrderStatusToneClass(value: string | null | undefined)
     return "success";
   }
 
-  if (normalized === "NONE_TRACKING" || normalized === "EXCHANGE") {
+  if (
+    normalized === "NONE_TRACKING" ||
+    normalized === "EXCHANGE" ||
+    normalized === "SHIPMENT_STOP_HANDLED"
+  ) {
     return "attention";
   }
 
-  if (normalized === "CANCEL" || normalized === "RETURN") {
+  if (
+    normalized === "SHIPMENT_STOP_REQUESTED" ||
+    normalized === "CANCEL" ||
+    normalized === "RETURN"
+  ) {
     return "failed";
   }
 

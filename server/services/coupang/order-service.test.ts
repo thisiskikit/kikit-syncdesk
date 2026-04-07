@@ -104,12 +104,15 @@ function buildReturnReceipt(input: {
   vendorItemId: string;
   cancelType: "RETURN" | "CANCEL";
   productName: string;
+  status?: string;
+  releaseStatus?: string | null;
 }) {
   return {
     receiptId: input.receiptId,
     orderId: input.orderId,
-    status: "RECEIPT",
+    status: input.status ?? "RECEIPT",
     cancelType: input.cancelType,
+    releaseStatus: input.releaseStatus,
     createdAt: "2026-03-26T09:00:00+09:00",
     returnItems: [
       {
@@ -117,6 +120,7 @@ function buildReturnReceipt(input: {
         vendorItemId: input.vendorItemId,
         shipmentBoxId: input.shipmentBoxId,
         cancelCount: 1,
+        releaseStatus: input.releaseStatus,
       },
     ],
   };
@@ -275,6 +279,55 @@ describe("coupang order service", () => {
       customerServiceState: "unknown",
       customerServiceFetchedAt: null,
     });
+  });
+
+  it("includes customer-service lookup when explicitly requested", async () => {
+    mockOrderApi({
+      ordersByStatus: {
+        ACCEPT: [
+          buildOrderSheet({
+            shipmentBoxId: "110",
+            orderId: "O-110",
+            vendorItemId: "V-110",
+            status: "ACCEPT",
+            orderedAt: "2026-03-24T09:00:00+09:00",
+            productName: "Stop Item",
+          }),
+        ],
+      },
+      returns: [],
+      cancels: [
+        buildReturnReceipt({
+          receiptId: "R-110",
+          orderId: "O-110",
+          shipmentBoxId: "110",
+          vendorItemId: "V-110",
+          cancelType: "CANCEL",
+          productName: "Stop Item",
+          status: "RU",
+          releaseStatus: "N",
+        }),
+      ],
+      exchanges: [],
+    });
+
+    const result = await listOrders({
+      storeId: "store-1",
+      status: "ACCEPT",
+      createdAtFrom: "2026-03-20",
+      createdAtTo: "2026-03-25",
+      maxPerPage: 20,
+      includeCustomerService: true,
+    });
+
+    expect(getClaimLookupCalls()).toHaveLength(3);
+    expect(result.items[0]).toMatchObject({
+      customerServiceIssueCount: 1,
+      customerServiceState: "ready",
+    });
+    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "shipment_stop_requested", count: 1 }),
+    ]);
   });
 
   it("merges per-status live order results when no status filter is provided", async () => {
@@ -668,6 +721,61 @@ describe("coupang order service", () => {
       expect.objectContaining({ type: "exchange", count: 1 }),
     ]);
     expect(getClaimLookupCalls()).toHaveLength(3);
+  });
+
+  it("classifies shipment-stop requested and handled cancels separately", async () => {
+    mockOrderApi({
+      returns: [],
+      cancels: [
+        buildReturnReceipt({
+          receiptId: "R-STOP-REQUESTED",
+          orderId: "O-710",
+          shipmentBoxId: "710",
+          vendorItemId: "V-710",
+          cancelType: "CANCEL",
+          productName: "Stop Requested",
+          status: "RELEASE_STOP_UNCHECKED",
+          releaseStatus: "N",
+        }),
+        buildReturnReceipt({
+          receiptId: "R-STOP-HANDLED",
+          orderId: "O-710",
+          shipmentBoxId: "710",
+          vendorItemId: "V-710",
+          cancelType: "CANCEL",
+          productName: "Stop Handled",
+          status: "UC",
+          releaseStatus: "Y",
+        }),
+      ],
+      exchanges: [],
+    });
+
+    const result = await getOrderCustomerServiceSummary({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-22",
+      createdAtTo: "2026-03-27",
+      items: [
+        {
+          rowKey: "710:V-710",
+          orderId: "O-710",
+          shipmentBoxId: "710",
+          vendorItemId: "V-710",
+          sellerProductId: "P-V-710",
+        },
+      ],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      customerServiceIssueCount: 2,
+      customerServiceState: "ready",
+    });
+    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "shipment_stop_requested", count: 1 }),
+      expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
+    ]);
+    expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지 요청");
+    expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지 처리됨");
   });
 
   it("reuses the 10-minute cache for repeated CS summary lookups", async () => {

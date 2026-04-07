@@ -46,6 +46,7 @@ import {
 } from "@/lib/coupang-shipment-quick-filters";
 import {
   formatShipmentWorksheetCustomerServiceLabel,
+  getCoupangCustomerServiceToneClass,
   getCoupangCustomerServiceStateText,
   getShipmentWorksheetCustomerServiceSearchText,
   hasCoupangCustomerServiceIssue,
@@ -231,6 +232,8 @@ const ORDER_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OrderStatusCardK
   { value: "DELIVERING", label: "배송중", toneClassName: "progress" },
   { value: "FINAL_DELIVERY", label: "배송완료", toneClassName: "success" },
   { value: "NONE_TRACKING", label: "추적없음", toneClassName: "attention" },
+  { value: "SHIPMENT_STOP_REQUESTED", label: "출고중지 요청", toneClassName: "danger" },
+  { value: "SHIPMENT_STOP_HANDLED", label: "출고중지 처리됨", toneClassName: "attention" },
   { value: "CANCEL", label: "취소", toneClassName: "danger" },
   { value: "RETURN", label: "반품", toneClassName: "danger" },
   { value: "EXCHANGE", label: "교환", toneClassName: "attention" },
@@ -843,6 +846,51 @@ function getShipmentExcelExportScopeLabel(scope: ShipmentExcelExportScope) {
   return scope === "selected" ? "선택 행" : "미출력건 전체";
 }
 
+function hasShipmentClaimIssue(
+  row: Pick<CoupangShipmentWorksheetRow, "customerServiceIssueSummary" | "customerServiceIssueCount">,
+) {
+  return hasCoupangCustomerServiceIssue({
+    summary: row.customerServiceIssueSummary,
+    count: row.customerServiceIssueCount,
+  });
+}
+
+function getShipmentClaimSummary(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    | "orderStatus"
+    | "customerServiceIssueSummary"
+    | "customerServiceIssueCount"
+    | "customerServiceIssueBreakdown"
+  >,
+) {
+  const summary = (row.customerServiceIssueSummary ?? "").trim();
+  if (summary) {
+    return summary;
+  }
+
+  return formatOrderStatusLabel(resolveWorksheetOrderStatus(row));
+}
+
+function buildInvoiceClaimBlockedDetails(
+  rows: Array<
+    Pick<
+      CoupangShipmentWorksheetRow,
+      | "orderStatus"
+      | "orderId"
+      | "shipmentBoxId"
+      | "customerServiceIssueSummary"
+      | "customerServiceIssueCount"
+      | "customerServiceIssueBreakdown"
+    >
+  >,
+) {
+  return rows.map(
+    (row) =>
+      `주문 ${row.orderId || "-"} / 배송 ${row.shipmentBoxId || "-"} / ${getShipmentClaimSummary(row)}`,
+  );
+}
+
 function sortShipmentRowsForExcelExport(
   rows: readonly CoupangShipmentWorksheetRow[],
   sortKey: ShipmentExcelSortKey,
@@ -888,7 +936,12 @@ function getOrderStatusToneClass(value: string | null | undefined) {
   return getCoupangOrderStatusToneClass(value);
 }
 
-function resolveWorksheetOrderStatus(row: CoupangShipmentWorksheetRow) {
+function resolveWorksheetOrderStatus(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary"
+  >,
+) {
   return resolveCoupangDisplayOrderStatus({
     orderStatus: row.orderStatus,
     customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
@@ -907,6 +960,11 @@ function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
     state: row.customerServiceState,
+    breakdown: row.customerServiceIssueBreakdown,
+  });
+  const customerServiceToneClass = getCoupangCustomerServiceToneClass({
+    summary: row.customerServiceIssueSummary,
+    breakdown: row.customerServiceIssueBreakdown,
   });
   const customerServiceIssueSummary = hasCustomerServiceIssue
     ? formatExportText(row.customerServiceIssueSummary) || null
@@ -923,6 +981,7 @@ function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
     orderLabel,
     orderToneClassName: getOrderStatusToneClass(resolvedOrderStatus),
     customerServiceLabel,
+    customerServiceToneClass,
     customerServiceIssueSummary,
     customerServiceStateText,
     title: title || orderLabel,
@@ -939,7 +998,9 @@ function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
           {presentation.orderLabel}
         </span>
         {presentation.customerServiceLabel ? (
-          <span className="status-pill attention">{presentation.customerServiceLabel}</span>
+          <span className={`status-pill ${presentation.customerServiceToneClass}`}>
+            {presentation.customerServiceLabel}
+          </span>
         ) : null}
       </div>
     </div>
@@ -1262,6 +1323,10 @@ export default function CoupangShipmentsPage() {
   const selectedRows = useMemo(
     () => visibleRows.filter((row) => selectedRowIds.has(row.id)),
     [selectedRowIds, visibleRows],
+  );
+  const selectedInvoiceBlockedRows = useMemo(
+    () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
+    [selectedRows],
   );
   const notExportedRows = useMemo(
     () => draftRows.filter((row) => !row.exportedAt),
@@ -2022,6 +2087,8 @@ export default function CoupangShipmentsPage() {
     }
 
     const sourceRows = scope === "selected" ? selectedRows : invoiceReadyRows;
+    const blockedClaimRows = scope === "selected" ? sourceRows.filter((row) => hasShipmentClaimIssue(row)) : [];
+    const blockedClaimDetails = buildInvoiceClaimBlockedDetails(blockedClaimRows);
     if (!sourceRows.length) {
       setFeedback({
         type: "warning",
@@ -2031,6 +2098,16 @@ export default function CoupangShipmentsPage() {
             ? "선택된 행이 없습니다."
             : "전송할 신규/실패 송장 행이 없습니다. 이미 완료된 행은 값을 수정하면 다시 전송할 수 있습니다.",
         details: [],
+      });
+      return;
+    }
+
+    if (scope === "selected" && blockedClaimRows.length === sourceRows.length) {
+      setFeedback({
+        type: "warning",
+        title: "송장 전송 차단",
+        message: "클레임이 있는 주문은 송장 전송 대상에서 제외됩니다.",
+        details: blockedClaimDetails,
       });
       return;
     }
@@ -2051,6 +2128,10 @@ export default function CoupangShipmentsPage() {
     >();
 
     for (const row of sourceRows) {
+      if (hasShipmentClaimIssue(row)) {
+        continue;
+      }
+
       if (scope === "ready" && !canSendInvoiceRow(row)) {
         continue;
       }
@@ -2124,7 +2205,7 @@ export default function CoupangShipmentsPage() {
         type: "error",
         title: "송장 전송 전 검증 실패",
         message: "전송 가능한 행이 없어 송장 전송을 실행하지 않았습니다.",
-        details: validationErrors,
+        details: [...blockedClaimDetails, ...validationErrors],
       });
       return;
     }
@@ -2137,7 +2218,7 @@ export default function CoupangShipmentsPage() {
           scope === "selected"
             ? "전송 가능한 선택 행이 없습니다."
             : "송장번호와 택배사가 모두 입력된 전송 대상이 없습니다.",
-        details: [],
+        details: blockedClaimDetails,
       });
       return;
     }
@@ -2298,6 +2379,7 @@ export default function CoupangShipmentsPage() {
       const detailLines = [...buildFailureDetails(combined), ...validationErrors].slice(0, 8);
       setFeedback({
         type:
+          blockedClaimDetails.length > 0 ||
           validationErrors.length > 0 ||
           combined.summary.failedCount > 0 ||
           combined.summary.warningCount > 0 ||
@@ -2306,7 +2388,7 @@ export default function CoupangShipmentsPage() {
             : "success",
         title: scope === "selected" ? "송장 전송 결과" : "송장 전송 결과",
         message: summary,
-        details: detailLines,
+        details: [...detailLines, ...blockedClaimDetails].slice(0, 8),
       });
       finishLocalOperation(localToastId, {
         status:
@@ -2744,6 +2826,10 @@ export default function CoupangShipmentsPage() {
             {isFallback ? (
               <div className="muted action-disabled-reason">
                 대체 데이터에서는 송장 전송을 실행할 수 없습니다.
+              </div>
+            ) : selectedInvoiceBlockedRows.length ? (
+              <div className="muted action-disabled-reason">
+                클레임 {selectedInvoiceBlockedRows.length}건은 송장 전송 대상에서 제외됩니다.
               </div>
             ) : null}
           </div>

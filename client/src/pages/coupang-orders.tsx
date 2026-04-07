@@ -15,6 +15,8 @@ import { StatusBadge } from "@/components/status-badge";
 import {
   countRowsWithCustomerServiceIssues,
   countRowsWithUnknownCustomerService,
+  getCoupangCustomerServiceToneClass,
+  hasCoupangCustomerServiceIssue,
   mergeCoupangOrderCustomerServiceSummary,
 } from "@/lib/coupang-customer-service";
 import {
@@ -133,6 +135,43 @@ function resolveOrderDisplayStatus(
   });
 }
 
+function hasOrderClaimIssue(
+  row: Pick<CoupangOrderRow, "customerServiceIssueSummary" | "customerServiceIssueCount">,
+) {
+  return hasCoupangCustomerServiceIssue({
+    summary: row.customerServiceIssueSummary,
+    count: row.customerServiceIssueCount,
+  });
+}
+
+function getOrderClaimSummary(
+  row: Pick<
+    CoupangOrderRow,
+    "status" | "orderId" | "shipmentBoxId" | "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  >,
+) {
+  const summary = (row.customerServiceIssueSummary ?? "").trim();
+  if (summary) {
+    return summary;
+  }
+
+  return formatStatus(resolveOrderDisplayStatus(row));
+}
+
+function buildPrepareBlockedDetails(
+  rows: Array<
+    Pick<
+      CoupangOrderRow,
+      "status" | "orderId" | "shipmentBoxId" | "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+    >
+  >,
+) {
+  return rows.map(
+    (row) =>
+      `주문 ${row.orderId} / 배송 ${row.shipmentBoxId} / ${getOrderClaimSummary(row)}`,
+  );
+}
+
 /*
 function formatCurrency(value: number | null | undefined) {
   return value == null ? "-" : `${formatNumber(value)}원`;
@@ -212,7 +251,12 @@ export default function CoupangOrdersPage() {
   const visibleItems = allItems.filter((row) => matchesQuery(row, deferredQuery.trim().toLowerCase()));
   const detailRow = allItems.find((row) => row.id === detailRowId) ?? null;
   const selectedRows = allItems.filter((row) => selectedRowIds.has(row.id));
-  const prepareReadyRows = selectedRows.filter((row) => row.availableActions.includes("markPreparing"));
+  const prepareBlockedRows = selectedRows.filter(
+    (row) => row.availableActions.includes("markPreparing") && hasOrderClaimIssue(row),
+  );
+  const prepareReadyRows = selectedRows.filter(
+    (row) => row.availableActions.includes("markPreparing") && !hasOrderClaimIssue(row),
+  );
   const customerServiceRows = countRowsWithCustomerServiceIssues(visibleItems);
   const unknownCustomerServiceRows = countRowsWithUnknownCustomerService(visibleItems);
   const detailQuery = useQuery({
@@ -280,7 +324,22 @@ export default function CoupangOrdersPage() {
   }
 
   async function executePrepareSelected() {
-    if (!filters.selectedStoreId || !prepareReadyRows.length) return;
+    if (!filters.selectedStoreId) return;
+    const blockedDetails = buildPrepareBlockedDetails(prepareBlockedRows);
+    if (!prepareReadyRows.length) {
+      if (!blockedDetails.length) {
+        return;
+      }
+
+      setFeedback({
+        type: "warning",
+        title: "상품준비중 처리 차단",
+        message: "클레임이 있는 주문은 상품준비중 처리 대상에서 제외됩니다.",
+        details: blockedDetails,
+      });
+      return;
+    }
+
     setBusyAction("prepare");
     setFeedback(null);
     try {
@@ -294,10 +353,16 @@ export default function CoupangOrdersPage() {
         })),
       });
       setFeedback({
-        type: result.summary.failedCount || result.summary.warningCount || result.summary.skippedCount ? "warning" : "success",
+        type:
+          blockedDetails.length ||
+          result.summary.failedCount ||
+          result.summary.warningCount ||
+          result.summary.skippedCount
+            ? "warning"
+            : "success",
         title: "상품준비중 처리 결과",
         message: buildBatchSummary(result),
-        details: buildBatchFailureDetails(result),
+        details: [...buildBatchFailureDetails(result), ...blockedDetails],
       });
       await refreshOrders();
     } catch (error) {
@@ -382,9 +447,20 @@ export default function CoupangOrdersPage() {
               <thead><tr><th style={{ width: 48 }}><input type="checkbox" checked={visibleItems.length > 0 && visibleItems.every((row) => selectedRowIds.has(row.id))} onChange={(event) => setSelectedRowIds((current) => { const next = new Set(current); visibleItems.forEach((row) => event.target.checked ? next.add(row.id) : next.delete(row.id)); return next; })} /></th><th>주문</th><th>상품</th><th>상태</th><th>금액</th><th>수령 / 배송</th><th>작업</th></tr></thead>
               <tbody>
                 {visibleItems.map((item) => {
-                  const csLabel = formatCoupangCustomerServiceLabel({ summary: item.customerServiceIssueSummary, count: item.customerServiceIssueCount, state: item.customerServiceState });
+                  const resolvedStatus = resolveOrderDisplayStatus(item);
+                  const hasClaimIssue = hasOrderClaimIssue(item);
+                  const csLabel = formatCoupangCustomerServiceLabel({
+                    summary: item.customerServiceIssueSummary,
+                    count: item.customerServiceIssueCount,
+                    state: item.customerServiceState,
+                    breakdown: item.customerServiceIssueBreakdown,
+                  });
+                  const csToneClass = getCoupangCustomerServiceToneClass({
+                    summary: item.customerServiceIssueSummary,
+                    breakdown: item.customerServiceIssueBreakdown,
+                  });
                   return (
-                    <tr key={item.id}>
+                    <tr key={item.id} className={hasClaimIssue ? `order-row-${csToneClass}` : undefined} title={formatStatus(resolvedStatus)}>
                       <td><input type="checkbox" checked={selectedRowIds.has(item.id)} onChange={(event) => setSelectedRowIds((current) => { const next = new Set(current); event.target.checked ? next.add(item.id) : next.delete(item.id); return next; })} /></td>
                       <td><div><strong>{item.orderId}</strong></div><div className="muted">배송번호 {item.shipmentBoxId}</div><div className="muted">주문일 {formatDate(item.orderedAt)}</div></td>
                       <td><div><strong>{item.productName}</strong></div><div className="muted">{item.optionName ?? "-"}</div><div className="muted">{formatTicketText(item.sellerProductName)} / {formatTicketText(item.vendorItemId)}</div></td>

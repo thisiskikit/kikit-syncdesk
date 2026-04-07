@@ -83,6 +83,7 @@ export const listOrdersHandler: RequestHandler = async (req, res) => {
         status: typeof req.query.status === "string" ? req.query.status : undefined,
         nextToken: typeof req.query.nextToken === "string" ? req.query.nextToken : null,
         maxPerPage: parsePositiveInteger(req.query.maxPerPage, 20),
+        includeCustomerService: true,
       }),
     );
   } catch (error) {

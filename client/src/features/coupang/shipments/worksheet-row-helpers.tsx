@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { getInvoiceStatusCardKey } from "@/lib/coupang-shipment-quick-filters";
 import {
   formatShipmentWorksheetCustomerServiceLabel,
+  getCoupangCustomerServiceToneClass,
   getCoupangCustomerServiceStateText,
   getShipmentWorksheetCustomerServiceSearchText,
   hasCoupangCustomerServiceIssue,
@@ -482,7 +483,12 @@ function getOrderStatusToneClass(value: string | null | undefined) {
   return getCoupangOrderStatusToneClass(value);
 }
 
-function resolveWorksheetOrderStatus(row: CoupangShipmentWorksheetRow) {
+function resolveWorksheetOrderStatus(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary"
+  >,
+) {
   return resolveCoupangDisplayOrderStatus({
     orderStatus: row.orderStatus,
     customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
@@ -501,6 +507,11 @@ export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow)
     summary: row.customerServiceIssueSummary,
     count: row.customerServiceIssueCount,
     state: row.customerServiceState,
+    breakdown: row.customerServiceIssueBreakdown,
+  });
+  const customerServiceToneClass = getCoupangCustomerServiceToneClass({
+    summary: row.customerServiceIssueSummary,
+    breakdown: row.customerServiceIssueBreakdown,
   });
   const customerServiceIssueSummary = hasCustomerServiceIssue
     ? formatExportText(row.customerServiceIssueSummary) || null
@@ -517,6 +528,7 @@ export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow)
     orderLabel,
     orderToneClassName: getOrderStatusToneClass(resolvedOrderStatus),
     customerServiceLabel,
+    customerServiceToneClass,
     customerServiceIssueSummary,
     customerServiceStateText,
     title: title || orderLabel,
@@ -533,7 +545,9 @@ export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
           {presentation.orderLabel}
         </span>
         {presentation.customerServiceLabel ? (
-          <span className="status-pill attention">{presentation.customerServiceLabel}</span>
+          <span className={`status-pill ${presentation.customerServiceToneClass}`}>
+            {presentation.customerServiceLabel}
+          </span>
         ) : null}
       </div>
     </div>

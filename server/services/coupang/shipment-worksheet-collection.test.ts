@@ -5,6 +5,7 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 const {
   getStoreMock,
   listOrdersMock,
+  getOrderCustomerServiceSummaryMock,
   getOrderDetailMock,
   markPreparingMock,
   getProductDetailMock,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
   listOrdersMock: vi.fn(),
+  getOrderCustomerServiceSummaryMock: vi.fn(),
   getOrderDetailMock: vi.fn(),
   markPreparingMock: vi.fn(),
   getProductDetailMock: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("./settings-store", () => ({
 
 vi.mock("./order-service", () => ({
   listOrders: listOrdersMock,
+  getOrderCustomerServiceSummary: getOrderCustomerServiceSummaryMock,
   getOrderDetail: getOrderDetailMock,
   markPreparing: markPreparingMock,
 }));
@@ -43,7 +46,7 @@ vi.mock("./shipment-worksheet-store", () => ({
   },
 }));
 
-import { collectShipmentWorksheet } from "./shipment-worksheet-service";
+import { collectShipmentWorksheet, getShipmentWorksheet } from "./shipment-worksheet-service";
 
 function buildStore() {
   return {
@@ -244,6 +247,11 @@ describe("coupang shipment worksheet collection", () => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
     getStoreSheetMock.mockResolvedValue(buildEmptySheet());
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
     getOrderDetailMock.mockResolvedValue({
       item: null,
       source: "live",
@@ -616,6 +624,75 @@ describe("coupang shipment worksheet collection", () => {
       customerServiceIssueSummary: "Cancel 1 / Return 1",
       customerServiceState: "stale",
       customerServiceFetchedAt: "2026-03-26T10:15:00.000Z",
+    });
+  });
+
+  it("refreshes stale or unknown customer-service rows when reading the worksheet", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      ...buildEmptySheet(),
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "563",
+          orderId: "O-563",
+          vendorItemId: "V-563",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "Old claim",
+          customerServiceIssueBreakdown: [{ type: "cancel", count: 1, label: "취소 1건" }],
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:15:00.000Z",
+        }),
+      ],
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: "INSTRUCT",
+      },
+      syncSummary: {
+        mode: "incremental",
+        fetchedCount: 1,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedHydrationCount: 0,
+        autoExpanded: false,
+        fetchCreatedAtFrom: "2026-03-25",
+        fetchCreatedAtTo: "2026-03-26",
+        statusFilter: "INSTRUCT",
+      },
+    });
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [
+        {
+          rowKey: "563:V-563",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "출고중지 요청 1건",
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+          ],
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+        },
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await getShipmentWorksheet("store-1");
+
+    expect(getOrderCustomerServiceSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-02-24",
+        createdAtTo: "2026-03-26",
+      }),
+    );
+    expect(setStoreSheetMock).toHaveBeenCalledTimes(1);
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "563",
+      customerServiceIssueSummary: "출고중지 요청 1건",
+      customerServiceState: "ready",
+      customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
     });
   });
 

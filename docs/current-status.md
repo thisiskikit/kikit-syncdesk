@@ -1,6 +1,6 @@
 # Current Status
 
-- Snapshot date: 2026-04-03
+- Snapshot date: 2026-04-07
 - Purpose: establish a baseline documentation snapshot from the current repository state.
 - Verification scope: code inspection only.
 - Verified files:
@@ -19,8 +19,20 @@
   - `client/src/features/coupang/bulk-price/state.ts`
   - `server/routes/ui-state.ts`
   - `server/stores/work-data-ui-state-store.ts`
+- Latest verified files for COUPANG claim-aware orders and shipments:
+  - `shared/coupang.ts`
+  - `server/http/handlers/coupang/orders.ts`
+  - `server/services/coupang/customer-service-issues.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `client/src/lib/coupang-customer-service.ts`
+  - `client/src/lib/coupang-order-status.ts`
+  - `client/src/lib/coupang-shipment-quick-filters.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/pages/coupang-orders.tsx`
 - Verified in the latest change:
   - `npm run check`
+  - `npx vitest run client/src/lib/coupang-shipment-quick-filters.test.ts`
+  - `npx vitest run --root . server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
 - Not run in this task:
   - `npm run test`
   - `npm run build`
@@ -32,6 +44,7 @@
 | App shell | Active | `client/src/App.tsx` | Top navigation, workspace tabs, operations toaster, and route switching are wired. |
 | NAVER workspace | Mostly active | `client/src/App.tsx` | Products, bulk price, orders, shipment, claims, inquiries, settlements, stats, seller info, and logs are connected. `Product Edit` and `Grouped Products` still render placeholder pages. |
 | COUPANG workspace | Active | `client/src/App.tsx` | Connection, logistics, products, product edit, bulk price, library, control, orders, shipments, cancel/refunds, returns, exchanges, inquiries, coupons, settlements, rocket growth, and logs are connected. |
+| COUPANG claim-aware order and shipment blocking | Active | `client/src/pages/coupang-orders.tsx`, `client/src/features/coupang/shipments/page.tsx`, `server/services/coupang/customer-service-issues.ts`, `server/services/coupang/shipment-worksheet-service.ts` | Orders now load CS/claim data by default, shipment-stop requested/handled states are surfaced in shared status helpers, stale worksheet claim state is refreshed on read, and claim-bearing rows are excluded from preparing and invoice transmission actions. |
 | Shared Draft / Runs engine | Active with mixed persistence | `client/src/App.tsx`, `server/storage.ts` | Catalog, drafts, runs, and field sync routes exist, but shared engine runtime storage is still in memory. |
 | Settings / Operations | Active | `client/src/App.tsx`, `server/routes.ts` | Settings hub, channel connection settings, operation center, logs, and UI state APIs are mounted. |
 | PostgreSQL-backed work data | Active when `DATABASE_URL` exists | `server/services/shared/work-data-db.ts`, `shared/schema.ts` | Settings, logs, shipment worksheets, field sync, library, and bulk price tables are provisioned here. |
@@ -63,6 +76,11 @@
   - `naver.bulk-price.ui` now stores preset accordion state, preview filter state, selected preset IDs, and preset name/memo draft values
   - `coupang.bulk-price.ui` now stores preset accordion state, preview filter state, selected preset IDs, and preset name/memo draft values
   - preset selections are cleared only after the preset list query confirms the saved preset no longer exists
+- COUPANG claim-aware orders and shipments:
+  - `GET /api/coupang/orders` now requests customer-service lookup by default instead of returning only unknown CS state
+  - shipment-stop requested and shipment-stop handled claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
+  - shipment worksheet reads refresh claim state when saved rows are stale or unknown, without requiring a full recollect
+  - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
 - NAVER bulk price preview behavior:
   - preview sessions and refresh jobs are kept in memory
   - preview cache TTL defaults to 5 minutes
@@ -73,10 +91,13 @@
 
 - Change content:
   - kept the baseline snapshot and updated it to reflect persistent bulk-price preset draft state for NAVER and COUPANG
+  - added a new verified snapshot for COUPANG claim-aware order and shipment handling
 - Reason:
   - preset lists were already stored durably, but selected preset IDs and name/memo editor fields were local-only and appeared to reset after refresh
+  - COUPANG operators needed earlier visibility for shipment-stop, cancel, return, and exchange claims before executing preparing or invoice actions
 - Impact scope:
   - UI persistence behavior changed for NAVER and COUPANG bulk-price preset editors
+  - COUPANG order status display, worksheet read behavior, and action eligibility now depend on claim-aware CS lookup
   - no new API endpoints or DB tables were added
 
 ## Remaining Issues

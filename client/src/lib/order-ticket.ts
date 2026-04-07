@@ -1,3 +1,4 @@
+import type { CoupangCustomerServiceIssueType } from "@shared/coupang";
 import { formatCoupangCustomerServiceLabel as formatCoupangCustomerServiceLabelValue } from "./coupang-customer-service";
 
 export function formatTicketText(value: string | null | undefined) {
@@ -14,6 +15,7 @@ export function formatCoupangCustomerServiceLabel(input: {
   summary: string | null | undefined;
   count: number | null | undefined;
   state?: "unknown" | "ready" | "stale" | null | undefined;
+  breakdown?: { type: CoupangCustomerServiceIssueType }[] | null | undefined;
 }) {
   return formatCoupangCustomerServiceLabelValue(input);
 }

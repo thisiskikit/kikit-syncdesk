@@ -616,6 +616,23 @@ function resolveSyncPlan(
   };
 }
 
+function buildReadCustomerServiceSyncPlan(currentSheet: WorksheetStoreSheet): ShipmentWorksheetSyncPlan {
+  const syncState = currentSheet.syncState ?? createEmptySyncState();
+  const syncSummary = currentSheet.syncSummary;
+
+  return {
+    mode: DEFAULT_SYNC_MODE,
+    autoExpanded: false,
+    fetchCreatedAtFrom:
+      syncSummary?.fetchCreatedAtFrom ??
+      syncState.coveredCreatedAtFrom ??
+      offsetSeoulDateOnly(-30),
+    fetchCreatedAtTo:
+      syncSummary?.fetchCreatedAtTo ?? syncState.coveredCreatedAtTo ?? formatSeoulDateOnly(new Date()),
+    statusFilter: syncSummary?.statusFilter ?? syncState.lastStatusFilter,
+  };
+}
+
 function shouldHydrateOrderRow(
   row: CoupangOrderRow,
   currentRow: CoupangShipmentWorksheetRow | undefined,
@@ -1105,9 +1122,40 @@ function decorateWorksheetRowCustomerServiceState(
 
 export async function getShipmentWorksheet(storeId: string) {
   const store = await getStoreOrThrow(storeId);
-  const sheet = await coupangShipmentWorksheetStore.getStoreSheet(storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(storeId);
+  const nowIso = new Date().toISOString();
+  const needsCustomerServiceRefresh = currentSheet.items.some((row) => {
+    const state = resolveWorksheetCustomerServiceState(normalizeWorksheetRow(row), nowIso);
+    return state.customerServiceState !== "ready";
+  });
 
-  return buildWorksheetResponse(store, sheet);
+  if (!needsCustomerServiceRefresh) {
+    return buildWorksheetResponse(store, currentSheet);
+  }
+
+  const refreshed = await refreshWorksheetCustomerServiceStatuses({
+    storeId,
+    rows: currentSheet.items.map(normalizeWorksheetRow),
+    syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
+  });
+  const hasRowChanges = refreshed.rows.some((row, index) =>
+    hasWorksheetRowChanged(currentSheet.items[index], row),
+  );
+  const nextMessage = normalizeLegacyWorksheetMessage(refreshed.message ?? currentSheet.message);
+  const messageChanged = nextMessage !== normalizeLegacyWorksheetMessage(currentSheet.message);
+
+  if (!hasRowChanges && !messageChanged) {
+    return buildWorksheetResponse(store, currentSheet, refreshed.message);
+  }
+
+  const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+    ...currentSheet,
+    storeId,
+    items: refreshed.rows,
+    message: refreshed.message ?? currentSheet.message,
+  });
+
+  return buildWorksheetResponse(store, sheet, refreshed.message);
 }
 
 export async function getShipmentWorksheetDetail(input: {

@@ -154,6 +154,49 @@ describe("buildShipmentQuickFilterResult", () => {
     ).toBe("RETURN");
   });
 
+  it("prioritizes shipment-stop issues over the base order status", () => {
+    expect(
+      getOrderStatusCardKey(
+        createRow({
+          orderStatus: "INSTRUCT",
+          customerServiceIssueSummary: null,
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+          ],
+        }),
+      ),
+    ).toBe("SHIPMENT_STOP_REQUESTED");
+  });
+
+  it("excludes claim rows from invoice-ready rows", () => {
+    const result = buildShipmentQuickFilterResult(
+      [
+        createRow({
+          id: "claim-blocked",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "111",
+          customerServiceIssueSummary: "출고중지 요청 1건",
+          customerServiceIssueCount: 1,
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+          ],
+        }),
+        createRow({
+          id: "ready-row",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "222",
+        }),
+      ],
+      {
+        invoiceStatusCard: "all",
+        orderStatusCard: "all",
+        outputStatusCard: "all",
+      },
+    );
+
+    expect(result.invoiceReadyRows.map((row) => row.id)).toEqual(["ready-row"]);
+  });
+
   it("uses opposite-group facet rows for each card count", () => {
     const rows = [
       createRow({
