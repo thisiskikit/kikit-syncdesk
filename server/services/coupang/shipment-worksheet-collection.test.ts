@@ -627,7 +627,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("refreshes stale or unknown customer-service rows when reading the worksheet", async () => {
+  it("refreshes worksheet customer-service rows with a forced live lookup when reading the worksheet", async () => {
     getStoreSheetMock.mockResolvedValue({
       ...buildEmptySheet(),
       items: [
@@ -685,12 +685,80 @@ describe("coupang shipment worksheet collection", () => {
         storeId: "store-1",
         createdAtFrom: "2026-02-24",
         createdAtTo: "2026-03-26",
+        forceRefresh: true,
       }),
     );
     expect(setStoreSheetMock).toHaveBeenCalledTimes(1);
     expect(result.items[0]).toMatchObject({
       shipmentBoxId: "563",
       customerServiceIssueSummary: "출고중지 요청 1건",
+      customerServiceState: "ready",
+      customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+    });
+  });
+
+  it("refreshes even recently ready customer-service rows when reading the worksheet", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      ...buildEmptySheet(),
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "564",
+          orderId: "O-564",
+          vendorItemId: "V-564",
+          customerServiceIssueCount: 0,
+          customerServiceIssueSummary: null,
+          customerServiceIssueBreakdown: [],
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:28:00.000Z",
+        }),
+      ],
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: "INSTRUCT",
+      },
+      syncSummary: {
+        mode: "incremental",
+        fetchedCount: 1,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedHydrationCount: 0,
+        autoExpanded: false,
+        fetchCreatedAtFrom: "2026-03-25",
+        fetchCreatedAtTo: "2026-03-26",
+        statusFilter: "INSTRUCT",
+      },
+    });
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [
+        {
+          rowKey: "564:V-564",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "諛섑뭹 1嫄?",
+          customerServiceIssueBreakdown: [
+            { type: "return", count: 1, label: "諛섑뭹 1嫄?" },
+          ],
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+        },
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await getShipmentWorksheet("store-1");
+
+    expect(getOrderCustomerServiceSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        forceRefresh: true,
+      }),
+    );
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "564",
+      customerServiceIssueSummary: "諛섑뭹 1嫄?",
       customerServiceState: "ready",
       customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
     });

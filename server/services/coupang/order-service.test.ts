@@ -923,6 +923,50 @@ describe("coupang order service", () => {
     expect(getClaimLookupCalls()).toHaveLength(3);
   });
 
+  it("bypasses the CS summary cache when forceRefresh is requested", async () => {
+    mockOrderApi({
+      returns: [
+        buildReturnReceipt({
+          receiptId: "R-CACHE-1",
+          orderId: "O-735",
+          shipmentBoxId: "735",
+          vendorItemId: "V-735",
+          cancelType: "RETURN",
+          productName: "Cache Refresh Item",
+        }),
+      ],
+      cancels: [],
+      exchanges: [],
+    });
+
+    const input = {
+      storeId: "store-1",
+      createdAtFrom: "2026-03-24",
+      createdAtTo: "2026-03-28",
+      items: [
+        {
+          rowKey: "735:V-735",
+          orderId: "O-735",
+          shipmentBoxId: "735",
+          vendorItemId: "V-735",
+          sellerProductId: "P-V-735",
+        },
+      ],
+    } as const;
+
+    const first = await getOrderCustomerServiceSummary(input);
+    const second = await getOrderCustomerServiceSummary({
+      ...input,
+      forceRefresh: true,
+    });
+
+    expect(first.source).toBe("live");
+    expect(second.source).toBe("live");
+    expect(second.servedFromCache).toBe(false);
+    expect(second.cacheState).toBe("live");
+    expect(getClaimLookupCalls()).toHaveLength(6);
+  });
+
   it("does not poison the CS cache when a lookup fails", async () => {
     mockOrderApi({
       exchangeError: new Error("claim lookup down"),

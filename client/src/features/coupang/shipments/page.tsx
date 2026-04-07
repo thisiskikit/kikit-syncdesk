@@ -1288,6 +1288,8 @@ export default function CoupangShipmentsPage() {
     queryFn: () =>
       getJson<CoupangShipmentWorksheetResponse>(buildWorksheetUrl(filters.selectedStoreId)),
     enabled: Boolean(filters.selectedStoreId),
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
   });
 
   useEffect(() => {

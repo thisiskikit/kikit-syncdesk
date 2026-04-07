@@ -82,9 +82,9 @@
   - `GET /api/coupang/orders` now requests customer-service lookup by default instead of returning only unknown CS state
   - shipment-stop requested and shipment-stop completed claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
   - completed cancel rows can now be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals instead of only the request-status set
-  - shipment worksheet reads refresh claim state when saved rows are stale or unknown, without requiring a full recollect
+  - shipment worksheet reads now force a fresh claim lookup even for recently `ready` rows, so the list can surface newly arrived return/cancel/shipment-stop claims before the user opens the detail popup
   - shipment worksheet detail responses now synthesize claim summary fields from live return/exchange lookups so the detail status box can override `상품준비중` immediately when the popup confirms a claim
-  - the shipment detail popup now prefers detail-derived CS summary/state over persisted row values and patches the local worksheet cache so the list and popup stay aligned in the same session
+  - the shipment page refetches the worksheet on mount and window refocus, and the shipment detail popup prefers detail-derived CS summary/state over persisted row values while patching the local worksheet cache so the list and popup stay aligned in the same session
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
 - NAVER bulk price preview behavior:
   - preview sessions and refresh jobs are kept in memory

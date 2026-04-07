@@ -718,6 +718,7 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
   storeId: string;
   rows: CoupangShipmentWorksheetRow[];
   syncPlan: ShipmentWorksheetSyncPlan;
+  forceRefresh?: boolean;
 }) {
   if (!input.rows.length) {
     return {
@@ -734,6 +735,7 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
       storeId: input.storeId,
       createdAtFrom: createdAtFrom ?? offsetSeoulDateOnly(-30),
       createdAtTo,
+      forceRefresh: input.forceRefresh,
       items: input.rows.map((row) => ({
         rowKey: row.id,
         orderId: row.orderId,
@@ -1152,13 +1154,7 @@ function decorateWorksheetRowCustomerServiceState(
 export async function getShipmentWorksheet(storeId: string) {
   const store = await getStoreOrThrow(storeId);
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(storeId);
-  const nowIso = new Date().toISOString();
-  const needsCustomerServiceRefresh = currentSheet.items.some((row) => {
-    const state = resolveWorksheetCustomerServiceState(normalizeWorksheetRow(row), nowIso);
-    return state.customerServiceState !== "ready";
-  });
-
-  if (!needsCustomerServiceRefresh) {
+  if (!currentSheet.items.length) {
     return buildWorksheetResponse(store, currentSheet);
   }
 
@@ -1166,6 +1162,7 @@ export async function getShipmentWorksheet(storeId: string) {
     storeId,
     rows: currentSheet.items.map(normalizeWorksheetRow),
     syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
+    forceRefresh: true,
   });
   const hasRowChanges = refreshed.rows.some((row, index) =>
     hasWorksheetRowChanged(currentSheet.items[index], row),

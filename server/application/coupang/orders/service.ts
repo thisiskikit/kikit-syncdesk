@@ -382,6 +382,7 @@ async function loadCustomerServiceLookup(input: {
   storeId: string;
   createdAtFrom?: string;
   createdAtTo?: string;
+  forceRefresh?: boolean;
 }): Promise<CustomerServiceLookupResult> {
   const normalizedInput = {
     storeId: input.storeId,
@@ -391,7 +392,7 @@ async function loadCustomerServiceLookup(input: {
   const cacheKey = buildCustomerServiceLookupCacheKey(normalizedInput);
   const cached = customerServiceLookupCache.get(cacheKey) ?? null;
 
-  if (cached && isFreshCustomerServiceLookup(cached)) {
+  if (!input.forceRefresh && cached && isFreshCustomerServiceLookup(cached)) {
     return {
       source: "live",
       servedFromCache: true,
@@ -2096,6 +2097,7 @@ export async function getOrderCustomerServiceSummary(input: {
   createdAtFrom?: string;
   createdAtTo?: string;
   items: CoupangCustomerServiceSummaryRequestItem[];
+  forceRefresh?: boolean;
 }) {
   const store = await getStoreOrThrow(input.storeId);
 
@@ -2115,6 +2117,7 @@ export async function getOrderCustomerServiceSummary(input: {
     storeId: input.storeId,
     createdAtFrom: input.createdAtFrom,
     createdAtTo: input.createdAtTo ?? formatSeoulDate(new Date()),
+    forceRefresh: input.forceRefresh,
   });
 
   if (lookupResult.source !== "live" || !lookupResult.lookup) {
