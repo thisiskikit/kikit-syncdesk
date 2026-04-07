@@ -1152,6 +1152,10 @@ export interface CoupangShipmentWorksheetDetail {
   returnDetails: CoupangReturnDetail[];
   exchanges: CoupangExchangeRow[];
   exchangeDetails: CoupangExchangeDetail[];
+  customerServiceIssueCount: number;
+  customerServiceIssueSummary: string | null;
+  customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
+  customerServiceState: CoupangCustomerServiceState;
   claimLookupCreatedAtFrom: string | null;
   claimLookupCreatedAtTo: string | null;
 }

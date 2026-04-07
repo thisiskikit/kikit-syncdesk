@@ -31,8 +31,10 @@
   - `client/src/pages/coupang-orders.tsx`
 - Verified in the latest change:
   - `npm run check`
+  - `npx vitest run client/src/lib/coupang-customer-service.test.ts`
   - `npx vitest run client/src/lib/coupang-shipment-quick-filters.test.ts`
   - `npx vitest run --root . server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-detail.test.ts`
 - Not run in this task:
   - `npm run test`
   - `npm run build`
@@ -81,6 +83,8 @@
   - shipment-stop requested and shipment-stop completed claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
   - completed cancel rows can now be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals instead of only the request-status set
   - shipment worksheet reads refresh claim state when saved rows are stale or unknown, without requiring a full recollect
+  - shipment worksheet detail responses now synthesize claim summary fields from live return/exchange lookups so the detail status box can override `상품준비중` immediately when the popup confirms a claim
+  - the shipment detail popup now prefers detail-derived CS summary/state over persisted row values and patches the local worksheet cache so the list and popup stay aligned in the same session
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
 - NAVER bulk price preview behavior:
   - preview sessions and refresh jobs are kept in memory

@@ -364,6 +364,12 @@ describe("getShipmentWorksheetDetail", () => {
     expect(result.item.returnDetails).toHaveLength(1);
     expect(result.item.exchanges).toHaveLength(1);
     expect(result.item.exchangeDetails).toHaveLength(1);
+    expect(result.item.customerServiceIssueCount).toBe(2);
+    expect(result.item.customerServiceState).toBe("ready");
+    expect(result.item.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "return", count: 1 }),
+      expect.objectContaining({ type: "exchange", count: 1 }),
+    ]);
   });
 
   it("filters claims to the selected worksheet row instead of returning the whole order CS history", async () => {
@@ -466,10 +472,57 @@ describe("getShipmentWorksheetDetail", () => {
     expect(result.item.returnDetails).toEqual([]);
     expect(result.item.exchanges).toEqual([]);
     expect(result.item.exchangeDetails).toEqual([]);
+    expect(result.item.customerServiceIssueCount).toBe(0);
+    expect(result.item.customerServiceIssueSummary).toBeNull();
+    expect(result.item.customerServiceIssueBreakdown).toEqual([]);
+    expect(result.item.customerServiceState).toBe("unknown");
     expect(result.message).toContain("order fallback");
     expect(result.message).toContain("returns fallback");
     expect(result.message).toContain("exchanges fallback");
     expect(getReturnDetailMock).not.toHaveBeenCalled();
     expect(getExchangeDetailMock).not.toHaveBeenCalled();
+  });
+
+  it("builds detail CS summary from live claim rows even when order detail falls back", async () => {
+    const returnRow = buildReturnRow();
+
+    getOrderDetailMock.mockResolvedValue({
+      item: buildOrderDetail(),
+      source: "fallback",
+      message: "order fallback",
+    });
+    listReturnsMock.mockResolvedValue({
+      items: [returnRow],
+      source: "live",
+      message: null,
+    });
+    getReturnDetailMock.mockResolvedValue({
+      item: buildReturnDetail(),
+      source: "live",
+      message: null,
+    });
+    listExchangesMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+
+    const result = await getShipmentWorksheetDetail({
+      storeId: "store-1",
+      shipmentBoxId: "100",
+      orderId: "O-100",
+      orderedAtRaw: "2026-03-20T09:00:00+09:00",
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.item.orderDetail).toBeNull();
+    expect(result.item.returns).toHaveLength(1);
+    expect(result.item.returnDetails).toHaveLength(1);
+    expect(result.item.customerServiceIssueCount).toBe(1);
+    expect(result.item.customerServiceState).toBe("ready");
+    expect(result.item.customerServiceIssueBreakdown).toEqual([
+      expect.objectContaining({ type: "return", count: 1 }),
+    ]);
+    expect(result.item.customerServiceIssueSummary).toContain("반품");
   });
 });

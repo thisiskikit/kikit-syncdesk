@@ -24,6 +24,7 @@ import {
   listReturns,
   markPreparing,
 } from "./order-service";
+import { buildCoupangCustomerServiceIssueState } from "./customer-service-issues";
 import { getProductDetail } from "./product-service";
 import { coupangSettingsStore } from "./settings-store";
 import {
@@ -1110,6 +1111,34 @@ function matchesExchangeRequestToCustomerServiceTarget(
   return true;
 }
 
+function buildShipmentWorksheetDetailCustomerServiceState(input: {
+  orderDetail: Pick<CoupangOrderDetail, "relatedReturnRequests" | "relatedExchangeRequests"> | null;
+  returns: CoupangReturnRow[];
+  exchanges: CoupangExchangeRow[];
+  hasLiveReturns: boolean;
+  hasLiveExchanges: boolean;
+}) {
+  const relatedReturnRequests =
+    input.hasLiveReturns || input.returns.length > 0
+      ? input.returns
+      : input.orderDetail?.relatedReturnRequests ?? [];
+  const relatedExchangeRequests =
+    input.hasLiveExchanges || input.exchanges.length > 0
+      ? input.exchanges
+      : input.orderDetail?.relatedExchangeRequests ?? [];
+  const issueState = buildCoupangCustomerServiceIssueState({
+    relatedReturnRequests,
+    relatedExchangeRequests,
+  });
+  const hasReliableNoClaimSnapshot = input.hasLiveReturns && input.hasLiveExchanges;
+
+  return {
+    ...issueState,
+    customerServiceState:
+      hasReliableNoClaimSnapshot || issueState.customerServiceIssueCount > 0 ? "ready" : "unknown",
+  } as const;
+}
+
 function decorateWorksheetRowCustomerServiceState(
   row: CoupangShipmentWorksheetRow,
   nowIso: string,
@@ -1225,6 +1254,13 @@ export async function getShipmentWorksheetDetail(input: {
           matchesExchangeRequestToCustomerServiceTarget(claimMatchTarget, row),
         )
       : [];
+  const detailCustomerServiceState = buildShipmentWorksheetDetailCustomerServiceState({
+    orderDetail,
+    returns,
+    exchanges,
+    hasLiveReturns: returnsResponse.source === "live",
+    hasLiveExchanges: exchangesResponse.source === "live",
+  });
   const returnDetailResults = await mapWithConcurrency(returns, 3, async (row) => {
     try {
       const response = await getReturnDetail({
@@ -1283,6 +1319,10 @@ export async function getShipmentWorksheetDetail(input: {
       exchangeDetails: exchangeDetailResults
         .map((result) => result.item)
         .filter((item): item is CoupangExchangeDetail => Boolean(item)),
+      customerServiceIssueCount: detailCustomerServiceState.customerServiceIssueCount,
+      customerServiceIssueSummary: detailCustomerServiceState.customerServiceIssueSummary,
+      customerServiceIssueBreakdown: detailCustomerServiceState.customerServiceIssueBreakdown,
+      customerServiceState: detailCustomerServiceState.customerServiceState,
       claimLookupCreatedAtFrom,
       claimLookupCreatedAtTo,
     },

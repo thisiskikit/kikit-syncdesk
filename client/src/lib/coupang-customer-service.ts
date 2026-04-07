@@ -11,6 +11,14 @@ type CustomerServiceCarrier = {
   customerServiceState: CoupangCustomerServiceState;
 };
 
+export type CoupangCustomerServiceSnapshot = Pick<
+  CoupangShipmentWorksheetRow,
+  | "customerServiceIssueCount"
+  | "customerServiceIssueSummary"
+  | "customerServiceIssueBreakdown"
+  | "customerServiceState"
+>;
+
 type CustomerServiceBreakdownInputItem = Pick<CoupangCustomerServiceIssueBreakdownItem, "type"> &
   Partial<Pick<CoupangCustomerServiceIssueBreakdownItem, "count">>;
 
@@ -98,6 +106,34 @@ export function hasCoupangCustomerServiceIssue(
   const count = input.count ?? 0;
 
   return Boolean(summary) || count > 0 || Boolean(input.breakdown?.length);
+}
+
+export function hasResolvedCoupangCustomerServiceSnapshot(
+  snapshot: CoupangCustomerServiceSnapshot | null | undefined,
+) {
+  if (!snapshot) {
+    return false;
+  }
+
+  return (
+    snapshot.customerServiceState === "ready" ||
+    hasCoupangCustomerServiceIssue({
+      summary: snapshot.customerServiceIssueSummary,
+      count: snapshot.customerServiceIssueCount,
+      breakdown: snapshot.customerServiceIssueBreakdown,
+    })
+  );
+}
+
+export function resolvePreferredCoupangCustomerServiceSnapshot(
+  preferred: CoupangCustomerServiceSnapshot | null | undefined,
+  fallback: CoupangCustomerServiceSnapshot | null | undefined,
+) {
+  if (hasResolvedCoupangCustomerServiceSnapshot(preferred)) {
+    return preferred;
+  }
+
+  return fallback ?? preferred ?? null;
 }
 
 export function getCoupangCustomerServiceToneClass(

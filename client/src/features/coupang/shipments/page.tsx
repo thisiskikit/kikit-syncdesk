@@ -49,7 +49,10 @@ import {
   getCoupangCustomerServiceToneClass,
   getCoupangCustomerServiceStateText,
   getShipmentWorksheetCustomerServiceSearchText,
+  hasResolvedCoupangCustomerServiceSnapshot,
   hasCoupangCustomerServiceIssue,
+  resolvePreferredCoupangCustomerServiceSnapshot,
+  type CoupangCustomerServiceSnapshot,
 } from "@/lib/coupang-customer-service";
 import {
   formatCoupangOrderStatusLabel,
@@ -58,7 +61,7 @@ import {
 } from "@/lib/coupang-order-status";
 import { parseCoupangInvoicePopupInput } from "@/lib/coupang-invoice-input";
 import { parseSpreadsheetClipboardMatrix } from "@/lib/spreadsheet-grid";
-import { apiRequestJson, getJson } from "@/lib/queryClient";
+import { apiRequestJson, getJson, queryClient } from "@/lib/queryClient";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 import { formatNumber } from "@/lib/utils";
@@ -847,11 +850,45 @@ function getShipmentExcelExportScopeLabel(scope: ShipmentExcelExportScope) {
   return scope === "selected" ? "선택 행" : "미출력건 전체";
 }
 
-function hasShipmentClaimIssue(
+type ShipmentCustomerServiceCarrier = CoupangCustomerServiceSnapshot;
+
+type ShipmentStatusCarrier = ShipmentCustomerServiceCarrier &
+  Pick<CoupangShipmentWorksheetRow, "orderStatus">;
+
+function hasSameShipmentCustomerServiceSnapshot(
   row: Pick<
     CoupangShipmentWorksheetRow,
-    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+    | "customerServiceIssueCount"
+    | "customerServiceIssueSummary"
+    | "customerServiceIssueBreakdown"
+    | "customerServiceState"
+    | "customerServiceFetchedAt"
   >,
+  snapshot: ShipmentCustomerServiceCarrier,
+  fetchedAt: string | null,
+) {
+  if (
+    row.customerServiceIssueCount !== snapshot.customerServiceIssueCount ||
+    row.customerServiceIssueSummary !== snapshot.customerServiceIssueSummary ||
+    row.customerServiceState !== snapshot.customerServiceState ||
+    row.customerServiceFetchedAt !== fetchedAt ||
+    row.customerServiceIssueBreakdown.length !== snapshot.customerServiceIssueBreakdown.length
+  ) {
+    return false;
+  }
+
+  return row.customerServiceIssueBreakdown.every((item, index) => {
+    const nextItem = snapshot.customerServiceIssueBreakdown[index];
+    return (
+      item?.type === nextItem?.type &&
+      item?.count === nextItem?.count &&
+      item?.label === nextItem?.label
+    );
+  });
+}
+
+function hasShipmentClaimIssue(
+  row: Pick<ShipmentCustomerServiceCarrier, "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown">,
 ) {
   return hasCoupangCustomerServiceIssue({
     summary: row.customerServiceIssueSummary,
@@ -862,11 +899,8 @@ function hasShipmentClaimIssue(
 
 function getShipmentClaimSummary(
   row: Pick<
-    CoupangShipmentWorksheetRow,
-    | "orderStatus"
-    | "customerServiceIssueSummary"
-    | "customerServiceIssueCount"
-    | "customerServiceIssueBreakdown"
+    ShipmentStatusCarrier,
+    "orderStatus" | "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
   >,
 ) {
   const summary = (row.customerServiceIssueSummary ?? "").trim();
@@ -942,10 +976,7 @@ function getOrderStatusToneClass(value: string | null | undefined) {
 }
 
 function resolveWorksheetOrderStatus(
-  row: Pick<
-    CoupangShipmentWorksheetRow,
-    "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary"
-  >,
+  row: Pick<ShipmentStatusCarrier, "orderStatus" | "customerServiceIssueBreakdown" | "customerServiceIssueSummary">,
 ) {
   return resolveCoupangDisplayOrderStatus({
     orderStatus: row.orderStatus,
@@ -954,7 +985,7 @@ function resolveWorksheetOrderStatus(
   });
 }
 
-function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
+function getWorksheetStatusPresentation(row: ShipmentStatusCarrier) {
   const resolvedOrderStatus = resolveWorksheetOrderStatus(row);
   const orderLabel = formatOrderStatusLabel(resolvedOrderStatus);
   const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
@@ -1378,34 +1409,44 @@ export default function CoupangShipmentsPage() {
       ),
     enabled: Boolean(filters.selectedStoreId && detailRow && (detailRow.shipmentBoxId || detailRow.orderId)),
   });
+  const detailItem = shipmentDetailQuery.data?.item ?? null;
   const detailReturnRows = useMemo(() => {
     const merged = new Map<string, CoupangReturnRow>();
-    const item = shipmentDetailQuery.data?.item;
 
-    for (const row of item?.returns ?? []) {
+    for (const row of detailItem?.returns ?? []) {
       merged.set(row.receiptId, row);
     }
-    for (const row of item?.orderDetail?.relatedReturnRequests ?? []) {
+    for (const row of detailItem?.orderDetail?.relatedReturnRequests ?? []) {
       if (!merged.has(row.receiptId)) {
         merged.set(row.receiptId, row);
       }
     }
 
     return Array.from(merged.values());
-  }, [shipmentDetailQuery.data?.item]);
+  }, [detailItem]);
+  const detailExchangeRows = useMemo(() => {
+    const merged = new Map<string, CoupangExchangeRow>();
+
+    for (const row of detailItem?.exchanges ?? []) {
+      merged.set(row.exchangeId, row);
+    }
+    for (const row of detailItem?.orderDetail?.relatedExchangeRequests ?? []) {
+      if (!merged.has(row.exchangeId)) {
+        merged.set(row.exchangeId, row);
+      }
+    }
+
+    return Array.from(merged.values());
+  }, [detailItem]);
   const returnDetailByReceiptId = useMemo(
     () =>
-      new Map(
-        (shipmentDetailQuery.data?.item.returnDetails ?? []).map((item) => [item.receiptId, item] as const),
-      ),
-    [shipmentDetailQuery.data?.item.returnDetails],
+      new Map((detailItem?.returnDetails ?? []).map((item) => [item.receiptId, item] as const)),
+    [detailItem?.returnDetails],
   );
   const exchangeDetailById = useMemo(
     () =>
-      new Map(
-        (shipmentDetailQuery.data?.item.exchangeDetails ?? []).map((item) => [item.exchangeId, item] as const),
-      ),
-    [shipmentDetailQuery.data?.item.exchangeDetails],
+      new Map((detailItem?.exchangeDetails ?? []).map((item) => [item.exchangeId, item] as const)),
+    [detailItem?.exchangeDetails],
   );
   const isFallback = activeSheet?.source === "fallback";
   const infoBanner = summarizeWorksheetMessage(activeSheet);
@@ -1415,22 +1456,124 @@ export default function CoupangShipmentsPage() {
       ? "송장 입력 모드에서는 택배사와 송장번호 열이 연보라색으로 강조되며, 다른 엑셀 표를 그대로 복사해 와도 현재 선택 위치부터 붙여넣고 드래그 복제를 사용할 수 있습니다. 팝업 입력도 지원합니다."
       : "표 안에서 `Ctrl+V`로 붙여넣을 수 있습니다. 일반 값은 선택한 셀부터 반영되고, `셀픽주문번호 | 택배사 | 송장번호` 형식은 주문번호 기준으로 자동 매칭합니다.";
   const detailGuideNotice = "행을 클릭하면 메모, 현재 상태, 쿠팡 클레임 상세를 팝업으로 확인할 수 있습니다.";
-  const detailOrderPresentation = detailRow ? getWorksheetStatusPresentation(detailRow) : null;
-  const detailCustomerServiceLabel = detailRow
+  const detailDerivedCustomerServiceSnapshot = detailItem
+    ? {
+        customerServiceIssueCount: detailItem.customerServiceIssueCount,
+        customerServiceIssueSummary: detailItem.customerServiceIssueSummary,
+        customerServiceIssueBreakdown: detailItem.customerServiceIssueBreakdown,
+        customerServiceState: detailItem.customerServiceState,
+      }
+    : null;
+  const detailCustomerServiceSnapshot = resolvePreferredCoupangCustomerServiceSnapshot(
+    detailDerivedCustomerServiceSnapshot,
+    detailRow
+      ? {
+          customerServiceIssueCount: detailRow.customerServiceIssueCount,
+          customerServiceIssueSummary: detailRow.customerServiceIssueSummary,
+          customerServiceIssueBreakdown: detailRow.customerServiceIssueBreakdown,
+          customerServiceState: detailRow.customerServiceState,
+        }
+      : null,
+  );
+  const detailInvoicePresentation = detailRow ? getInvoiceTransmissionPresentation(detailRow) : null;
+  const detailOrderDetail = detailItem?.orderDetail ?? null;
+  const detailStatusCarrier =
+    detailCustomerServiceSnapshot || detailRow
+      ? {
+          orderStatus: detailOrderDetail?.status ?? detailRow?.orderStatus ?? null,
+          customerServiceIssueCount: detailCustomerServiceSnapshot?.customerServiceIssueCount ?? 0,
+          customerServiceIssueSummary: detailCustomerServiceSnapshot?.customerServiceIssueSummary ?? null,
+          customerServiceIssueBreakdown:
+            detailCustomerServiceSnapshot?.customerServiceIssueBreakdown ?? [],
+          customerServiceState: detailCustomerServiceSnapshot?.customerServiceState ?? "unknown",
+        }
+      : null;
+  const detailOrderPresentation = detailStatusCarrier
+    ? getWorksheetStatusPresentation(detailStatusCarrier)
+    : null;
+  const detailCustomerServiceLabel = detailCustomerServiceSnapshot
     ? formatShipmentWorksheetCustomerServiceLabel({
-        summary: detailRow.customerServiceIssueSummary,
-        count: detailRow.customerServiceIssueCount,
-        state: detailRow.customerServiceState,
+        summary: detailCustomerServiceSnapshot.customerServiceIssueSummary,
+        count: detailCustomerServiceSnapshot.customerServiceIssueCount,
+        state: detailCustomerServiceSnapshot.customerServiceState,
+        breakdown: detailCustomerServiceSnapshot.customerServiceIssueBreakdown,
       })
     : null;
-  const detailInvoicePresentation = detailRow ? getInvoiceTransmissionPresentation(detailRow) : null;
-  const detailOrderDetail = shipmentDetailQuery.data?.item.orderDetail ?? null;
-  const detailClaimCount =
-    detailReturnRows.length + (shipmentDetailQuery.data?.item.exchanges.length ?? 0);
+  const detailResolvedOrderStatus = detailStatusCarrier
+    ? resolveWorksheetOrderStatus(detailStatusCarrier)
+    : null;
+  const detailClaimCount = detailReturnRows.length + detailExchangeRows.length;
   const detailClaimLookupRange =
-    shipmentDetailQuery.data?.item.claimLookupCreatedAtFrom && shipmentDetailQuery.data?.item.claimLookupCreatedAtTo
-      ? `${shipmentDetailQuery.data.item.claimLookupCreatedAtFrom} ~ ${shipmentDetailQuery.data.item.claimLookupCreatedAtTo}`
+    detailItem?.claimLookupCreatedAtFrom && detailItem?.claimLookupCreatedAtTo
+      ? `${detailItem.claimLookupCreatedAtFrom} ~ ${detailItem.claimLookupCreatedAtTo}`
       : "-";
+
+  useEffect(() => {
+    if (
+      !filters.selectedStoreId ||
+      !detailRow ||
+      !detailDerivedCustomerServiceSnapshot ||
+      !hasResolvedCoupangCustomerServiceSnapshot(detailDerivedCustomerServiceSnapshot)
+    ) {
+      return;
+    }
+
+    const fetchedAt = shipmentDetailQuery.data?.fetchedAt ?? null;
+    const patchRow = (row: CoupangShipmentWorksheetRow) => {
+      if (row.id !== detailRow.id) {
+        return row;
+      }
+
+      if (
+        hasSameShipmentCustomerServiceSnapshot(row, detailDerivedCustomerServiceSnapshot, fetchedAt)
+      ) {
+        return row;
+      }
+
+      return {
+        ...row,
+        customerServiceIssueCount: detailDerivedCustomerServiceSnapshot.customerServiceIssueCount,
+        customerServiceIssueSummary: detailDerivedCustomerServiceSnapshot.customerServiceIssueSummary,
+        customerServiceIssueBreakdown:
+          detailDerivedCustomerServiceSnapshot.customerServiceIssueBreakdown,
+        customerServiceState: detailDerivedCustomerServiceSnapshot.customerServiceState,
+        customerServiceFetchedAt: fetchedAt,
+      };
+    };
+
+    queryClient.setQueryData<CoupangShipmentWorksheetResponse>(
+      ["/api/coupang/shipments/worksheet", filters.selectedStoreId],
+      (current) => {
+        if (!current) {
+          return current;
+        }
+
+        const nextItems = current.items.map(patchRow);
+        return nextItems.some((row, index) => row !== current.items[index])
+          ? { ...current, items: nextItems }
+          : current;
+      },
+    );
+    setSheetSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextItems = current.items.map(patchRow);
+      return nextItems.some((row, index) => row !== current.items[index])
+        ? { ...current, items: nextItems }
+        : current;
+    });
+    setDraftRows((current) => {
+      const nextRows = current.map(patchRow);
+      return nextRows.some((row, index) => row !== current[index]) ? sortShipmentRows(nextRows) : current;
+    });
+  }, [
+    detailDerivedCustomerServiceSnapshot,
+    detailRow,
+    filters.selectedStoreId,
+    shipmentDetailQuery.data?.fetchedAt,
+  ]);
   const detailHeroMeta = detailRow
     ? [
         formatExportText(detailRow.optionName),
@@ -1464,13 +1607,9 @@ export default function CoupangShipmentsPage() {
     "-"
   );
   const detailCoupangStatusValue: ReactNode =
-    detailOrderDetail?.status ?? detailRow?.orderStatus ? (
-      <span
-        className={`status-pill ${getOrderStatusToneClass(
-          detailOrderDetail?.status ?? detailRow?.orderStatus,
-        )}`}
-      >
-        {formatOrderStatusLabel(detailOrderDetail?.status ?? detailRow?.orderStatus)}
+    detailResolvedOrderStatus ? (
+      <span className={`status-pill ${getOrderStatusToneClass(detailResolvedOrderStatus)}`}>
+        {formatOrderStatusLabel(detailResolvedOrderStatus)}
       </span>
     ) : (
       "-"
@@ -1491,7 +1630,7 @@ export default function CoupangShipmentsPage() {
   );
   const detailCustomerServiceValue: ReactNode = detailCustomerServiceLabel ? (
     <span className="shipment-detail-inline-note strong">{detailCustomerServiceLabel}</span>
-  ) : detailRow?.customerServiceState === "ready" ? (
+  ) : detailCustomerServiceSnapshot?.customerServiceState === "ready" ? (
     <span className="status-pill draft">접수 없음</span>
   ) : (
     "-"
@@ -1584,7 +1723,10 @@ export default function CoupangShipmentsPage() {
         { label: "출력 상태", value: detailOutputStatusValue },
         { label: "CS 상태", value: detailCustomerServiceValue },
         { label: "클레임 현황", value: detailClaimStatusValue },
-        { label: "CS 요약", value: formatText(detailRow.customerServiceIssueSummary) },
+        {
+          label: "CS 요약",
+          value: formatText(detailCustomerServiceSnapshot?.customerServiceIssueSummary),
+        },
         { label: "클레임 조회 범위", value: detailClaimLookupRange },
         { label: "출력 메모", value: formatText(detailOrderDetail?.parcelPrintMessage) },
         { label: "송장 전송 메모", value: formatText(detailRow.invoiceTransmissionMessage) },
@@ -3572,14 +3714,13 @@ export default function CoupangShipmentsPage() {
                     <div>
                       <strong>교환 클레임</strong>
                       <div className="table-note">
-                        총 {formatNumber(shipmentDetailQuery.data?.item.exchanges.length ?? 0)}건 · 조회 범위{" "}
-                        {detailClaimLookupRange}
+                        총 {formatNumber(detailExchangeRows.length)}건 · 조회 범위 {detailClaimLookupRange}
                       </div>
                     </div>
                   </div>
-                  {(shipmentDetailQuery.data?.item.exchanges.length ?? 0) ? (
+                  {detailExchangeRows.length ? (
                     <div className="shipment-detail-claim-list">
-                      {(shipmentDetailQuery.data?.item.exchanges ?? []).map((row) => {
+                      {detailExchangeRows.map((row) => {
                         const detail = exchangeDetailById.get(row.exchangeId) ?? null;
                         const summaryRow = detail?.summaryRow ?? row;
                         const actionLabels = buildExchangeActionLabels(summaryRow);

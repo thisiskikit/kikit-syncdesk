@@ -63,6 +63,8 @@ This file records repository changes that are considered complete only when the 
   - added claim priority so shipment-stop requested/handled outrank cancel, return, exchange, and the base order status in shared display helpers
   - updated shipment quick filters and worksheet status pills so shipment-stop rows are visible without a manual CS-only step
   - surfaced skip/block reasons for invoice transmission and prepare flows using order or shipment identifiers plus the detected claim summary
+  - made shipment worksheet detail responses return synthesized CS summary fields from live claim lookups, and updated the detail popup to use those fields before falling back to persisted worksheet row values
+  - patched the local shipment worksheet cache after detail lookup so the popup and row list stay aligned once a live claim is confirmed
 - Reason:
   - users need to notice cancel, return, exchange, and shipment-stop requests before sending invoices or moving rows into preparing
 - Impact scope:
@@ -77,8 +79,10 @@ This file records repository changes that are considered complete only when the 
   - consider cleaning legacy COUPANG order-page copy so all visible Korean labels are normalized
 - Verification:
   - passed: `npm run check`
+  - passed: `npx vitest run client/src/lib/coupang-customer-service.test.ts`
   - passed: `npx vitest run client/src/lib/coupang-shipment-quick-filters.test.ts`
   - passed: `npx vitest run --root . server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
+  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-detail.test.ts`
 
 ## 2026-04-03 / Bulk-Price Preset Persistence
 

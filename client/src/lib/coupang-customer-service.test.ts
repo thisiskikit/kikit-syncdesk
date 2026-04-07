@@ -4,7 +4,9 @@ import {
   formatCoupangCustomerServiceLabel,
   formatShipmentWorksheetCustomerServiceLabel,
   getShipmentWorksheetCustomerServiceSearchText,
+  hasResolvedCoupangCustomerServiceSnapshot,
   mergeCoupangOrderCustomerServiceSummary,
+  resolvePreferredCoupangCustomerServiceSnapshot,
 } from "@/lib/coupang-customer-service";
 
 function buildOrderRow(overrides: Partial<CoupangOrderRow> = {}): CoupangOrderRow {
@@ -138,6 +140,61 @@ describe("getShipmentWorksheetCustomerServiceSearchText", () => {
         customerServiceState: "ready",
       }),
     ).toContain("출고중지완료");
+  });
+});
+
+describe("resolvePreferredCoupangCustomerServiceSnapshot", () => {
+  it("prefers a detail snapshot when it has a confirmed issue", () => {
+    const preferred = {
+      customerServiceIssueCount: 1,
+      customerServiceIssueSummary: "諛섑뭹 1嫄?",
+      customerServiceIssueBreakdown: [{ type: "return" as const, count: 1, label: "諛섑뭹 1嫄?" }],
+      customerServiceState: "ready" as const,
+    };
+    const fallback = {
+      customerServiceIssueCount: 0,
+      customerServiceIssueSummary: null,
+      customerServiceIssueBreakdown: [],
+      customerServiceState: "unknown" as const,
+    };
+
+    expect(resolvePreferredCoupangCustomerServiceSnapshot(preferred, fallback)).toEqual(preferred);
+  });
+
+  it("falls back when the detail snapshot is still unresolved", () => {
+    const preferred = {
+      customerServiceIssueCount: 0,
+      customerServiceIssueSummary: null,
+      customerServiceIssueBreakdown: [],
+      customerServiceState: "unknown" as const,
+    };
+    const fallback = {
+      customerServiceIssueCount: 1,
+      customerServiceIssueSummary: "痍⑥냼 1嫄?",
+      customerServiceIssueBreakdown: [{ type: "cancel" as const, count: 1, label: "痍⑥냼 1嫄?" }],
+      customerServiceState: "ready" as const,
+    };
+
+    expect(hasResolvedCoupangCustomerServiceSnapshot(preferred)).toBe(false);
+    expect(resolvePreferredCoupangCustomerServiceSnapshot(preferred, fallback)).toEqual(fallback);
+  });
+
+  it("keeps a ready zero-claim detail snapshot so the UI can show 접수 없음", () => {
+    const preferred = {
+      customerServiceIssueCount: 0,
+      customerServiceIssueSummary: null,
+      customerServiceIssueBreakdown: [],
+      customerServiceState: "ready" as const,
+    };
+    const fallback = {
+      customerServiceIssueCount: 1,
+      customerServiceIssueSummary: "諛섑뭹 1嫄?",
+      customerServiceIssueBreakdown: [{ type: "return" as const, count: 1, label: "諛섑뭹 1嫄?" }],
+      customerServiceState: "ready" as const,
+    };
+
+    expect(hasResolvedCoupangCustomerServiceSnapshot(preferred)).toBe(true);
+    expect(resolvePreferredCoupangCustomerServiceSnapshot(preferred, fallback)).toEqual(preferred);
   });
 });
 
