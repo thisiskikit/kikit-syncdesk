@@ -19,7 +19,6 @@ import {
 import { queryClient } from "./lib/queryClient";
 import { resolveWorkspaceRouteMeta } from "./lib/workspace-tabs";
 import CatalogPage from "./pages/catalog";
-import CoupangBulkPricePage from "./pages/coupang-bulk-price";
 import CoupangCancelRefundsPage from "./pages/coupang-cancel-refunds";
 import CoupangConnectionPage from "./pages/coupang-connection";
 import CoupangControlPage from "./pages/coupang-control";
@@ -28,7 +27,6 @@ import CoupangExchangesPage from "./pages/coupang-exchanges";
 import CoupangInquiriesPage from "./pages/coupang-inquiries";
 import CoupangLogisticsPage from "./pages/coupang-logistics";
 import CoupangOrdersPage from "./pages/coupang-orders";
-import CoupangProductEditPage from "./pages/coupang-product-edit";
 import CoupangProductsPage from "./pages/coupang-products";
 import CoupangReturnsPage from "./pages/coupang-returns";
 import CoupangRocketGrowthPage from "./pages/coupang-rocket-growth";
@@ -37,7 +35,6 @@ import CoupangShipmentsPage from "./pages/coupang-shipments";
 import DashboardPage from "./pages/dashboard";
 import DraftPage from "./pages/draft";
 import FieldSyncPage from "./pages/field-sync";
-import NaverBulkPricePage from "./pages/naver-bulk-price";
 import NaverClaimsPage from "./pages/naver-claims";
 import NaverGuidePage from "./pages/naver-guide";
 import NaverInquiriesPage from "./pages/naver-inquiries";
@@ -216,9 +213,7 @@ function NaverSection() {
     { href: "/naver/connection", label: "Connection", badge: "live" },
     { href: "/naver/products", label: "Products", badge: "live" },
     { href: "/naver/control", label: "Price / Stock / Sale", badge: "live" },
-    { href: "/naver/bulk-price", label: "Bulk Price", badge: "live" },
     { href: "/naver/library", label: "Library", badge: "shared" },
-    { href: "/naver/product-edit", label: "Product Edit", badge: "coming" },
     { href: "/naver/groups", label: "Grouped Products", badge: "coming" },
     { href: "/naver/orders", label: "Orders", badge: "live" },
     { href: "/naver/shipment", label: "Shipment", badge: "live" },
@@ -235,16 +230,13 @@ function NaverSection() {
   if (location.startsWith("/naver/connection")) {
     content = <SettingsPage />;
   } else if (location.startsWith("/naver/bulk-price")) {
-    content = <NaverBulkPricePage />;
+    content = <Redirect to="/naver/products" />;
   } else if (location.startsWith("/naver/library")) {
     content = <ProductLibraryPage fixedChannel="naver" />;
   } else if (location.startsWith("/naver/control")) {
     content = <NaverProductsPage />;
   } else if (location.startsWith("/naver/product-edit")) {
-    content = renderPlaceholder({
-      title: "NAVER Product Edit",
-      description: "Create and edit NAVER product records from a dedicated workspace.",
-    });
+    content = <Redirect to="/naver/products" />;
   } else if (location.startsWith("/naver/groups")) {
     content = renderPlaceholder({
       title: "NAVER Grouped Products",
@@ -296,9 +288,9 @@ function CoupangSection() {
   } else if (location.startsWith("/coupang/products")) {
     content = <CoupangProductsPage />;
   } else if (location.startsWith("/coupang/product-edit")) {
-    content = <CoupangProductEditPage />;
+    content = <Redirect to="/coupang/products" />;
   } else if (location.startsWith("/coupang/bulk-price")) {
-    content = <CoupangBulkPricePage />;
+    content = <Redirect to="/coupang/products" />;
   } else if (location.startsWith("/coupang/library")) {
     content = <ProductLibraryPage fixedChannel="coupang" />;
   } else if (location.startsWith("/coupang/control")) {

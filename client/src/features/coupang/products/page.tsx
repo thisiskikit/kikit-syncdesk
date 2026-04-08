@@ -1,7 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MoreHorizontal } from "lucide-react";
-import { useLocation } from "wouter";
 import type {
   CoupangBatchActionResponse,
   CoupangProductDetail,
@@ -11,8 +10,6 @@ import type {
   CoupangProductExplorerOperationCard,
   CoupangProductExplorerResponse,
   CoupangProductExplorerRow,
-  CoupangProductMutationResponse,
-  CoupangProductPartialEditPayload,
   CoupangProductPriceUpdateTarget,
   CoupangProductQuantityUpdateTarget,
   CoupangProductSaleStatusUpdateTarget,
@@ -428,7 +425,6 @@ function parseNullableInteger(value: string) {
 }
 
 export default function CoupangProductsPage() {
-  const [, navigate] = useLocation();
   const { startLocalOperation, finishLocalOperation, removeLocalOperation, publishOperation } =
     useOperations();
   const {
@@ -1060,17 +1056,6 @@ export default function CoupangProductsPage() {
     closeActionMenu();
   };
 
-  const openProductEditor = () => {
-    if (!filters.selectedStoreId || !filters.selectedSellerProductId) {
-      return;
-    }
-
-    navigate(
-      `/coupang/product-edit?storeId=${encodeURIComponent(filters.selectedStoreId)}&sellerProductId=${encodeURIComponent(filters.selectedSellerProductId)}`,
-    );
-    closeActionMenu();
-  };
-
   const openProductLibrary = () => {
     const targetRow = activeRowId ? rowsById.get(activeRowId) ?? null : selectedRow;
 
@@ -1290,20 +1275,11 @@ export default function CoupangProductsPage() {
           });
         }
 
-        const nextDeliveryCharge = parseNullableInteger(quickActionState.deliveryChargeDraft);
-        if (Number.isNaN(nextDeliveryCharge)) {
-          throw new Error("諛곗넚鍮꾨뒗 ?レ옄濡??낅젰??二쇱꽭??");
-        }
-
-        const deliveryChanged =
-          nextDeliveryCharge !== (selectedDetail.deliveryInfo.deliveryCharge ?? null);
-
-        if (!targets.length && !deliveryChanged) {
-          throw new Error("蹂寃쏀븷 媛寃??먮뒗 諛곗넚鍮꾨? ?낅젰??二쇱꽭??");
+        if (!targets.length) {
+          throw new Error("蹂寃쏀븷 媛寃⑹쓣 ?낅젰??二쇱꽭??");
         }
 
         let priceResult: CoupangBatchActionResponse | null = null;
-        let deliveryResult: CoupangProductMutationResponse | null = null;
 
         if (targets.length) {
           priceResult = await apiRequestJson<CoupangBatchActionResponse>(
@@ -1316,40 +1292,6 @@ export default function CoupangProductsPage() {
           );
           if (priceResult.operation) {
             publishOperation(priceResult.operation);
-          }
-        }
-
-        if (deliveryChanged) {
-          const payload: CoupangProductPartialEditPayload = {
-            storeId: filters.selectedStoreId,
-            sellerProductId: filters.selectedSellerProductId,
-            companyContactNumber: selectedDetail.deliveryInfo.companyContactNumber,
-            deliveryCharge: nextDeliveryCharge,
-            deliveryChargeOnReturn: selectedDetail.deliveryInfo.deliveryChargeOnReturn,
-            deliveryChargeType: selectedDetail.deliveryInfo.deliveryChargeType,
-            deliveryCompanyCode: selectedDetail.deliveryInfo.deliveryCompanyCode,
-            deliveryMethod: selectedDetail.deliveryInfo.deliveryMethod,
-            extraInfoMessage: selectedDetail.deliveryInfo.extraInfoMessage,
-            freeShipOverAmount: selectedDetail.deliveryInfo.freeShipOverAmount,
-            outboundShippingPlaceCode: selectedDetail.deliveryInfo.outboundShippingPlaceCode,
-            outboundShippingTimeDay: selectedDetail.deliveryInfo.outboundShippingTimeDay,
-            pccNeeded: selectedDetail.deliveryInfo.pccNeeded,
-            remoteAreaDeliverable: selectedDetail.deliveryInfo.remoteAreaDeliverable,
-            returnAddress: selectedDetail.deliveryInfo.returnAddress,
-            returnAddressDetail: selectedDetail.deliveryInfo.returnAddressDetail,
-            returnCenterCode: selectedDetail.deliveryInfo.returnCenterCode,
-            returnCharge: selectedDetail.deliveryInfo.returnCharge,
-            returnChargeName: selectedDetail.deliveryInfo.returnChargeName,
-            returnZipCode: selectedDetail.deliveryInfo.returnZipCode,
-            unionDeliveryType: selectedDetail.deliveryInfo.unionDeliveryType,
-          };
-          deliveryResult = await apiRequestJson<CoupangProductMutationResponse>(
-            "PUT",
-            "/api/coupang/products/partial",
-            payload,
-          );
-          if (deliveryResult.operation) {
-            publishOperation(deliveryResult.operation);
           }
         }
 
@@ -1376,7 +1318,6 @@ export default function CoupangProductsPage() {
                 lastModifiedAt: patchedAt,
               };
             },
-            deliveryChanged ? { deliveryCharge: nextDeliveryCharge ?? null } : undefined,
           ),
         );
         queryClient.setQueryData<CoupangProductDetailResponse>(detailQueryKey, (current) =>
@@ -1392,7 +1333,6 @@ export default function CoupangProductsPage() {
                 salePrice: priceByVendorItemId.get(item.vendorItemId) ?? item.salePrice,
               };
             },
-            deliveryChanged ? { deliveryCharge: nextDeliveryCharge ?? null } : undefined,
           ),
         );
 
@@ -1404,19 +1344,16 @@ export default function CoupangProductsPage() {
         finishLocalOperation(localToastId, {
           status:
             priceResult?.summary.failedCount ||
-            priceResult?.summary.warningCount ||
-            deliveryResult?.item.status === "warning"
+            priceResult?.summary.warningCount
               ? "warning"
               : "success",
-          summary: [priceResult ? `媛寃?${priceResult.summary.succeededCount}嫄?諛섏쁺` : null, deliveryChanged ? "諛곗넚鍮?諛섏쁺" : null]
-            .filter(Boolean)
-            .join(" / "),
+          summary: priceResult ? `媛寃?${priceResult.summary.succeededCount}嫄?諛섏쁺` : null,
         });
         window.setTimeout(() => removeLocalOperation(localToastId), 800);
         setPageFeedback({
           type: "success",
-          title: "媛寃?/ 諛곗넚鍮꾨? ??ν뻽?듬땲??",
-          message: "?좏깮 ?듭뀡 媛寃⑷낵 ?곹뭹 諛곗넚鍮꾨? ?ㅼ떆 議고쉶??理쒖떊 ?곹깭濡?諛섏쁺?덉뒿?덈떎.",
+          title: "媛寃⑹쓣 ??ν뻽?듬땲??",
+          message: "?좏깮 ?듭뀡 媛寃⑹쓣 ?ㅼ떆 議고쉶??理쒖떊 ?곹깭濡?諛섏쁺?덉뒿?덈떎.",
         });
       } else if (quickActionState.kind === "quantity") {
         const targets: CoupangProductQuantityUpdateTarget[] = selectedOptions.map((option) => {
@@ -2394,9 +2331,6 @@ export default function CoupangProductsPage() {
               >
                 판매중 / 판매중지
               </button>
-              <button className="product-action-button" onClick={openProductEditor}>
-                상세 수정
-              </button>
               <button className="product-action-button" onClick={openProductLibrary}>
                 메모 / 라이브러리
               </button>
@@ -2409,7 +2343,7 @@ export default function CoupangProductsPage() {
             summary={selectedRow}
             detail={selectedDetail}
             isLoading={detailQuery.isLoading}
-            emptyMessage="상품 목록에서 상품을 클릭하면 상세 미리보기와 빠른 수정 메뉴를 사용할 수 있습니다."
+            emptyMessage="상품 목록에서 상품을 클릭하면 상세 미리보기와 빠른 작업 메뉴를 사용할 수 있습니다."
             headerActions={
               filters.selectedSellerProductId ? (
                 <div className="toolbar">
@@ -2419,13 +2353,6 @@ export default function CoupangProductsPage() {
                     disabled={!filters.selectedSellerProductId || detailQuery.isFetching}
                   >
                     {detailQuery.isFetching ? "강제 새로고침 중..." : "강제 새로고침"}
-                  </button>
-                  <button
-                    className="button"
-                    onClick={openProductEditor}
-                    disabled={!filters.selectedSellerProductId}
-                  >
-                    전체 수정
                   </button>
                 </div>
               ) : null
@@ -2476,13 +2403,6 @@ export default function CoupangProductsPage() {
               ...current.quantityDrafts,
               [optionKey]: value,
             },
-            error: null,
-          }))
-        }
-        onDeliveryChargeChange={(value) =>
-          updateQuickAction((current) => ({
-            ...current,
-            deliveryChargeDraft: value,
             error: null,
           }))
         }

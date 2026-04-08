@@ -2,7 +2,6 @@ import type { Express } from "express";
 import { registerCoupangRetryHandlers } from "./application/coupang/register-retry-handlers";
 import { registerNaverRetryHandlers } from "./application/naver/register-retry-handlers";
 import catalogRouter from "./routes/catalog";
-import coupangBulkPriceRouter from "./routes/coupang-bulk-price";
 import coupangRouter from "./routes/coupang";
 import coupangPromotionsRouter from "./routes/coupang-promotions";
 import coupangSupportRouter from "./routes/coupang-support";
@@ -10,7 +9,6 @@ import draftsRouter from "./routes/drafts";
 import executionsRouter from "./routes/executions";
 import healthRouter from "./routes/health";
 import logsRouter from "./routes/logs";
-import naverBulkPriceRouter from "./routes/naver-bulk-price";
 import naverClaimsRouter from "./routes/naver-claims";
 import naverInquiriesRouter from "./routes/naver-inquiries";
 import naverOrdersRouter from "./routes/naver-orders";
@@ -31,7 +29,6 @@ export function registerRoutes(app: Express) {
 
   app.use("/api/catalog", catalogRouter);
   app.use("/api/catalog", syncRouter);
-  app.use("/api/coupang", coupangBulkPriceRouter);
   app.use("/api/coupang", coupangRouter);
   app.use("/api/coupang", coupangPromotionsRouter);
   app.use("/api/coupang", coupangSupportRouter);
@@ -39,7 +36,6 @@ export function registerRoutes(app: Express) {
   app.use("/api/executions", executionsRouter);
   app.use("/api/health", healthRouter);
   app.use("/api/logs", logsRouter);
-  app.use("/api/naver", naverBulkPriceRouter);
   app.use("/api/naver", naverClaimsRouter);
   app.use("/api/naver", naverInquiriesRouter);
   app.use("/api/naver", naverProductsRouter);

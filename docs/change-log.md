@@ -2,36 +2,52 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
-## 2026-04-03
+## 2026-04-08 / Disable Product Edit and Bulk Price Runtime Surface
 
 - Change type:
-  - documentation baseline
+  - code and documentation
 - Changed files:
+  - `client/src/App.tsx`
+  - `client/src/components/operation-toaster.tsx`
+  - `client/src/features/coupang/products/page.tsx`
+  - `client/src/features/coupang/products/product-presenters.tsx`
+  - `client/src/lib/coupang-navigation.ts`
+  - `client/src/lib/coupang-navigation.test.ts`
+  - `client/src/lib/operation-links.ts`
+  - `server/index.ts`
+  - `server/routes.ts`
+  - `server/routes/coupang/products.ts`
   - `docs/current-status.md`
   - `docs/change-log.md`
   - `docs/structure-overview.md`
-  - `docs/decisions/README.md`
-  - `docs/handoffs/README.md`
 - Code change:
-  - none
+  - disabled NAVER and COUPANG bulk-price runtime entry points
+  - disabled the dedicated COUPANG product-edit runtime path and its `/partial` and `/full` write routes
 - Change content:
-  - added baseline project documentation derived from the current code layout and inspected runtime entry points
+  - changed `/naver/bulk-price`, `/naver/product-edit`, `/coupang/bulk-price`, and `/coupang/product-edit` to redirect back to the main product pages
+  - removed COUPANG and NAVER bulk-price routers from the server mount registry and removed bulk-price startup recovery from server boot
+  - simplified the shared operation toaster so it only shows generic operations instead of polling bulk-price runs and preview refresh jobs
+  - removed COUPANG products-page links to the dedicated editor and removed the delivery-charge edit path that depended on `/api/coupang/products/partial`
+  - kept price, stock, and sale-status quick actions active on the COUPANG products page
 - Reason:
-  - future tasks in this repository must update code and docs together, so a starting point was needed
+  - bulk-price and dedicated product-info editing features are being taken out of this repository's active runtime surface for now
 - Impact scope:
-  - documentation only
-  - no API, DB, UI, or runtime behavior changed by this task
+  - NAVER workspace routing
+  - COUPANG workspace routing
+  - COUPANG products quick-action behavior
+  - server startup and API mount behavior
 - Remaining issues:
-  - this entry is based on code inspection only
-  - no runtime validation was performed in this task
-  - shared engine persistence and NAVER preview cache behavior remain operational risks documented in `docs/current-status.md`
+  - bulk-price and product-edit implementation files still exist on disk for later extraction, even though the runtime no longer exposes them
+  - browser-level manual verification of the redirect paths and disabled UI paths was not run in this task
 - Next work:
-  - append a new dated entry for every code change
-  - include verification notes and clearly mark anything not tested
+  - decide whether to delete the dormant bulk-price and product-edit source files after the external migration is complete
+  - if route-level disablement should also return HTTP 404/410 instead of redirecting, tighten that behavior in a follow-up
 - Verification:
-  - not run: `npm run check`
+  - passed: `npm run check`
+  - passed: `npx vitest run client/src/lib/coupang-navigation.test.ts`
   - not run: `npm run test`
   - not run: `npm run build`
+  - not run: browser-level manual verification
 
 ## 2026-04-07 / COUPANG Claim-Aware Orders and Shipments
 
@@ -76,9 +92,9 @@ This file records repository changes that are considered complete only when the 
   - COUPANG shared claim/status display helpers
 - Remaining issues:
   - the COUPANG orders page still contains older mixed-language UI copy outside this task's behavioral changes
-  - browser-level manual verification for order `16100182558956` / receiver `민지후` was not run in this task
+  - browser-level manual verification for order `16100182558956` / receiver was not run in this task
 - Next work:
-  - manually verify the COUPANG orders and shipment pages show `출고중지 요청` or `출고중지완료` for a live matching order
+  - manually verify the COUPANG orders and shipment pages show the expected shipment-stop status for a live matching order
   - consider cleaning legacy COUPANG order-page copy so all visible Korean labels are normalized
 - Verification:
   - passed: `npm run check`
@@ -106,7 +122,7 @@ This file records repository changes that are considered complete only when the 
   - moved selected source/rule preset IDs and preset name/memo draft inputs from page-local React state into server-backed UI state
   - added a guard so preset selection is cleared only after the preset list query successfully confirms the preset is gone
 - Reason:
-  - users experienced bulk-price template values as "reset" after refresh because only the preset list itself was durable; the active selection and draft fields were not
+  - users experienced bulk-price template values as reset after refresh because only the preset list itself was durable; the active selection and draft fields were not
 - Impact scope:
   - NAVER bulk-price UI
   - COUPANG bulk-price UI
@@ -119,5 +135,36 @@ This file records repository changes that are considered complete only when the 
   - decide whether other draft-only bulk operations should follow the same `ui_state_entries` persistence pattern
 - Verification:
   - passed: `npm run check`
+  - not run: `npm run test`
+  - not run: `npm run build`
+
+## 2026-04-03
+
+- Change type:
+  - documentation baseline
+- Changed files:
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+  - `docs/structure-overview.md`
+  - `docs/decisions/README.md`
+  - `docs/handoffs/README.md`
+- Code change:
+  - none
+- Change content:
+  - added baseline project documentation derived from the current code layout and inspected runtime entry points
+- Reason:
+  - future tasks in this repository must update code and docs together, so a starting point was needed
+- Impact scope:
+  - documentation only
+  - no API, DB, UI, or runtime behavior changed by this task
+- Remaining issues:
+  - this entry is based on code inspection only
+  - no runtime validation was performed in this task
+  - shared engine persistence and NAVER preview cache behavior remain operational risks documented in `docs/current-status.md`
+- Next work:
+  - append a new dated entry for every code change
+  - include verification notes and clearly mark anything not tested
+- Verification:
+  - not run: `npm run check`
   - not run: `npm run test`
   - not run: `npm run build`

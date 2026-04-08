@@ -3,8 +3,6 @@ import {
   getProductDetailHandler,
   listProductExplorerHandler,
   listProductsHandler,
-  updateFullProductHandler,
-  updatePartialProductHandler,
   updatePriceHandler,
   updatePricesBulkHandler,
   updateQuantitiesBulkHandler,
@@ -21,8 +19,6 @@ router.get("/detail", getProductDetailHandler);
 router.post("/prices/bulk", updatePricesBulkHandler);
 router.post("/quantities/bulk", updateQuantitiesBulkHandler);
 router.post("/sale-status/bulk", updateSaleStatusesBulkHandler);
-router.put("/partial", updatePartialProductHandler);
-router.put("/full", updateFullProductHandler);
 router.post("/price", updatePriceHandler);
 router.post("/quantity", updateQuantityHandler);
 router.post("/sale-status", updateSaleStatusHandler);

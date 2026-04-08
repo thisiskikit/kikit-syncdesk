@@ -239,10 +239,6 @@ function buildProductsCloseLabel() {
   return "닫기";
 }
 
-function buildProductsDeliveryChargePlaceholder() {
-  return "배송비";
-}
-
 function buildProductsQuickDialogValidationLabel() {
   return "검증 필요";
 }
@@ -441,7 +437,6 @@ export function QuickActionDialog(props: {
   onApplyBulk: () => void;
   onPriceChange: (optionKey: string, value: string) => void;
   onQuantityChange: (optionKey: string, value: string) => void;
-  onDeliveryChargeChange: (value: string) => void;
   onSaleStatusChange: (value: "ONSALE" | "SUSPENDED") => void;
   onSubmit: () => void;
 }) {
@@ -517,15 +512,6 @@ export function QuickActionDialog(props: {
             <button className="button secondary" onClick={props.onApplyBulk}>
               선택 옵션 일괄 적용
             </button>
-            {state.kind === "price" ? (
-              <input
-                value={state.deliveryChargeDraft}
-                onChange={(event) => props.onDeliveryChargeChange(event.target.value)}
-                placeholder={buildProductsDeliveryChargePlaceholder()}
-                inputMode="numeric"
-                style={{ width: 160 }}
-              />
-            ) : null}
           </div>
         )}
 

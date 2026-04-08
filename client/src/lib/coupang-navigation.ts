@@ -7,7 +7,6 @@ export const COUPANG_PRIMARY_NAV_ITEMS = [
   { href: "/coupang/orders", label: "Orders / Outbound", badge: "live" },
   { href: "/coupang/products", label: "Products", badge: "live" },
   { href: "/coupang/control", label: "Price / Stock / Sale", badge: "live" },
-  { href: "/coupang/bulk-price", label: "Bulk Price", badge: "live" },
   { href: "/coupang/connection", label: "Connection", badge: "live" },
 ] as const satisfies readonly SectionNavItem[];
 

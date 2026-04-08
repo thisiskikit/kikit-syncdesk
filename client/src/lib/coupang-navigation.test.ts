@@ -15,7 +15,6 @@ describe("coupang navigation config", () => {
       "/coupang/orders",
       "/coupang/products",
       "/coupang/control",
-      "/coupang/bulk-price",
       "/coupang/connection",
     ]);
   });

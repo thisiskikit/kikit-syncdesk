@@ -3,14 +3,12 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { createServer } from "http";
 import { registerRoutes } from "./routes";
 import { applyCors } from "./http/cors";
-import { recoverBulkPriceRuns } from "./services/coupang/bulk-price-service";
 import { resumeQueuedRuns } from "./services/execution-service";
 import {
   recordApiRequestEvent,
   recordStartupEvent,
   recordSystemErrorEvent,
 } from "./services/logs/service";
-import { recoverNaverBulkPriceRuns } from "./services/naver/bulk-price-service";
 import { sendNormalizedError } from "./services/shared/api-response";
 import { serveStatic } from "./static";
 import { setupVite } from "./vite";
@@ -91,8 +89,6 @@ async function runStartupStep<T>(step: string, task: () => Promise<T> | T) {
 
 async function runStartupRecoveries() {
   await runStartupStep("resumeQueuedRuns", () => resumeQueuedRuns());
-  await runStartupStep("recoverBulkPriceRuns", () => recoverBulkPriceRuns());
-  await runStartupStep("recoverNaverBulkPriceRuns", () => recoverNaverBulkPriceRuns());
 }
 
 async function start() {
