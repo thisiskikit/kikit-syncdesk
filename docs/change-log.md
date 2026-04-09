@@ -29,6 +29,7 @@ This file records repository changes that are considered complete only when the 
   - simplified the shared operation toaster so it only shows generic operations instead of polling bulk-price runs and preview refresh jobs
   - removed COUPANG products-page links to the dedicated editor and removed the delivery-charge edit path that depended on `/api/coupang/products/partial`
   - kept price, stock, and sale-status quick actions active on the COUPANG products page
+  - fixed COUPANG order-sheet date-range queries so date-only `createdAtTo` values are sent as same-day end timestamps instead of missing the final day
 - Reason:
   - bulk-price and dedicated product-info editing features are being taken out of this repository's active runtime surface for now
 - Impact scope:

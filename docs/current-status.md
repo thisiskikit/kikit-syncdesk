@@ -81,6 +81,7 @@
   - the shared operation toaster no longer polls bulk-price runs or preview refresh jobs
   - COUPANG product quick actions still support price, stock, and sale-status changes, but no longer call the dedicated `/api/coupang/products/partial` or `/api/coupang/products/full` edit routes
 - COUPANG claim-aware orders and shipments:
+  - order-sheet lookup now sends end-date-inclusive Seoul timestamps (`T23:59:59+09:00`) so same-day orders are not dropped from orders or worksheet collection
   - `GET /api/coupang/orders` requests customer-service lookup by default
   - shipment-stop requested and shipment-stop completed claim types are tracked alongside cancel, return, and exchange in `customerServiceIssueBreakdown`
   - completed cancel rows can be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals

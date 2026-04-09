@@ -272,6 +272,12 @@ describe("coupang order service", () => {
     expect(getOrderSheetCalls()).toHaveLength(1);
     expect(getClaimLookupCalls()).toHaveLength(0);
     expect(getOrderSheetCalls()[0]?.[0].query.get("status")).toBe("ACCEPT");
+    expect(getOrderSheetCalls()[0]?.[0].query.get("createdAtFrom")).toBe(
+      "2026-03-20T00:00:00+09:00",
+    );
+    expect(getOrderSheetCalls()[0]?.[0].query.get("createdAtTo")).toBe(
+      "2026-03-25T23:59:59+09:00",
+    );
     expect(result.source).toBe("live");
     expect(result.servedFromFallback).toBe(false);
     expect(result.nextToken).toBeNull();
@@ -393,6 +399,10 @@ describe("coupang order service", () => {
     expect(getOrderSheetCalls().map(([input]) => input.query.get("status"))).toEqual(
       ALL_ORDER_STATUSES,
     );
+    for (const [input] of getOrderSheetCalls()) {
+      expect(input.query.get("createdAtFrom")).toBe("2026-03-20T00:00:00+09:00");
+      expect(input.query.get("createdAtTo")).toBe("2026-03-25T23:59:59+09:00");
+    }
     expect(result.source).toBe("live");
     expect(result.servedFromFallback).toBe(false);
     expect(result.nextToken).toBeNull();

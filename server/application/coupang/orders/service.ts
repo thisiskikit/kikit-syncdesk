@@ -226,6 +226,25 @@ function normalizeTimeFrameValue(value: string | undefined, edge: "start" | "end
   return `${value}T${edge === "end" ? "23:59" : "00:00"}`;
 }
 
+function normalizeOrderSheetTimeFrameValue(value: string | undefined, edge: "start" | "end") {
+  if (!value) {
+    const date = new Date();
+    date.setDate(date.getDate() + (edge === "start" ? -DEFAULT_RANGE_DAYS : 0));
+    const day = formatSeoulDate(date);
+    return `${day}T${edge === "end" ? "23:59:59" : "00:00:00"}+09:00`;
+  }
+
+  if (value.includes("+")) {
+    return value;
+  }
+
+  const normalized = value.includes("T")
+    ? value
+    : `${value}T${edge === "end" ? "23:59:59" : "00:00:00"}`;
+
+  return `${normalized}+09:00`;
+}
+
 function appendMessage(base: string | null, next: string | null) {
   if (!base) {
     return next;
@@ -896,8 +915,8 @@ async function requestOrders(
   },
 ) {
   const query = new URLSearchParams({
-    createdAtFrom: `${normalizeDateRangeInput(input.createdAtFrom, "start")}+09:00`,
-    createdAtTo: `${normalizeDateRangeInput(input.createdAtTo, "end")}+09:00`,
+    createdAtFrom: normalizeOrderSheetTimeFrameValue(input.createdAtFrom, "start"),
+    createdAtTo: normalizeOrderSheetTimeFrameValue(input.createdAtTo, "end"),
     maxPerPage: String(clampPageSize(input.maxPerPage)),
   });
 

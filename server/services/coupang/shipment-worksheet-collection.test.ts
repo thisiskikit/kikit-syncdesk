@@ -1173,6 +1173,86 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
+  it("keeps same-day end-date orders in the worksheet collection result", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "409-A:V-409-A",
+          shipmentBoxId: "409-A",
+          orderId: "O-409-A",
+          vendorItemId: "V-409-A",
+          status: "INSTRUCT",
+          orderedAt: "2026-04-09T09:10:00+09:00",
+          productName: "Same Day Instruct",
+          availableActions: ["uploadInvoice"],
+        }),
+        buildOrderRow({
+          id: "409-B:V-409-B",
+          shipmentBoxId: "409-B",
+          orderId: "O-409-B",
+          vendorItemId: "V-409-B",
+          status: "ACCEPT",
+          orderedAt: "2026-04-09T18:45:00+09:00",
+          productName: "Same Day Accept",
+          availableActions: ["markPreparing"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    markPreparingMock.mockResolvedValue({
+      items: [
+        {
+          shipmentBoxId: "409-B",
+          status: "succeeded",
+        },
+      ],
+      summary: {
+        total: 1,
+        succeededCount: 1,
+        failedCount: 0,
+        warningCount: 0,
+        skippedCount: 0,
+      },
+      completedAt: "2026-04-09T18:50:00.000Z",
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-04-08",
+      createdAtTo: "2026-04-09",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(listOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-04-08",
+        createdAtTo: "2026-04-09",
+        fetchAllPages: true,
+        includeCustomerService: false,
+      }),
+    );
+    expect(markPreparingMock).toHaveBeenCalledWith({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "409-B",
+          orderId: "O-409-B",
+          productName: "Same Day Accept",
+        },
+      ],
+    });
+    expect(result.items.map((item) => item.shipmentBoxId)).toEqual(["409-A", "409-B"]);
+    expect(result.items.find((item) => item.shipmentBoxId === "409-A")?.availableActions).toContain(
+      "uploadInvoice",
+    );
+    expect(result.items.find((item) => item.shipmentBoxId === "409-B")?.availableActions).toContain(
+      "uploadInvoice",
+    );
+  });
+
   it("auto expands to a full reconcile when the requested range goes further back", async () => {
     getStoreSheetMock.mockResolvedValue({
       ...buildEmptySheet(),
