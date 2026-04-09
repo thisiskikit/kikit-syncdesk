@@ -2,6 +2,35 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-09 / COUPANG Order-Sheet Aggregate Throttling
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/coupang/order-service.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - serialized aggregate Coupang order-sheet status fetches and added a retryable one-time retry per status
+- Change content:
+  - changed the no-status `listOrders()` path so `ACCEPT`, `INSTRUCT`, `DEPARTURE`, `DELIVERING`, `FINAL_DELIVERY`, and `NONE_TRACKING` are fetched one status at a time instead of being requested in parallel
+  - added a one-time retry for retryable per-status order-sheet failures such as `429`, `503`, and `504` before falling back to partial-success messaging
+- Reason:
+  - new orders could be missed during quick collect or worksheet refresh when one of the per-status order-sheet requests failed under Coupang rate limiting or temporary API pressure
+- Impact scope:
+  - COUPANG order-sheet aggregate lookup
+  - COUPANG quick collect and other worksheet/order views that rely on the no-status `listOrders()` path
+- Remaining issues:
+  - browser-level manual verification for live quick collect behavior was not run in this task
+  - non-retryable status failures can still surface as partial results with a warning message
+- Next work:
+  - if live traffic still drops statuses, consider making the status fetch concurrency and retry budget configurable through environment variables
+- Verification:
+  - passed: `npx vitest run --root . server/services/coupang/order-service.test.ts`
+  - not run: `npm run check`
+  - not run: browser-level manual verification
+
 ## 2026-04-09 / COUPANG Shipment-First Worksheet View
 
 - Change type:

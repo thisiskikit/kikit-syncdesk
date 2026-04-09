@@ -64,6 +64,7 @@ const ORDER_SHEET_STATUSES = [
   "NONE_TRACKING",
 ] as const;
 const MAX_ORDER_SHEET_PAGE_COUNT = 100;
+const ORDER_SHEET_STATUS_FETCH_CONCURRENCY = 1;
 
 type CustomerServiceLookupSnapshot = {
   relatedReturnRequests: CoupangReturnRow[];
@@ -680,6 +681,57 @@ function buildActionResponse(items: CoupangActionItemResult[]): CoupangBatchActi
     summary: summarizeActionItems(items),
     completedAt: new Date().toISOString(),
   };
+}
+
+function isRetryableOrderSheetLookupError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const retryable =
+    "retryable" in error && typeof error.retryable === "boolean" ? error.retryable : false;
+  if (retryable) {
+    return true;
+  }
+
+  const status = "status" in error && typeof error.status === "number" ? error.status : null;
+  return status === 429 || status === 503 || status === 504;
+}
+
+async function requestOrdersForStatus(
+  store: StoredCoupangStore,
+  input: {
+    createdAtFrom?: string;
+    createdAtTo?: string;
+    status: (typeof ORDER_SHEET_STATUSES)[number];
+    maxPerPage: number;
+    fetchAllPages: boolean;
+  },
+) {
+  const execute = async () =>
+    input.fetchAllPages
+      ? requestAllOrderPages(store, {
+          createdAtFrom: input.createdAtFrom,
+          createdAtTo: input.createdAtTo,
+          status: input.status,
+          maxPerPage: input.maxPerPage,
+        })
+      : requestOrders(store, {
+          createdAtFrom: input.createdAtFrom,
+          createdAtTo: input.createdAtTo,
+          status: input.status,
+          maxPerPage: input.maxPerPage,
+        });
+
+  try {
+    return await execute();
+  } catch (error) {
+    if (!isRetryableOrderSheetLookupError(error)) {
+      throw error;
+    }
+
+    return execute();
+  }
 }
 
 function createActionItem(input: {
@@ -1892,22 +1944,31 @@ export async function listOrders(input: {
 
     }
 
-    const results = await Promise.allSettled(
-      ORDER_SHEET_STATUSES.map((status) =>
-        fetchAllPages
-          ? requestAllOrderPages(store, {
-              createdAtFrom: input.createdAtFrom,
-              createdAtTo: input.createdAtTo,
-              status,
-              maxPerPage: pageSize,
-            })
-          : requestOrders(store, {
-              createdAtFrom: input.createdAtFrom,
-              createdAtTo: input.createdAtTo,
-              status,
-              maxPerPage: pageSize,
-            }),
-      ),
+    const results = await mapWithConcurrency(
+      [...ORDER_SHEET_STATUSES],
+      ORDER_SHEET_STATUS_FETCH_CONCURRENCY,
+      async (status) => {
+        try {
+          const value = await requestOrdersForStatus(store, {
+            createdAtFrom: input.createdAtFrom,
+            createdAtTo: input.createdAtTo,
+            status,
+            maxPerPage: pageSize,
+            fetchAllPages,
+          });
+          return {
+            status: "fulfilled",
+            value,
+          } satisfies PromiseFulfilledResult<
+            Awaited<ReturnType<typeof requestOrders>> | Awaited<ReturnType<typeof requestAllOrderPages>>
+          >;
+        } catch (reason) {
+          return {
+            status: "rejected",
+            reason,
+          } satisfies PromiseRejectedResult;
+        }
+      },
     );
 
     const baseItems = mergeOrderRows(

@@ -410,6 +410,57 @@ describe("coupang order service", () => {
     expect(result.message).toContain("temporary failure");
   });
 
+  it("retries retryable status lookups once when aggregating across all order-sheet statuses", async () => {
+    const callsByStatus = new Map<string, number>();
+
+    requestCoupangJsonMock.mockImplementation(async (request: MockApiInput) => {
+      if (!request.path.includes("/ordersheets")) {
+        throw new Error(`Unexpected path: ${request.path}`);
+      }
+
+      const status = request.query.get("status") ?? "";
+      const nextCount = (callsByStatus.get(status) ?? 0) + 1;
+      callsByStatus.set(status, nextCount);
+
+      if (status === "INSTRUCT" && nextCount === 1) {
+        throw Object.assign(new Error("rate limited"), {
+          status: 429,
+          retryable: true,
+        });
+      }
+
+      return {
+        data:
+          status === "INSTRUCT"
+            ? [
+                buildOrderSheet({
+                  shipmentBoxId: "210",
+                  orderId: "O-210",
+                  vendorItemId: "V-210",
+                  status: "INSTRUCT",
+                  orderedAt: "2026-03-25T12:00:00+09:00",
+                  productName: "Retried Item",
+                }),
+              ]
+            : [],
+        nextToken: null,
+      };
+    });
+
+    const result = await listOrders({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-20",
+      createdAtTo: "2026-03-25",
+      maxPerPage: 20,
+    });
+
+    expect(result.source).toBe("live");
+    expect(result.servedFromFallback).toBe(false);
+    expect(result.items.map((item) => item.shipmentBoxId)).toEqual(["210"]);
+    expect(callsByStatus.get("INSTRUCT")).toBe(2);
+    expect(getOrderSheetCalls()).toHaveLength(ALL_ORDER_STATUSES.length + 1);
+  });
+
   it("returns a live guidance message for unsupported cancel filters", async () => {
     const result = await listOrders({
       storeId: "store-1",
