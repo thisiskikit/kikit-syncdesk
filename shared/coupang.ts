@@ -1246,7 +1246,8 @@ export interface CoupangShipmentWorksheetViewResponse {
 
 export type CoupangShipmentWorksheetBulkResolveMode =
   | "invoice_ready"
-  | "not_exported_download";
+  | "not_exported_download"
+  | "prepare_ready";
 
 export interface CoupangShipmentWorksheetBulkResolveRequest {
   storeId: string;

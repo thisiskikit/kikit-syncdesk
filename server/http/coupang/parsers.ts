@@ -328,7 +328,12 @@ export function parseShipmentWorksheetBulkResolveRequest(
 
   return {
     storeId: asString(item.storeId),
-    mode: asString(item.mode) === "invoice_ready" ? "invoice_ready" : "not_exported_download",
+    mode:
+      asString(item.mode) === "invoice_ready"
+        ? "invoice_ready"
+        : asString(item.mode) === "prepare_ready"
+          ? "prepare_ready"
+          : "not_exported_download",
     viewQuery,
   };
 }

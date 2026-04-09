@@ -2,6 +2,38 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-09 / COUPANG Shipment Prepare Button
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - added a shipment-page action that moves current-view `결제완료(ACCEPT)` worksheet rows to `발송준비중`
+- Change content:
+  - extended shipment worksheet bulk resolution with a `prepare_ready` mode that resolves only rows exposing `markPreparing`
+  - excluded rows with claim issues from the prepare-ready set so the new action follows the same claim-blocking rule already used for invoice transmission
+  - added a `결제완료 -> 발송준비중` button next to `빠른 수집` on the Coupang shipment page
+  - wired the button to resolve the current shipment view on the server, submit the eligible rows to `/api/coupang/orders/prepare`, and refresh the worksheet afterward
+  - surfaced blocked claim rows in the feedback panel so operators can see why some `결제완료` rows were not prepared
+- Reason:
+  - operators wanted a visible post-collect action on the shipment screen that can move newly collected `결제완료` orders into `발송준비중` without leaving the shipment workflow
+- Impact scope:
+  - COUPANG shipment worksheet view resolution
+  - COUPANG shipment page header actions
+- Remaining issues:
+  - browser-level manual verification for the new button and prepare flow was not run in this task
+- Verification:
+  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts`
+  - passed: `npm run check`
+  - not run: browser-level manual verification
+
 ## 2026-04-09 / COUPANG New-Only Quick Collect
 
 - Change type:

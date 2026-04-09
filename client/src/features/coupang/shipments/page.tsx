@@ -20,6 +20,7 @@ import {
   type CoupangExchangeDetail,
   type CoupangExchangeRow,
   type CoupangInvoiceTarget,
+  type CoupangPrepareTarget,
   type CoupangReturnDetail,
   type CoupangReturnRow,
   type CoupangShipmentInvoiceTransmissionStatus,
@@ -960,16 +961,46 @@ function hasShipmentClaimIssue(
 
 function getShipmentClaimSummary(
   row: Pick<
-    ShipmentStatusCarrier,
-    "orderStatus" | "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+    CoupangShipmentWorksheetRow,
+    | "orderStatus"
+    | "customerServiceIssueSummary"
+    | "customerServiceIssueCount"
+    | "customerServiceIssueBreakdown"
   >,
 ) {
-  const summary = (row.customerServiceIssueSummary ?? "").trim();
-  if (summary) {
-    return summary;
-  }
+  return (
+    formatShipmentWorksheetCustomerServiceLabel({
+      summary: row.customerServiceIssueSummary,
+      count: row.customerServiceIssueCount,
+      state: "ready",
+      breakdown: row.customerServiceIssueBreakdown,
+    }) ??
+    formatCoupangOrderStatusLabel(
+      resolveCoupangDisplayOrderStatus({
+        orderStatus: row.orderStatus,
+        customerServiceIssueSummary: row.customerServiceIssueSummary,
+        customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+      }),
+    )
+  );
+}
 
-  return formatOrderStatusLabel(resolveWorksheetOrderStatus(row));
+function buildPrepareClaimBlockedDetails(
+  rows: Array<
+    Pick<
+      CoupangShipmentWorksheetRow,
+      | "orderId"
+      | "shipmentBoxId"
+      | "orderStatus"
+      | "customerServiceIssueSummary"
+      | "customerServiceIssueCount"
+      | "customerServiceIssueBreakdown"
+    >
+  >,
+) {
+  return rows.map(
+    (row) => `주문 ${row.orderId} / 배송 ${row.shipmentBoxId} / ${getShipmentClaimSummary(row)}`,
+  );
 }
 
 function buildInvoiceClaimBlockedDetails(
@@ -2008,7 +2039,9 @@ export default function CoupangShipmentsPage() {
     };
   }
 
-  async function resolveWorksheetBulkRows(mode: "invoice_ready" | "not_exported_download") {
+  async function resolveWorksheetBulkRows(
+    mode: "invoice_ready" | "not_exported_download" | "prepare_ready",
+  ) {
     if (!filters.selectedStoreId) {
       return null;
     }
@@ -2022,6 +2055,108 @@ export default function CoupangShipmentsPage() {
         viewQuery: buildCurrentWorksheetViewQuery(),
       },
     );
+  }
+
+  async function executePrepareAcceptedOrders() {
+    if (!filters.selectedStoreId) {
+      return;
+    }
+
+    if (isFallback) {
+      setFeedback({
+        type: "warning",
+        title: "발송준비중 처리 불가",
+        message: "대체 데이터에서는 결제완료 주문을 발송준비중으로 처리할 수 없습니다.",
+        details: [],
+      });
+      return;
+    }
+
+    const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
+    const blockedClaimRows = resolvedRows?.blockedItems ?? [];
+    const blockedClaimDetails = buildPrepareClaimBlockedDetails(blockedClaimRows);
+    const targetRows = resolvedRows?.items ?? [];
+
+    if (!targetRows.length) {
+      setFeedback({
+        type: "warning",
+        title: "발송준비중 처리",
+        message: resolvedRows?.matchedCount
+          ? "클레임이 있는 주문은 제외되어 발송준비중으로 넘길 결제완료 주문이 없습니다."
+          : "현재 화면 조건에서 발송준비중으로 넘길 결제완료 주문이 없습니다.",
+        details: blockedClaimDetails.slice(0, 8),
+      });
+      return;
+    }
+
+    const localToastId = startLocalOperation({
+      channel: "coupang",
+      actionName: "쿠팡 결제완료 주문 발송준비중 처리",
+      targetCount: targetRows.length,
+    });
+    setBusyAction("prepare-orders");
+    setFeedback(null);
+
+    try {
+      const result = await apiRequestJson<CoupangBatchActionResponse>(
+        "POST",
+        "/api/coupang/orders/prepare",
+        {
+          storeId: filters.selectedStoreId,
+          items: targetRows.map(
+            (row) =>
+              ({
+                shipmentBoxId: row.shipmentBoxId,
+                orderId: row.orderId,
+                productName: row.productName,
+              }) satisfies CoupangPrepareTarget,
+          ),
+        },
+      );
+
+      if (result.operation) {
+        publishOperation(result.operation);
+      }
+
+      await collectWorksheet("incremental", {
+        silent: true,
+        skipBusyState: true,
+      });
+
+      const detailLines = [...buildFailureDetails(result), ...blockedClaimDetails].slice(0, 8);
+      const warning =
+        blockedClaimDetails.length > 0 ||
+        result.summary.failedCount > 0 ||
+        result.summary.warningCount > 0 ||
+        result.summary.skippedCount > 0;
+
+      setFeedback({
+        type: warning ? "warning" : "success",
+        title: "발송준비중 처리 결과",
+        message: `${buildResultSummary(result)} / 결제완료 ${targetRows.length}건 처리`,
+        details: detailLines,
+      });
+      finishLocalOperation(localToastId, {
+        status: warning ? "warning" : "success",
+        summary: `${targetRows.length}건 발송준비중 처리`,
+      });
+      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "결제완료 주문을 발송준비중으로 넘기지 못했습니다.";
+      setFeedback({
+        type: "error",
+        title: "발송준비중 처리 실패",
+        message,
+        details: [],
+      });
+      finishLocalOperation(localToastId, {
+        status: "error",
+        errorMessage: message,
+      });
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function refetchWorksheetView() {
@@ -3261,6 +3396,18 @@ export default function CoupangShipmentsPage() {
                 disabled={collectActionDisabled}
               >
                 {busyAction === "collect-new" ? "빠른 수집 중..." : "빠른 수집"}
+              </button>
+              <button
+                className="button secondary"
+                onClick={() => void executePrepareAcceptedOrders()}
+                disabled={
+                  !filters.selectedStoreId ||
+                  isFallback ||
+                  busyAction !== null ||
+                  (activeSheet?.orderCounts.ACCEPT ?? 0) === 0
+                }
+              >
+                {busyAction === "prepare-orders" ? "발송준비중 처리 중..." : "결제완료 -> 발송준비중"}
               </button>
               <button
                 className="button secondary"

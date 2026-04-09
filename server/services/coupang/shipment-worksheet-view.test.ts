@@ -217,4 +217,42 @@ describe("shipment worksheet view", () => {
     expect(resolved.matchedCount).toBe(3);
     expect(resolved.resolvedCount).toBe(1);
   });
+
+  it("resolves prepare-ready rows from the current view query", () => {
+    const rows = [
+      buildRow({
+        id: "1",
+        status: "ACCEPT",
+        availableActions: ["markPreparing"],
+      }),
+      buildRow({
+        id: "2",
+        status: "ACCEPT",
+        customerServiceIssueCount: 1,
+        customerServiceIssueSummary: "반품 1건",
+        customerServiceIssueBreakdown: [{ type: "return", count: 1 }],
+        availableActions: ["markPreparing"],
+      }),
+      buildRow({
+        id: "3",
+        status: "INSTRUCT",
+        availableActions: ["uploadInvoice"],
+      }),
+    ];
+
+    const resolved = resolveShipmentWorksheetRows(
+      rows,
+      {
+        scope: "all",
+        page: 1,
+        pageSize: 50,
+      },
+      "prepare_ready",
+    );
+
+    expect(resolved.items.map((row) => row.id)).toEqual(["1"]);
+    expect(resolved.blockedItems.map((row) => row.id)).toEqual(["2"]);
+    expect(resolved.matchedCount).toBe(2);
+    expect(resolved.resolvedCount).toBe(1);
+  });
 });

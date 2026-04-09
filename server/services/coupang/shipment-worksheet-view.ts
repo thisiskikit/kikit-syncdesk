@@ -198,6 +198,10 @@ function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
   );
 }
 
+function canMarkPreparingRow(row: CoupangShipmentWorksheetRow) {
+  return row.availableActions.includes("markPreparing") && !hasCustomerServiceIssue(row);
+}
+
 function getInvoiceStatusCardKey(
   row: CoupangShipmentWorksheetRow,
 ): Exclude<CoupangShipmentWorksheetInvoiceStatusCard, "all"> {
@@ -526,6 +530,18 @@ export function resolveShipmentWorksheetRows(
 ): WorksheetResolvedItems {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
   const { filteredRows } = resolveFilteredRows(rows, query);
+
+  if (mode === "prepare_ready") {
+    const prepareCandidates = filteredRows.filter((row) => row.availableActions.includes("markPreparing"));
+    const blockedItems = prepareCandidates.filter((row) => hasCustomerServiceIssue(row));
+    const items = prepareCandidates.filter((row) => canMarkPreparingRow(row));
+    return {
+      items,
+      blockedItems,
+      matchedCount: prepareCandidates.length,
+      resolvedCount: items.length,
+    };
+  }
 
   if (mode === "invoice_ready") {
     const blockedItems = filteredRows.filter((row) => hasCustomerServiceIssue(row));

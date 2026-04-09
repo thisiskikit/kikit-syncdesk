@@ -98,6 +98,7 @@
   - shipment worksheet quick collect fetches live return/exchange claims and can add claim-only rows that no longer appear in the active order list
 - shipment worksheet `빠른 수집` now runs in a `new_only` mode that rechecks the selected date range, fetches `ACCEPT` and `INSTRUCT` as required statuses, and only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available as `전체 재수집`
 - shipment worksheet `빠른 수집` no longer auto-runs `markPreparing`, so newly collected `결제완료(ACCEPT)` orders remain visible instead of being immediately pushed to `상품준비중`
+- shipment worksheet now exposes a `결제완료 -> 발송준비중` action beside `빠른 수집`; it resolves the current shipment view on the server, excludes claim rows, and sends only eligible `markPreparing` targets to the Coupang prepare-order API
 - shipment worksheet `빠른 수집` now records a Coupang channel error log with the failed status, date range, and store context whenever a required status lookup such as `ACCEPT` or `INSTRUCT` fails
 - shipment worksheet collect requests now create a tracked Coupang shipment operation immediately when `빠른 수집`, `전체 재수집`, or `전체 재동기화` starts, so operators can inspect running/failed collection attempts even when the request ends early before a status-specific error event is written
 - shipment page collection requests now preserve the user-selected `createdAtFrom ~ createdAtTo` values instead of forcing `createdAtTo` back to the current date on the client
