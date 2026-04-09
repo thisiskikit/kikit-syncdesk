@@ -218,8 +218,8 @@ const WORKSHEET_SCOPE_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { value: "dispatch_active", label: "출고업무", description: "주문접수·상품준비중" },
-  { value: "post_dispatch", label: "배송 이후", description: "출고완료·배송중·배송완료" },
+  { value: "dispatch_active", label: "출고업무", description: "미출력 주문 포함" },
+  { value: "post_dispatch", label: "배송 이후", description: "출력 완료된 배송 이후 주문" },
   { value: "claims", label: "클레임·제외", description: "출고중지·취소·반품·교환" },
   { value: "all", label: "전체", description: "전체 워크시트" },
 ] as const;

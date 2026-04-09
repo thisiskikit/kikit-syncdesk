@@ -29,6 +29,7 @@ This file records repository changes that are considered complete only when the 
   - added `GET /api/coupang/shipments/worksheet/view` with scope, search, card filters, sorting, counts, and pagination handled on the server
   - added `POST /api/coupang/shipments/worksheet/resolve` so invoice transmission and not-exported download targets can be resolved from the current server-side view instead of the browser's in-memory row list
   - changed the shipment page to default to the `dispatch_active` scope and show `출고업무 / 배송 이후 / 클레임·제외 / 전체` scope counts above the worksheet
+  - refined `dispatch_active` so newly collected non-claim rows remain visible there until they are exported, even if Coupang has already moved them into later delivery statuses
   - removed the raw order-status select from the shipment filter bar and stopped loading the entire worksheet into the browser for normal worksheet interaction
   - kept claim rows persisted in the worksheet but hid them from the default operational scope; they remain visible in the dedicated `claims` scope
   - changed worksheet row edits and selection state to follow current-page rows plus local dirty overlays instead of a full-array client model

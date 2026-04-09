@@ -344,12 +344,13 @@ function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
 function matchesScope(row: CoupangShipmentWorksheetRow, scope: CoupangShipmentWorksheetViewScope) {
   const status = (row.orderStatus ?? "").trim().toUpperCase();
   const hasClaim = hasCustomerServiceIssue(row);
+  const isExported = Boolean(row.exportedAt);
 
   switch (scope) {
     case "dispatch_active":
-      return DISPATCH_ACTIVE_STATUSES.has(status) && !hasClaim;
+      return !hasClaim && (DISPATCH_ACTIVE_STATUSES.has(status) || !isExported);
     case "post_dispatch":
-      return POST_DISPATCH_STATUSES.has(status) && !hasClaim;
+      return POST_DISPATCH_STATUSES.has(status) && !hasClaim && isExported;
     case "claims":
       return hasClaim;
     case "all":

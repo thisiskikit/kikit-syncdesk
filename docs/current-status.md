@@ -99,8 +99,8 @@
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
   - shipment worksheet Excel downloads exclude claim-bearing rows so only order rows are exported and marked as printed
   - the shipment worksheet UI now uses server-provided scope counts, card counts, filtered totals, and page slices instead of recomputing those values over the full worksheet array in the browser
-  - the default shipment worksheet scope is `dispatch_active`, which only includes `ACCEPT` and `INSTRUCT` rows without claims
-  - claim rows stay available under the dedicated `claims` scope, and post-shipment rows stay available under `post_dispatch`
+  - the default shipment worksheet scope is `dispatch_active`, which shows non-claim rows that are still unprinted, plus regular `ACCEPT` and `INSTRUCT` work items
+  - claim rows stay available under the dedicated `claims` scope, and exported post-shipment rows stay available under `post_dispatch`
 
 ## Change Summary
 

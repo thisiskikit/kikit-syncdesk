@@ -87,6 +87,7 @@ describe("shipment worksheet view", () => {
     const rows = [
       buildRow({ id: "1", status: "ACCEPT" }),
       buildRow({ id: "2", status: "INSTRUCT" }),
+      buildRow({ id: "5", status: "DELIVERING" }),
       buildRow({
         id: "3",
         status: "INSTRUCT",
@@ -94,7 +95,7 @@ describe("shipment worksheet view", () => {
         customerServiceIssueSummary: "반품 1건",
         customerServiceIssueBreakdown: [{ type: "return", count: 1 }],
       }),
-      buildRow({ id: "4", status: "DELIVERING" }),
+      buildRow({ id: "4", status: "DELIVERING", exportedAt: "2026-04-09T11:00:00.000Z" }),
     ];
 
     const view = buildShipmentWorksheetViewData(rows, {
@@ -103,11 +104,13 @@ describe("shipment worksheet view", () => {
       pageSize: 50,
     });
 
-    expect(view.items.map((row) => row.id)).toEqual(["1", "2"]);
-    expect(view.scopeCounts.dispatch_active).toBe(2);
+    expect(view.items.map((row) => row.id)).toEqual(["1", "2", "5"]);
+    expect(view.scopeCounts.dispatch_active).toBe(3);
     expect(view.scopeCounts.claims).toBe(1);
+    expect(view.scopeCounts.post_dispatch).toBe(1);
     expect(view.orderCounts.ACCEPT).toBe(1);
     expect(view.orderCounts.INSTRUCT).toBe(1);
+    expect(view.orderCounts.DELIVERING).toBe(1);
   });
 
   it("returns only claim rows for claims scope", () => {
