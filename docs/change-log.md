@@ -22,6 +22,7 @@ This file records repository changes that are considered complete only when the 
   - limited quick-collect customer-service refresh to newly inserted rows so existing worksheet rows are not re-synced during `빠른 수집`
   - stopped auto-running `markPreparing` during `빠른 수집` so newly collected `결제완료` orders stay visible to operators
   - added Coupang channel error logging for required quick-collect status lookup failures so operators can inspect which status, date range, and store context caused the miss
+  - stopped forcing shipment collection requests to the current client date so the selected date range is sent to the server as entered
   - added a separate `전체 재수집` button in the shipment management menu for the previous incremental merge behavior, while keeping `전체 재동기화` as the explicit full-range refresh
 - Reason:
   - operators wanted `빠른 수집` to behave like a lightweight “add true new orders only” action rather than a partial re-hydration of the existing worksheet

@@ -302,14 +302,15 @@ function createDefaultFilters(): FilterState {
 }
 
 function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
-  const today = defaultSeoulDate(0);
   const fallbackFrom = defaultSeoulDate(-3);
+  const fallbackTo = defaultSeoulDate(0);
   const normalizedFrom = current.createdAtFrom.trim() || fallbackFrom;
+  const normalizedTo = current.createdAtTo.trim() || fallbackTo;
 
   return {
     ...current,
-    createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
-    createdAtTo: today,
+    createdAtFrom: normalizedFrom,
+    createdAtTo: normalizedTo,
     scope: current.scope ?? "dispatch_active",
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
