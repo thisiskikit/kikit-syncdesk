@@ -1,4 +1,5 @@
 import type { RequestHandler } from "express";
+import type { CollectCoupangShipmentInput } from "@shared/coupang";
 import {
   collectShipmentWorksheet,
   getShipmentWorksheet,
@@ -12,6 +13,7 @@ import {
   uploadInvoice,
 } from "../../../services/coupang/order-service";
 import { sendData, sendError } from "../../../services/shared/api-response";
+import { runTrackedOperation, summarizeResult } from "../../../services/operations/service";
 import { COUPANG_ACTION_LABELS } from "../../coupang/action-labels";
 import { COUPANG_SHIPMENTS_MENU_KEY } from "../../coupang/constants";
 import { buildInvoicePayload } from "../../coupang/payloads";
@@ -30,6 +32,46 @@ import {
 } from "../../coupang/tracked-actions";
 
 let retryHandlersRegistered = false;
+
+function resolveCollectModeLabel(syncMode: CollectCoupangShipmentInput["syncMode"] | undefined) {
+  return syncMode === "full"
+    ? "전체 재동기화"
+    : syncMode === "incremental"
+      ? "전체 재수집"
+      : "빠른 수집";
+}
+
+function buildCollectResultSummary(
+  response: Awaited<ReturnType<typeof collectShipmentWorksheet>>,
+) {
+  const modeLabel = resolveCollectModeLabel(response.syncSummary?.mode);
+  const headline =
+    response.syncSummary?.mode === "new_only"
+      ? `${modeLabel} 신규 ${response.syncSummary.insertedCount}건 추가`
+      : response.syncSummary
+        ? `${modeLabel} ${response.syncSummary.insertedCount}건 추가 / ${response.syncSummary.updatedCount}건 갱신`
+        : `${modeLabel} ${response.items.length}건 반영`;
+
+  return summarizeResult({
+    headline,
+    detail: response.message,
+    stats: response.syncSummary
+      ? {
+          mode: response.syncSummary.mode,
+          fetchedCount: response.syncSummary.fetchedCount,
+          insertedCount: response.syncSummary.insertedCount,
+          updatedCount: response.syncSummary.updatedCount,
+          skippedHydrationCount: response.syncSummary.skippedHydrationCount,
+          autoExpanded: response.syncSummary.autoExpanded,
+          source: response.source,
+        }
+      : {
+          rowCount: response.items.length,
+          source: response.source,
+        },
+    preview: response.message ?? headline,
+  });
+}
 
 function validateInvoiceTarget(item: {
   shipmentBoxId: string;
@@ -151,8 +193,37 @@ export const collectShipmentWorksheetHandler: RequestHandler = async (req, res) 
     if (!ensureStoreId(res, input.storeId)) {
       return;
     }
+    const normalizedPayload = { ...input } as Record<string, unknown>;
+    const requestPayload =
+      req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : null;
 
-    sendData(res, await collectShipmentWorksheet(input));
+    const tracked = await runTrackedOperation({
+      channel: "coupang",
+      menuKey: COUPANG_SHIPMENTS_MENU_KEY,
+      actionKey: "collect-worksheet",
+      mode: "foreground",
+      targetType: "store",
+      targetCount: 1,
+      targetIds: [input.storeId],
+      requestPayload,
+      normalizedPayload,
+      retryable: false,
+      execute: async () => {
+        const data = await collectShipmentWorksheet(input);
+
+        return {
+          data,
+          status: data.source === "fallback" ? "warning" : "success",
+          normalizedPayload,
+          resultSummary: buildCollectResultSummary(data),
+        };
+      },
+    });
+
+    sendData(res, {
+      ...tracked.data,
+      operation: tracked.operation,
+    });
   } catch (error) {
     sendError(res, 400, {
       code: "COUPANG_SHIPMENT_COLLECT_FAILED",
