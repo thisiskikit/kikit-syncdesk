@@ -3,6 +3,7 @@
   CoupangExchangeDetail,
   CoupangExchangeRow,
   CoupangOrderDetail,
+  CoupangOrderListResponse,
   CoupangOrderRow,
   CoupangReturnDetail,
   CoupangReturnRow,
@@ -35,6 +36,7 @@ import {
   coupangShipmentWorksheetStore,
   type CoupangShipmentWorksheetSyncState,
 } from "./shipment-worksheet-store";
+import { recordSystemErrorEvent } from "../logs/service";
 import {
   buildShipmentWorksheetViewData,
   resolveShipmentWorksheetRows,
@@ -417,6 +419,13 @@ const CUSTOMER_SERVICE_READY_TTL_MS = 10 * 60_000;
 const INCREMENTAL_OVERLAP_HOURS = 24;
 const FULL_RECONCILE_STALE_HOURS = 12;
 const ORDER_DETAIL_REFRESH_HOURS = 6;
+const QUICK_COLLECT_REQUIRED_STATUSES = ["ACCEPT", "INSTRUCT"] as const;
+const QUICK_COLLECT_OPTIONAL_STATUSES = [
+  "DEPARTURE",
+  "DELIVERING",
+  "FINAL_DELIVERY",
+  "NONE_TRACKING",
+] as const;
 const SHIPMENT_WORKSHEET_STATUSES = new Set([
   "ACCEPT",
   "INSTRUCT",
@@ -458,6 +467,10 @@ type ShipmentWorksheetSyncPlan = {
   fetchCreatedAtFrom: string;
   fetchCreatedAtTo: string;
   statusFilter: string | null;
+};
+
+type ShipmentOrderLookupResult = Pick<CoupangOrderListResponse, "items" | "source" | "message"> & {
+  hasRequiredFailure?: boolean;
 };
 
 function createEmptySyncState(): CoupangShipmentWorksheetSyncState {
@@ -687,6 +700,109 @@ function resolveSyncPlan(
     fetchCreatedAtTo: selectedCreatedAtTo,
     statusFilter,
   };
+}
+
+async function fetchQuickCollectOrders(input: {
+  storeId: string;
+  fetchCreatedAtFrom: string;
+  fetchCreatedAtTo: string;
+  statusFilter: string | null;
+  maxPerPage?: number;
+}) {
+  const statusFilter = normalizeStatusFilter(input.statusFilter);
+  const requiredStatuses = statusFilter
+    ? [statusFilter]
+    : [...QUICK_COLLECT_REQUIRED_STATUSES];
+  const optionalStatuses = statusFilter ? [] : [...QUICK_COLLECT_OPTIONAL_STATUSES];
+  const collectedBySourceKey = new Map<string, CoupangOrderRow>();
+  const failures: string[] = [];
+  let hasRequiredFailure = false;
+
+  const fetchOne = async (status: string, required: boolean) => {
+    try {
+      const response = await listOrders({
+        storeId: input.storeId,
+        createdAtFrom: input.fetchCreatedAtFrom,
+        createdAtTo: input.fetchCreatedAtTo,
+        status,
+        maxPerPage: input.maxPerPage,
+        fetchAllPages: true,
+        includeCustomerService: false,
+      });
+
+      if (response.source !== "live") {
+        void recordSystemErrorEvent({
+          source: "coupang.shipment.quick-collect.status",
+          channel: "coupang",
+          error: new Error(
+            `${status} quick-collect lookup returned ${response.source}.${response.message ? ` ${response.message}` : ""}`,
+          ),
+          meta: {
+            phase: "quick_collect",
+            mode: "new_only",
+            status,
+            required,
+            storeId: input.storeId,
+            createdAtFrom: input.fetchCreatedAtFrom,
+            createdAtTo: input.fetchCreatedAtTo,
+            responseSource: response.source,
+          },
+        });
+        failures.push(
+          `${status} 신규 주문 조회에 실패했습니다.${response.message ? ` ${response.message}` : ""}`,
+        );
+        if (required) {
+          hasRequiredFailure = true;
+        }
+        return;
+      }
+
+      for (const row of response.items) {
+        const sourceKey = buildSourceKey(input.storeId, row);
+        if (!collectedBySourceKey.has(sourceKey)) {
+          collectedBySourceKey.set(sourceKey, row);
+        }
+      }
+    } catch (error) {
+      void recordSystemErrorEvent({
+        source: "coupang.shipment.quick-collect.status",
+        channel: "coupang",
+        error,
+        meta: {
+          phase: "quick_collect",
+          mode: "new_only",
+          status,
+          required,
+          storeId: input.storeId,
+          createdAtFrom: input.fetchCreatedAtFrom,
+          createdAtTo: input.fetchCreatedAtTo,
+        },
+      });
+      failures.push(
+        error instanceof Error
+          ? `${status} 신규 주문 조회에 실패했습니다. ${error.message}`
+          : `${status} 신규 주문 조회에 실패했습니다.`,
+      );
+      if (required) {
+        hasRequiredFailure = true;
+      }
+    }
+  };
+
+  for (const status of requiredStatuses) {
+    await fetchOne(status, true);
+  }
+
+  for (const status of optionalStatuses) {
+    await fetchOne(status, false);
+  }
+
+  return {
+    items: Array.from(collectedBySourceKey.values()),
+    source: hasRequiredFailure ? "fallback" : "live",
+    message: mergeMessages(failures),
+    hasRequiredFailure,
+  } satisfies ShipmentOrderLookupResult;
 }
 
 function buildReadCustomerServiceSyncPlan(currentSheet: WorksheetStoreSheet): ShipmentWorksheetSyncPlan {
@@ -1678,21 +1794,31 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const insertOnlyMode = syncPlan.mode === "new_only";
   const syncModeLabel =
     syncPlan.mode === "full" ? "전체 재동기화" : syncPlan.mode === "incremental" ? "전체 재수집" : "빠른 수집";
-  const listResponse = await listOrders({
-    storeId: input.storeId,
-    createdAtFrom: syncPlan.fetchCreatedAtFrom,
-    createdAtTo: syncPlan.fetchCreatedAtTo,
-    status: syncPlan.statusFilter ?? undefined,
-    maxPerPage: input.maxPerPage,
-    fetchAllPages: true,
-    includeCustomerService: false,
-  });
+  const listResponse = insertOnlyMode
+    ? await fetchQuickCollectOrders({
+        storeId: input.storeId,
+        fetchCreatedAtFrom: syncPlan.fetchCreatedAtFrom,
+        fetchCreatedAtTo: syncPlan.fetchCreatedAtTo,
+        statusFilter: syncPlan.statusFilter,
+        maxPerPage: input.maxPerPage,
+      })
+    : await listOrders({
+        storeId: input.storeId,
+        createdAtFrom: syncPlan.fetchCreatedAtFrom,
+        createdAtTo: syncPlan.fetchCreatedAtTo,
+        status: syncPlan.statusFilter ?? undefined,
+        maxPerPage: input.maxPerPage,
+        fetchAllPages: true,
+        includeCustomerService: false,
+      });
 
   if (listResponse.source !== "live") {
     const fallbackMessage = mergeMessages([
       currentSheet.message,
       listResponse.message,
-      "실연동 수집에 실패해 기존 셀픽 워크시트를 유지했습니다.",
+      insertOnlyMode
+        ? "필수 신규 주문 상태를 확인하지 못해 기존 셀픽 워크시트를 유지했습니다."
+        : "실연동 수집에 실패해 기존 셀픽 워크시트를 유지했습니다.",
     ]);
 
     return buildWorksheetResponse(
@@ -1947,7 +2073,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     collectionCandidateBySourceKey.set(sourceKey, nextCandidate);
     quickCollectClaimInsertCount += 1;
   }
-  const prepareTargets = buildPrepareTargets(collectionCandidates);
+  const prepareTargets = insertOnlyMode ? [] : buildPrepareTargets(collectionCandidates);
   const preparedShipmentBoxIds = new Set<string>();
 
   if (prepareTargets.length) {

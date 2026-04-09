@@ -96,7 +96,9 @@
   - completed cancel rows can be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals
   - shipment worksheet reads force a fresh claim lookup even for recently `ready` rows so the list can surface newly arrived claims before the user opens detail
   - shipment worksheet quick collect fetches live return/exchange claims and can add claim-only rows that no longer appear in the active order list
-  - shipment worksheet `빠른 수집` now runs in a `new_only` mode that rechecks the selected date range but only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available as `전체 재수집`
+  - shipment worksheet `빠른 수집` now runs in a `new_only` mode that rechecks the selected date range, fetches `ACCEPT` and `INSTRUCT` as required statuses, and only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available as `전체 재수집`
+  - shipment worksheet `빠른 수집` no longer auto-runs `markPreparing`, so newly collected `결제완료(ACCEPT)` orders remain visible instead of being immediately pushed to `상품준비중`
+  - shipment worksheet `빠른 수집` now records a Coupang channel error log with the failed status, date range, and store context whenever a required status lookup such as `ACCEPT` or `INSTRUCT` fails
   - shipment worksheet detail responses synthesize claim summary fields from live return/exchange lookups so the detail status box can override the base order status immediately when the popup confirms a claim
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
   - shipment worksheet Excel downloads exclude claim-bearing rows so only order rows are exported and marked as printed
