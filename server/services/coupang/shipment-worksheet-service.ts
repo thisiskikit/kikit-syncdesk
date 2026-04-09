@@ -1820,12 +1820,24 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         ? "필수 신규 주문 상태를 확인하지 못해 기존 셀픽 워크시트를 유지했습니다."
         : "실연동 수집에 실패해 기존 셀픽 워크시트를 유지했습니다.",
     ]);
+    const fallbackSyncSummary = {
+      mode: syncPlan.mode,
+      fetchedCount: 0,
+      insertedCount: 0,
+      updatedCount: 0,
+      skippedHydrationCount: 0,
+      autoExpanded: syncPlan.autoExpanded,
+      fetchCreatedAtFrom: syncPlan.fetchCreatedAtFrom,
+      fetchCreatedAtTo: syncPlan.fetchCreatedAtTo,
+      statusFilter: syncPlan.statusFilter,
+    } satisfies CoupangShipmentWorksheetSyncSummary;
 
     return buildWorksheetResponse(
       store,
       {
         ...currentSheet,
         source: "fallback",
+        syncSummary: fallbackSyncSummary,
       },
       fallbackMessage,
     );

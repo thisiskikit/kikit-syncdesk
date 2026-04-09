@@ -232,18 +232,16 @@ function normalizeOrderSheetTimeFrameValue(value: string | undefined, edge: "sta
     const date = new Date();
     date.setDate(date.getDate() + (edge === "start" ? -DEFAULT_RANGE_DAYS : 0));
     const day = formatSeoulDate(date);
-    return `${day}T${edge === "end" ? "23:59:59" : "00:00:00"}+09:00`;
+    return `${day}+09:00`;
   }
 
-  if (value.includes("+")) {
-    return value;
+  const normalizedDate = normalizeDateRangeInput(value, edge);
+
+  if (normalizedDate.includes("+")) {
+    return normalizedDate;
   }
 
-  const normalized = value.includes("T")
-    ? value
-    : `${value}T${edge === "end" ? "23:59:59" : "00:00:00"}`;
-
-  return `${normalized}+09:00`;
+  return `${normalizedDate}+09:00`;
 }
 
 function appendMessage(base: string | null, next: string | null) {
