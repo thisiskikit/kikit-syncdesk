@@ -1122,7 +1122,7 @@ export function isCoupangInvoiceAlreadyProcessedResult(input: {
   return false;
 }
 
-export type CoupangShipmentSyncMode = "incremental" | "full";
+export type CoupangShipmentSyncMode = "new_only" | "incremental" | "full";
 
 export interface CoupangShipmentWorksheetSyncSummary {
   mode: CoupangShipmentSyncMode;

@@ -2,6 +2,39 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-09 / COUPANG New-Only Quick Collect
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - redefined shipment quick collect as a `new_only` insert mode and moved the previous overlap-based incremental merge behind a separate `전체 재수집` action
+- Change content:
+  - added a `new_only` shipment sync mode to the shared API contract and request parser
+  - changed quick collect so it only keeps newly discovered worksheet candidates and does not overwrite already stored rows during that action
+  - limited quick-collect customer-service refresh to newly inserted rows so existing worksheet rows are not re-synced during `빠른 수집`
+  - added a separate `전체 재수집` button in the shipment management menu for the previous incremental merge behavior, while keeping `전체 재동기화` as the explicit full-range refresh
+- Reason:
+  - operators wanted `빠른 수집` to behave like a lightweight “add true new orders only” action rather than a partial re-hydration of the existing worksheet
+- Impact scope:
+  - COUPANG shipment worksheet collect API semantics
+  - COUPANG shipment page button labels and collect workflow
+- Remaining issues:
+  - browser-level manual verification for the new button layout and quick-collect behavior was not run in this task
+- Next work:
+  - consider surfacing the effective quick-collect window in the UI so operators can see which date tail is being checked for unseen orders
+- Verification:
+  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+  - not run: `npm run check`
+  - not run: browser-level manual verification
+
 ## 2026-04-09 / COUPANG Order-Sheet Aggregate Throttling
 
 - Change type:

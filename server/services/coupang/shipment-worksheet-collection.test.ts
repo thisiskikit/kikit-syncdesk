@@ -1136,6 +1136,95 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
+  it("adds only unseen rows during new-only quick collect", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "100",
+          orderId: "O-100",
+          vendorItemId: "V-100",
+          status: "ACCEPT",
+          selpickOrderNumber: "O20260326T0001",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "INV-1",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "100:V-100",
+          shipmentBoxId: "100",
+          orderId: "O-100",
+          vendorItemId: "V-100",
+          status: "INSTRUCT",
+          productName: "Stored Product Updated",
+          availableActions: ["uploadInvoice"],
+        }),
+        buildOrderRow({
+          id: "200:V-200",
+          shipmentBoxId: "200",
+          orderId: "O-200",
+          vendorItemId: "V-200",
+          status: "INSTRUCT",
+          productName: "New Product",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "new_only",
+    });
+
+    expect(listOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-26",
+        createdAtTo: "2026-03-26",
+        fetchAllPages: true,
+        includeCustomerService: false,
+      }),
+    );
+    expect(result.items).toHaveLength(2);
+    expect(result.items.find((item) => item.shipmentBoxId === "100")).toMatchObject({
+      orderStatus: "ACCEPT",
+      deliveryCompanyCode: "CJ",
+      invoiceNumber: "INV-1",
+    });
+    expect(result.items.find((item) => item.shipmentBoxId === "200")).toMatchObject({
+      orderStatus: "INSTRUCT",
+      productName: "New Product",
+    });
+    expect(result.syncSummary).toMatchObject({
+      mode: "new_only",
+      fetchedCount: 1,
+      insertedCount: 1,
+      updatedCount: 0,
+      autoExpanded: false,
+      fetchCreatedAtFrom: "2026-03-26",
+    });
+  });
+
   it("stores the invoice currently registered in Coupang separately from local edits", async () => {
     listOrdersMock.mockResolvedValue({
       items: [

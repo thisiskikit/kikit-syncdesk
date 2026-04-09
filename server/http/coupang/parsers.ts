@@ -158,7 +158,13 @@ export function parseCollectShipmentInput(value: unknown): CollectCoupangShipmen
     status: asOptionalString(item.status) ?? undefined,
     maxPerPage: parsePositiveInteger(item.maxPerPage, 20),
     syncMode:
-      syncMode === "full" ? "full" : syncMode === "incremental" ? "incremental" : undefined,
+      syncMode === "full"
+        ? "full"
+        : syncMode === "incremental"
+          ? "incremental"
+          : syncMode === "new_only"
+            ? "new_only"
+            : undefined,
   };
 }
 

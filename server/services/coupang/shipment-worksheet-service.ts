@@ -624,7 +624,12 @@ function resolveSyncPlan(
   nowIso: string,
 ): ShipmentWorksheetSyncPlan {
   const currentSyncState = currentSheet.syncState ?? createEmptySyncState();
-  const requestedMode = input.syncMode === "full" ? "full" : DEFAULT_SYNC_MODE;
+  const requestedMode =
+    input.syncMode === "full"
+      ? "full"
+      : input.syncMode === "new_only"
+        ? "new_only"
+        : DEFAULT_SYNC_MODE;
   const selectedCreatedAtFrom = normalizeCreatedAtDate(input.createdAtFrom, -3);
   const selectedCreatedAtTo = normalizeCreatedAtDate(input.createdAtTo, 0);
   const statusFilter = normalizeStatusFilter(input.status);
@@ -645,6 +650,21 @@ function resolveSyncPlan(
       mode: "full",
       autoExpanded: false,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
+      fetchCreatedAtTo: selectedCreatedAtTo,
+      statusFilter,
+    };
+  }
+
+  if (requestedMode === "new_only") {
+    const coveredTail =
+      minDate(currentSyncState.coveredCreatedAtTo, selectedCreatedAtTo) ?? selectedCreatedAtTo;
+
+    return {
+      mode: "new_only",
+      autoExpanded: false,
+      fetchCreatedAtFrom: isFirstSync
+        ? selectedCreatedAtFrom
+        : maxRequestedDate(selectedCreatedAtFrom, coveredTail),
       fetchCreatedAtTo: selectedCreatedAtTo,
       statusFilter,
     };
@@ -1660,6 +1680,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const platformKey = resolvePlatformKey(store);
   const now = new Date().toISOString();
   const syncPlan = resolveSyncPlan(input, currentSheet, now);
+  const insertOnlyMode = syncPlan.mode === "new_only";
+  const syncModeLabel =
+    syncPlan.mode === "full" ? "전체 재동기화" : syncPlan.mode === "incremental" ? "전체 재수집" : "빠른 수집";
   const listResponse = await listOrders({
     storeId: input.storeId,
     createdAtFrom: syncPlan.fetchCreatedAtFrom,
@@ -1692,18 +1715,20 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const productWarnings: string[] = [];
   const claimWarnings: string[] = [];
   const prepareMessages: string[] = [];
-  const collectionCandidates = candidateRows.map((row) => {
-    const sourceKey = buildSourceKey(input.storeId, row);
-    const currentRow = currentBySourceKey.get(sourceKey);
+  const collectionCandidates = candidateRows
+    .map((row) => {
+      const sourceKey = buildSourceKey(input.storeId, row);
+      const currentRow = currentBySourceKey.get(sourceKey);
 
-    return {
-      row,
-      sourceKey,
-      currentRow,
-      shouldHydrateOrder: shouldHydrateOrderRow(row, currentRow, now),
-      shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
-    } satisfies ShipmentWorksheetCollectionCandidate;
-  });
+      return {
+        row,
+        sourceKey,
+        currentRow,
+        shouldHydrateOrder: shouldHydrateOrderRow(row, currentRow, now),
+        shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
+      } satisfies ShipmentWorksheetCollectionCandidate;
+    })
+    .filter((candidate) => !insertOnlyMode || !candidate.currentRow);
   const collectionCandidateBySourceKey = new Map(
     collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
   );
@@ -1886,6 +1911,10 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       relatedReturnRequests: claimGroup.returns,
       relatedExchangeRequests: claimGroup.exchanges,
     });
+
+    if (insertOnlyMode && !claimGroup.matchedCandidateSourceKey && claimGroup.currentRow) {
+      continue;
+    }
 
     if (claimGroup.matchedCandidateSourceKey) {
       const matchedCandidate = collectionCandidateBySourceKey.get(claimGroup.matchedCandidateSourceKey);
@@ -2214,12 +2243,32 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     mergedBySourceKey.set(nextRow.sourceKey, existingRow);
   }
 
-  const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
-    storeId: input.storeId,
-    rows: Array.from(mergedBySourceKey.values()),
-    syncPlan,
-    forceRefresh: true,
-  });
+  let customerServiceMessage: string | null = null;
+  if (insertOnlyMode) {
+    const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
+      storeId: input.storeId,
+      rows: fetchedRows,
+      syncPlan,
+      forceRefresh: true,
+    });
+    customerServiceMessage = customerServiceRefresh.message;
+
+    for (const nextRow of customerServiceRefresh.rows) {
+      mergedBySourceKey.set(nextRow.sourceKey, nextRow);
+    }
+  } else {
+    const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
+      storeId: input.storeId,
+      rows: Array.from(mergedBySourceKey.values()),
+      syncPlan,
+      forceRefresh: true,
+    });
+    customerServiceMessage = customerServiceRefresh.message;
+    mergedBySourceKey.clear();
+    for (const nextRow of customerServiceRefresh.rows) {
+      mergedBySourceKey.set(nextRow.sourceKey, nextRow);
+    }
+  }
 
   const syncState = buildNextSyncState(
     currentSheet.syncState ?? createEmptySyncState(),
@@ -2235,7 +2284,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
   const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
     storeId: input.storeId,
-    items: customerServiceRefresh.rows,
+    items: Array.from(mergedBySourceKey.values()),
     collectedAt: now,
     source: listResponse.source,
     message: mergeMessages([
@@ -2243,7 +2292,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       platformKey.warning,
       claimWarnings.length ? claimWarnings.join(" ") : null,
       claimGroupsBySourceKey.size
-        ? `빠른 수집에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
+        ? insertOnlyMode
+          ? `${syncModeLabel}에서 신규 클레임 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.`
+          : `${syncModeLabel}에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
         : null,
       detailWarnings.length
         ? `주문 상세 ${detailWarnings.length}건은 일부 정보를 기존 값으로 유지했습니다.`
@@ -2251,7 +2302,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       productWarnings.length
         ? `상품 상세 ${productWarnings.length}건은 쿠팡 주문 원본값으로 보완했습니다.`
         : null,
-      customerServiceRefresh.message,
+      customerServiceMessage,
       ...prepareMessages,
     ]),
     syncState,

@@ -2193,7 +2193,7 @@ export default function CoupangShipmentsPage() {
   }
 
   async function collectWorksheet(
-    syncMode: "incremental" | "full" = "incremental",
+    syncMode: "new_only" | "incremental" | "full" = "new_only",
     options?: { silent?: boolean; skipBusyState?: boolean },
   ) {
     const requestFilters = normalizeFiltersToSeoulToday(filters);
@@ -2210,11 +2210,21 @@ export default function CoupangShipmentsPage() {
       : startLocalOperation({
           channel: "coupang",
           actionName:
-            syncMode === "full" ? "쿠팡 배송 시트 전체 재동기화" : "쿠팡 배송 시트 빠른 수집",
+            syncMode === "full"
+              ? "쿠팡 배송 시트 전체 재동기화"
+              : syncMode === "incremental"
+                ? "쿠팡 배송 시트 전체 재수집"
+                : "쿠팡 배송 시트 빠른 수집",
           targetCount: 1,
         });
     if (!options?.skipBusyState) {
-      setBusyAction(syncMode === "full" ? "collect-full" : "collect-incremental");
+      setBusyAction(
+        syncMode === "full"
+          ? "collect-full"
+          : syncMode === "incremental"
+            ? "collect-incremental"
+            : "collect-new",
+      );
     }
     if (!options?.silent) {
       setFeedback(null);
@@ -2243,13 +2253,25 @@ export default function CoupangShipmentsPage() {
       await refetchWorksheetView();
 
       if (!options?.silent) {
-        const modeLabel = response.syncSummary?.mode === "full" ? "전체 재동기화" : "빠른 수집";
+        const modeLabel =
+          response.syncSummary?.mode === "full"
+            ? "전체 재동기화"
+            : response.syncSummary?.mode === "incremental"
+              ? "전체 재수집"
+              : "빠른 수집";
         const summary = response.syncSummary
-          ? `${modeLabel}으로 조회 ${response.syncSummary.fetchedCount}건, 추가 ${response.syncSummary.insertedCount}건, 갱신 ${response.syncSummary.updatedCount}건을 반영했습니다.`
+          ? response.syncSummary.mode === "new_only"
+            ? `${modeLabel}으로 신규 ${response.syncSummary.insertedCount}건을 워크시트에 추가했습니다.`
+            : `${modeLabel}으로 조회 ${response.syncSummary.fetchedCount}건, 추가 ${response.syncSummary.insertedCount}건, 갱신 ${response.syncSummary.updatedCount}건을 반영했습니다.`
           : `${response.items.length}건을 셀픽 형식으로 정리했습니다.`;
         setFeedback({
           type: response.message || response.source === "fallback" ? "warning" : "success",
-          title: modeLabel === "전체 재동기화" ? "배송 시트 재동기화 완료" : "배송 시트 수집 완료",
+          title:
+            modeLabel === "전체 재동기화"
+              ? "배송 시트 재동기화 완료"
+              : modeLabel === "전체 재수집"
+                ? "배송 시트 전체 재수집 완료"
+                : "신규 주문 빠른 수집 완료",
           message: response.message ? `${summary} ${response.message}` : summary,
           details: [],
         });
@@ -2259,7 +2281,9 @@ export default function CoupangShipmentsPage() {
         finishLocalOperation(localToastId, {
           status: response.message || response.source === "fallback" ? "warning" : "success",
           summary: response.syncSummary
-            ? `${response.syncSummary.insertedCount}건 추가, ${response.syncSummary.updatedCount}건 갱신`
+            ? response.syncSummary.mode === "new_only"
+              ? `${response.syncSummary.insertedCount}건 신규 추가`
+              : `${response.syncSummary.insertedCount}건 추가, ${response.syncSummary.updatedCount}건 갱신`
             : `${response.items.length}건 수집 완료`,
         });
         window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
@@ -3232,10 +3256,10 @@ export default function CoupangShipmentsPage() {
             <div className="shipment-primary-actions">
               <button
                 className="button"
-                onClick={() => void collectWorksheet("incremental")}
+                onClick={() => void collectWorksheet("new_only")}
                 disabled={collectActionDisabled}
               >
-                {busyAction === "collect-incremental" ? "빠른 수집 중..." : "빠른 수집"}
+                {busyAction === "collect-new" ? "빠른 수집 중..." : "빠른 수집"}
               </button>
               <button
                 className="button secondary"
@@ -3289,6 +3313,13 @@ export default function CoupangShipmentsPage() {
               <details className="shipment-manage-actions">
                 <summary className="shipment-manage-actions-trigger">관리 작업</summary>
                 <div className="shipment-manage-actions-menu">
+                  <button
+                    className="button ghost"
+                    onClick={() => void collectWorksheet("incremental")}
+                    disabled={collectActionDisabled}
+                  >
+                    {busyAction === "collect-incremental" ? "재수집 중..." : "전체 재수집"}
+                  </button>
                   <button
                     className="button ghost"
                     onClick={() => void collectWorksheet("full")}
