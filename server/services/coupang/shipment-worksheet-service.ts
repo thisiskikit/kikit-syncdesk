@@ -656,15 +656,10 @@ function resolveSyncPlan(
   }
 
   if (requestedMode === "new_only") {
-    const coveredTail =
-      minDate(currentSyncState.coveredCreatedAtTo, selectedCreatedAtTo) ?? selectedCreatedAtTo;
-
     return {
       mode: "new_only",
       autoExpanded: false,
-      fetchCreatedAtFrom: isFirstSync
-        ? selectedCreatedAtFrom
-        : maxRequestedDate(selectedCreatedAtFrom, coveredTail),
+      fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
       statusFilter,
     };

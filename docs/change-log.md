@@ -18,7 +18,7 @@ This file records repository changes that are considered complete only when the 
   - redefined shipment quick collect as a `new_only` insert mode and moved the previous overlap-based incremental merge behind a separate `전체 재수집` action
 - Change content:
   - added a `new_only` shipment sync mode to the shared API contract and request parser
-  - changed quick collect so it only keeps newly discovered worksheet candidates and does not overwrite already stored rows during that action
+  - changed quick collect so it rechecks the selected date range, only keeps newly discovered worksheet candidates, and does not overwrite already stored rows during that action
   - limited quick-collect customer-service refresh to newly inserted rows so existing worksheet rows are not re-synced during `빠른 수집`
   - added a separate `전체 재수집` button in the shipment management menu for the previous incremental merge behavior, while keeping `전체 재동기화` as the explicit full-range refresh
 - Reason:

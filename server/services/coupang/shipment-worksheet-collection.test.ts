@@ -1199,7 +1199,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(listOrdersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeId: "store-1",
-        createdAtFrom: "2026-03-26",
+        createdAtFrom: "2026-03-25",
         createdAtTo: "2026-03-26",
         fetchAllPages: true,
         includeCustomerService: false,
@@ -1221,7 +1221,7 @@ describe("coupang shipment worksheet collection", () => {
       insertedCount: 1,
       updatedCount: 0,
       autoExpanded: false,
-      fetchCreatedAtFrom: "2026-03-26",
+      fetchCreatedAtFrom: "2026-03-25",
     });
   });
 
