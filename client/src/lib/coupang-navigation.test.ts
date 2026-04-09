@@ -12,7 +12,6 @@ describe("coupang navigation config", () => {
     expect(COUPANG_DEFAULT_WORKSPACE_HREF).toBe("/coupang/shipments");
     expect(COUPANG_PRIMARY_NAV_ITEMS.map((item) => item.href)).toEqual([
       "/coupang/shipments",
-      "/coupang/orders",
       "/coupang/products",
       "/coupang/control",
       "/coupang/connection",

@@ -23,23 +23,26 @@ import {
   type CoupangReturnDetail,
   type CoupangReturnRow,
   type CoupangShipmentInvoiceTransmissionStatus,
+  type CoupangShipmentWorksheetBulkResolveResponse,
+  type CoupangShipmentWorksheetColumnSourceKey,
   type CoupangShipmentWorksheetDetailResponse,
   type CoupangShipmentWorksheetResponse,
   type CoupangShipmentWorksheetRow,
+  type CoupangShipmentWorksheetSortField,
+  type CoupangShipmentWorksheetViewResponse,
+  type CoupangShipmentWorksheetViewScope,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
 import { OrderTicketSection, TicketInfoTable } from "@/components/order-ticket-sections";
 import { StatusBadge } from "@/components/status-badge";
 import { useOperations } from "@/components/operation-provider";
 import {
-  buildShipmentQuickFilterResult,
   canSendInvoiceRow,
   getInvoiceStatusCardKey,
   isSameInvoicePayload,
   normalizeInvoiceStatusCardKey,
   normalizeOrderStatusCardKey,
   normalizeOutputStatusCardKey,
-  pruneShipmentSelectedRowIds,
   type InvoiceStatusCardKey,
   type OrderStatusCardKey,
   type OutputStatusCardKey,
@@ -61,7 +64,7 @@ import {
 } from "@/lib/coupang-order-status";
 import { parseCoupangInvoicePopupInput } from "@/lib/coupang-invoice-input";
 import { parseSpreadsheetClipboardMatrix } from "@/lib/spreadsheet-grid";
-import { apiRequestJson, getJson, queryClient } from "@/lib/queryClient";
+import { apiRequestJson, getJson } from "@/lib/queryClient";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 import { formatNumber } from "@/lib/utils";
@@ -206,19 +209,20 @@ const SHIPMENT_COLUMN_DEFAULT_WIDTHS: Record<ShipmentColumnSourceKey, number> = 
   productOptionNumber: 130,
   sellerProductCode: 160,
 };
-const ORDER_STATUS_OPTIONS = [
-  { value: "", label: "전체 상태" },
-  { value: "ACCEPT", label: "주문접수" },
-  { value: "INSTRUCT", label: "상품준비중" },
-  { value: "DEPARTURE", label: "출고완료" },
-  { value: "DELIVERING", label: "배송중" },
-  { value: "FINAL_DELIVERY", label: "배송완료" },
-  { value: "NONE_TRACKING", label: "추적없음" },
-] as const;
 const SHIPMENT_COLUMN_SOURCE_OPTIONS: ShipmentColumnSourceKey[] = [
   "blank",
   ...DEFAULT_SHIPMENT_COLUMN_ORDER,
 ];
+const WORKSHEET_SCOPE_OPTIONS: ReadonlyArray<{
+  value: CoupangShipmentWorksheetViewScope;
+  label: string;
+  description: string;
+}> = [
+  { value: "dispatch_active", label: "출고업무", description: "주문접수·상품준비중" },
+  { value: "post_dispatch", label: "배송 이후", description: "출고완료·배송중·배송완료" },
+  { value: "claims", label: "클레임·제외", description: "출고중지·취소·반품·교환" },
+  { value: "all", label: "전체", description: "전체 워크시트" },
+] as const;
 const INVOICE_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<InvoiceStatusCardKey>[] = [
   { value: "all", label: "전체", toneClassName: "neutral" },
   { value: "idle", label: "입력 전", toneClassName: "neutral" },
@@ -286,11 +290,11 @@ function defaultSeoulDate(offsetDays: number) {
 function createDefaultFilters(): FilterState {
   return {
     selectedStoreId: "",
-    status: "",
     createdAtFrom: defaultSeoulDate(-3),
     createdAtTo: defaultSeoulDate(0),
     query: "",
     maxPerPage: 20,
+    scope: "dispatch_active",
     invoiceStatusCard: "all",
     orderStatusCard: "all",
     outputStatusCard: "all",
@@ -306,6 +310,7 @@ function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
     ...current,
     createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
     createdAtTo: today,
+    scope: current.scope ?? "dispatch_active",
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
     outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
@@ -315,11 +320,11 @@ function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
 function areFiltersEqual(left: FilterState, right: FilterState) {
   return (
     left.selectedStoreId === right.selectedStoreId &&
-    left.status === right.status &&
     left.createdAtFrom === right.createdAtFrom &&
     left.createdAtTo === right.createdAtTo &&
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
+    left.scope === right.scope &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard
@@ -328,6 +333,37 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
 
 function buildWorksheetUrl(storeId: string) {
   return `/api/coupang/shipments/worksheet?storeId=${encodeURIComponent(storeId)}`;
+}
+
+function buildWorksheetViewUrl(input: {
+  storeId: string;
+  scope: CoupangShipmentWorksheetViewScope;
+  page: number;
+  pageSize: number;
+  query: string;
+  invoiceStatusCard: InvoiceStatusCardKey;
+  orderStatusCard: OrderStatusCardKey;
+  outputStatusCard: OutputStatusCardKey;
+  sortField: CoupangShipmentWorksheetSortField | null;
+  sortDirection: "asc" | "desc";
+}) {
+  const params = new URLSearchParams({
+    storeId: input.storeId,
+    scope: input.scope,
+    page: String(input.page),
+    pageSize: String(input.pageSize),
+    query: input.query,
+    invoiceStatusCard: input.invoiceStatusCard,
+    orderStatusCard: input.orderStatusCard,
+    outputStatusCard: input.outputStatusCard,
+  });
+
+  if (input.sortField) {
+    params.set("sortField", input.sortField);
+    params.set("sortDirection", input.sortDirection);
+  }
+
+  return `/api/coupang/shipments/worksheet/view?${params.toString()}`;
 }
 
 function buildShipmentWorksheetDetailUrl(
@@ -887,6 +923,30 @@ function hasSameShipmentCustomerServiceSnapshot(
   });
 }
 
+function resolveShipmentSortField(
+  columnKey: string | null | undefined,
+  columnConfigs: readonly ShipmentColumnConfig[],
+): CoupangShipmentWorksheetSortField | null {
+  if (!columnKey) {
+    return null;
+  }
+
+  if (
+    columnKey === "__exportStatus" ||
+    columnKey === "__orderStatus" ||
+    columnKey === "__invoiceTransmissionStatus"
+  ) {
+    return columnKey;
+  }
+
+  const config = columnConfigs.find((item) => item.id === columnKey);
+  if (!config || config.sourceKey === "blank") {
+    return null;
+  }
+
+  return config.sourceKey as Exclude<CoupangShipmentWorksheetColumnSourceKey, "blank">;
+}
+
 function hasShipmentClaimIssue(
   row: Pick<ShipmentCustomerServiceCarrier, "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown">,
 ) {
@@ -1216,6 +1276,38 @@ function renderOverlayInBody(content: ReactNode) {
   return createPortal(content, document.body);
 }
 
+function upsertRowMap(
+  current: Record<string, CoupangShipmentWorksheetRow>,
+  rows: readonly CoupangShipmentWorksheetRow[],
+) {
+  if (!rows.length) {
+    return current;
+  }
+
+  const next = { ...current };
+  for (const row of rows) {
+    next[row.id] = row;
+  }
+  return next;
+}
+
+function omitRowsFromMap(
+  current: Record<string, CoupangShipmentWorksheetRow>,
+  rowIds: Iterable<string>,
+) {
+  const next = { ...current };
+  let changed = false;
+
+  for (const rowId of Array.from(rowIds)) {
+    if (rowId in next) {
+      delete next[rowId];
+      changed = true;
+    }
+  }
+
+  return changed ? next : current;
+}
+
 export default function CoupangShipmentsPage() {
   const {
     startLocalOperation,
@@ -1228,15 +1320,19 @@ export default function CoupangShipmentsPage() {
     "coupang.shipments",
     defaultFilters,
   );
-  const [sheetSnapshot, setSheetSnapshot] = useState<CoupangShipmentWorksheetResponse | null>(null);
+  const [sheetSnapshot, setSheetSnapshot] = useState<CoupangShipmentWorksheetViewResponse | null>(null);
   const [draftRows, setDraftRows] = useState<CoupangShipmentWorksheetRow[]>([]);
   const [selectedRowIds, setSelectedRowIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectedRowsById, setSelectedRowsById] = useState<Record<string, CoupangShipmentWorksheetRow>>({});
   const [dirtySourceKeys, setDirtySourceKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [dirtyRowsBySourceKey, setDirtyRowsBySourceKey] = useState<
+    Record<string, CoupangShipmentWorksheetRow>
+  >({});
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
-  const [detailRowId, setDetailRowId] = useState<string | null>(null);
+  const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
   const [activeTab, setActiveTab] = useState<"worksheet" | "settings">("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
@@ -1302,10 +1398,42 @@ export default function CoupangShipmentsPage() {
     }));
   }, [filters.selectedStoreId, isFiltersLoaded, setFilters, stores]);
 
+  const deferredQuery = useDeferredValue(filters.query);
+  const activeSortColumn = sortColumns[0] ?? null;
+  const activeSortField = useMemo(
+    () => resolveShipmentSortField(activeSortColumn?.columnKey, columnConfigs),
+    [activeSortColumn?.columnKey, columnConfigs],
+  );
+  const activeSortDirection = activeSortColumn?.direction === "DESC" ? "desc" : "asc";
   const worksheetQuery = useQuery({
-    queryKey: ["/api/coupang/shipments/worksheet", filters.selectedStoreId],
+    queryKey: [
+      "/api/coupang/shipments/worksheet/view",
+      filters.selectedStoreId,
+      filters.scope,
+      worksheetPage,
+      worksheetPageSize,
+      deferredQuery,
+      filters.invoiceStatusCard,
+      filters.orderStatusCard,
+      filters.outputStatusCard,
+      activeSortField,
+      activeSortDirection,
+    ],
     queryFn: () =>
-      getJson<CoupangShipmentWorksheetResponse>(buildWorksheetUrl(filters.selectedStoreId)),
+      getJson<CoupangShipmentWorksheetViewResponse>(
+        buildWorksheetViewUrl({
+          storeId: filters.selectedStoreId,
+          scope: filters.scope,
+          page: worksheetPage,
+          pageSize: worksheetPageSize,
+          query: deferredQuery,
+          invoiceStatusCard: filters.invoiceStatusCard,
+          orderStatusCard: filters.orderStatusCard,
+          outputStatusCard: filters.outputStatusCard,
+          sortField: activeSortField,
+          sortDirection: activeSortDirection,
+        }),
+      ),
     enabled: Boolean(filters.selectedStoreId),
     refetchOnMount: "always",
     refetchOnWindowFocus: "always",
@@ -1317,71 +1445,97 @@ export default function CoupangShipmentsPage() {
     }
 
     setSheetSnapshot(worksheetQuery.data);
-    setDraftRows(sortShipmentRows(worksheetQuery.data.items));
-    setDirtySourceKeys(new Set());
-  }, [worksheetQuery.data]);
+    setDraftRows(
+      sortShipmentRows(
+        worksheetQuery.data.items.map((row) => dirtyRowsBySourceKey[row.sourceKey] ?? row),
+        sortColumns,
+        columnConfigs,
+      ),
+    );
+    setSelectedRowsById((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      for (const row of worksheetQuery.data.items) {
+        if (current[row.id]) {
+          next[row.id] = dirtyRowsBySourceKey[row.sourceKey] ?? row;
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+    setDetailRowSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const matched = worksheetQuery.data.items.find((row) => row.id === current.id);
+      return matched ? dirtyRowsBySourceKey[matched.sourceKey] ?? matched : current;
+    });
+  }, [columnConfigs, dirtyRowsBySourceKey, sortColumns, worksheetQuery.data]);
 
   useEffect(() => {
     if (!filters.selectedStoreId) {
       setSheetSnapshot(null);
       setDraftRows([]);
       setSelectedRowIds(new Set());
+      setSelectedRowsById({});
       setDirtySourceKeys(new Set());
+      setDirtyRowsBySourceKey({});
       setSelectedCell(null);
-      setDetailRowId(null);
+      setDetailRowSnapshot(null);
     }
   }, [filters.selectedStoreId]);
 
   useEffect(() => {
     if (activeTab !== "worksheet") {
-      setDetailRowId(null);
+      setDetailRowSnapshot(null);
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    setWorksheetPage(1);
+    setSelectedCell(null);
+  }, [
+    filters.selectedStoreId,
+    filters.scope,
+    deferredQuery,
+    filters.invoiceStatusCard,
+    filters.orderStatusCard,
+    filters.outputStatusCard,
+  ]);
+
+  useEffect(() => {
+    setSelectedRowIds(new Set());
+    setSelectedRowsById({});
+  }, [
+    filters.selectedStoreId,
+    filters.scope,
+    deferredQuery,
+    filters.invoiceStatusCard,
+    filters.orderStatusCard,
+    filters.outputStatusCard,
+  ]);
+
   const activeSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
-  const deferredQuery = useDeferredValue(filters.query);
-  const searchFilteredRows = useMemo(
-    () => draftRows.filter((row) => matchesQuery(row, deferredQuery)),
-    [deferredQuery, draftRows],
-  );
-  const quickFilterResult = useMemo(
-    () =>
-      buildShipmentQuickFilterResult(searchFilteredRows, {
-        invoiceStatusCard: filters.invoiceStatusCard,
-        orderStatusCard: filters.orderStatusCard,
-        outputStatusCard: filters.outputStatusCard,
-      }),
-    [filters.invoiceStatusCard, filters.orderStatusCard, filters.outputStatusCard, searchFilteredRows],
-  );
-  const activeInvoiceStatusCard = quickFilterResult.state.invoiceStatusCard;
-  const activeOrderStatusCard = quickFilterResult.state.orderStatusCard;
-  const activeOutputStatusCard = quickFilterResult.state.outputStatusCard;
-  const visibleRows = useMemo(
-    () => sortShipmentRows(quickFilterResult.visibleRows, sortColumns, columnConfigs),
-    [columnConfigs, quickFilterResult.visibleRows, sortColumns],
-  );
-  const worksheetTotalPages = Math.max(1, Math.ceil(visibleRows.length / worksheetPageSize));
-  const pagedVisibleRows = useMemo(() => {
-    const startIndex = (worksheetPage - 1) * worksheetPageSize;
-    return visibleRows.slice(startIndex, startIndex + worksheetPageSize);
-  }, [visibleRows, worksheetPage, worksheetPageSize]);
-  const pageRowIdSet = useMemo(
-    () => new Set(pagedVisibleRows.map((row) => row.id)),
-    [pagedVisibleRows],
-  );
+  const activeInvoiceStatusCard = normalizeInvoiceStatusCardKey(filters.invoiceStatusCard);
+  const activeOrderStatusCard = normalizeOrderStatusCardKey(filters.orderStatusCard);
+  const activeOutputStatusCard = normalizeOutputStatusCardKey(filters.outputStatusCard);
+  const visibleRows = draftRows;
+  const worksheetTotalPages = activeSheet?.totalPages ?? 1;
+  const scopeCounts = activeSheet?.scopeCounts ?? {
+    dispatch_active: 0,
+    post_dispatch: 0,
+    claims: 0,
+    all: 0,
+  };
+  const pageRowIdSet = useMemo(() => new Set(visibleRows.map((row) => row.id)), [visibleRows]);
   const pageSelectedRowIds = useMemo(
-    () =>
-      new Set(
-        pagedVisibleRows
-          .filter((row) => selectedRowIds.has(row.id))
-          .map((row) => row.id),
-      ),
-    [pagedVisibleRows, selectedRowIds],
-  );
-  const selectedRows = useMemo(
-    () => visibleRows.filter((row) => selectedRowIds.has(row.id)),
+    () => new Set(visibleRows.filter((row) => selectedRowIds.has(row.id)).map((row) => row.id)),
     [selectedRowIds, visibleRows],
   );
+  const selectedRows = useMemo(() => Object.values(selectedRowsById), [selectedRowsById]);
   const selectedExportBlockedRows = useMemo(
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
@@ -1394,32 +1548,23 @@ export default function CoupangShipmentsPage() {
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
   );
-  const notExportedRows = useMemo(
-    () => draftRows.filter((row) => !row.exportedAt),
-    [draftRows],
-  );
-  const notExportedClaimRows = useMemo(
-    () => notExportedRows.filter((row) => hasShipmentClaimIssue(row)),
-    [notExportedRows],
-  );
-  const notExportedDownloadRows = useMemo(
-    () => notExportedRows.filter((row) => !hasShipmentClaimIssue(row)),
-    [notExportedRows],
-  );
   const dirtyCount = dirtySourceKeys.size;
   const dirtySet = useMemo(() => new Set(dirtySourceKeys), [dirtySourceKeys]);
   const invoiceReadyRows = useMemo(
     () => visibleRows.filter((row) => canSendInvoiceRow(row) && row.invoiceTransmissionStatus !== "pending"),
     [visibleRows],
   );
-  const detailRow = useMemo(
-    () => visibleRows.find((row) => row.id === detailRowId) ?? null,
-    [detailRowId, visibleRows],
-  );
+  const detailRow = useMemo(() => {
+    if (!detailRowSnapshot) {
+      return null;
+    }
 
-  useEffect(() => {
-    setSelectedRowIds((current) => pruneShipmentSelectedRowIds(current, visibleRows));
-  }, [visibleRows]);
+    return (
+      visibleRows.find((row) => row.id === detailRowSnapshot.id) ??
+      selectedRowsById[detailRowSnapshot.id] ??
+      detailRowSnapshot
+    );
+  }, [detailRowSnapshot, selectedRowsById, visibleRows]);
 
   useEffect(() => {
     setWorksheetPage((current) => Math.min(current, worksheetTotalPages));
@@ -1578,19 +1723,6 @@ export default function CoupangShipmentsPage() {
       };
     };
 
-    queryClient.setQueryData<CoupangShipmentWorksheetResponse>(
-      ["/api/coupang/shipments/worksheet", filters.selectedStoreId],
-      (current) => {
-        if (!current) {
-          return current;
-        }
-
-        const nextItems = current.items.map(patchRow);
-        return nextItems.some((row, index) => row !== current.items[index])
-          ? { ...current, items: nextItems }
-          : current;
-      },
-    );
     setSheetSnapshot((current) => {
       if (!current) {
         return current;
@@ -1604,6 +1736,16 @@ export default function CoupangShipmentsPage() {
     setDraftRows((current) => {
       const nextRows = current.map(patchRow);
       return nextRows.some((row, index) => row !== current[index]) ? sortShipmentRows(nextRows) : current;
+    });
+    setSelectedRowsById((current) => {
+      if (!current[detailRow.id]) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [detailRow.id]: patchRow(current[detailRow.id]),
+      };
     });
   }, [
     detailDerivedCustomerServiceSnapshot,
@@ -1828,35 +1970,107 @@ export default function CoupangShipmentsPage() {
       ? "송장 전송 중..."
       : transmitActionLabel;
   const transmitActionDisabled =
-    (worksheetMode === "invoice" ? !invoiceReadyRows.length : !selectedRows.length) ||
+    (worksheetMode === "invoice"
+      ? !((activeSheet?.invoiceReadyCount ?? 0) || invoiceReadyRows.length)
+      : !selectedRows.length) ||
     isFallback ||
     busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const refreshActionDisabled =
     !filters.selectedStoreId || worksheetQuery.isFetching || busyAction !== null;
-  const openInvoiceInputDisabled = !draftRows.length || busyAction !== null;
+  const openInvoiceInputDisabled = !(activeSheet?.totalRowCount ?? draftRows.length) || busyAction !== null;
   const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
-  const openNotExportedExcelExportDisabled = !notExportedDownloadRows.length || busyAction !== null;
+  const openNotExportedExcelExportDisabled =
+    !(activeSheet?.outputCounts.notExported ?? 0) || busyAction !== null;
 
   useEffect(() => {
-    if (!detailRowId) {
+    if (!detailRowSnapshot) {
       return;
     }
 
     if (!detailRow) {
-      setDetailRowId(null);
+      setDetailRowSnapshot(null);
     }
-  }, [detailRow, detailRowId]);
+  }, [detailRow, detailRowSnapshot]);
+
+  function buildCurrentWorksheetViewQuery() {
+    return {
+      scope: filters.scope,
+      page: worksheetPage,
+      pageSize: worksheetPageSize,
+      query: deferredQuery,
+      invoiceStatusCard: filters.invoiceStatusCard,
+      orderStatusCard: filters.orderStatusCard,
+      outputStatusCard: filters.outputStatusCard,
+      sortField: activeSortField,
+      sortDirection: activeSortDirection,
+    };
+  }
+
+  async function resolveWorksheetBulkRows(mode: "invoice_ready" | "not_exported_download") {
+    if (!filters.selectedStoreId) {
+      return null;
+    }
+
+    return apiRequestJson<CoupangShipmentWorksheetBulkResolveResponse>(
+      "POST",
+      "/api/coupang/shipments/worksheet/resolve",
+      {
+        storeId: filters.selectedStoreId,
+        mode,
+        viewQuery: buildCurrentWorksheetViewQuery(),
+      },
+    );
+  }
+
+  async function refetchWorksheetView() {
+    const result = await worksheetQuery.refetch();
+    const nextSheet = result.data ?? null;
+    if (nextSheet) {
+      setSheetSnapshot(nextSheet);
+    }
+    return nextSheet;
+  }
 
   function applyWorksheetRowUpdates(updates: Map<string, CoupangShipmentWorksheetRow>) {
     if (!updates.size) {
       return;
     }
 
-    setDraftRows((current) => sortShipmentRows(current.map((row) => updates.get(row.id) ?? row)));
+    const changedRows = Array.from(updates.values());
+    setDraftRows((current) =>
+      sortShipmentRows(current.map((row) => updates.get(row.id) ?? row), sortColumns, columnConfigs),
+    );
+    setSelectedRowsById((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      for (const row of changedRows) {
+        if (current[row.id]) {
+          next[row.id] = row;
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+    setDirtyRowsBySourceKey((current) => {
+      const next = { ...current };
+      for (const row of changedRows) {
+        next[row.sourceKey] = row;
+      }
+      return next;
+    });
+    setDetailRowSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return updates.get(current.id) ?? current;
+    });
     setDirtySourceKeys((current) => {
       const next = new Set(current);
-      for (const row of Array.from(updates.values())) {
+      for (const row of changedRows) {
         next.add(row.sourceKey);
       }
       return next;
@@ -1880,8 +2094,7 @@ export default function CoupangShipmentsPage() {
       },
     );
 
-    setSheetSnapshot(response);
-    setDraftRows(sortShipmentRows(response.items));
+    await refetchWorksheetView();
     setDirtySourceKeys((current) => {
       const clearDirtyMode = options?.clearDirtyMode ?? "touched";
       if (clearDirtyMode === "all") {
@@ -1895,6 +2108,23 @@ export default function CoupangShipmentsPage() {
       for (const item of items) {
         if (item.sourceKey) {
           next.delete(item.sourceKey);
+        }
+      }
+      return next;
+    });
+    setDirtyRowsBySourceKey((current) => {
+      const clearDirtyMode = options?.clearDirtyMode ?? "touched";
+      if (clearDirtyMode === "all") {
+        return {};
+      }
+      if (clearDirtyMode === "none") {
+        return current;
+      }
+
+      const next = { ...current };
+      for (const item of items) {
+        if (item.sourceKey) {
+          delete next[item.sourceKey];
         }
       }
       return next;
@@ -1937,6 +2167,11 @@ export default function CoupangShipmentsPage() {
         next.add(rowId);
       }
       return next;
+    });
+    setSelectedRowsById((current) => {
+      const cleared = omitRowsFromMap(current, pageRowIdSet);
+      const nextRows = visibleRows.filter((row) => nextSelectedRows.has(row.id));
+      return upsertRowMap(cleared, nextRows);
     });
   }
 
@@ -1993,17 +2228,19 @@ export default function CoupangShipmentsPage() {
           storeId: requestFilters.selectedStoreId,
           createdAtFrom: requestFilters.createdAtFrom,
           createdAtTo: requestFilters.createdAtTo,
-          status: requestFilters.status || undefined,
           maxPerPage: requestFilters.maxPerPage,
           syncMode,
         },
       );
 
-      setSheetSnapshot(response);
-      setDraftRows(sortShipmentRows(response.items));
       setSelectedRowIds(new Set());
+      setSelectedRowsById({});
       setDirtySourceKeys(new Set());
+      setDirtyRowsBySourceKey({});
       setSelectedCell(null);
+      setDetailRowSnapshot(null);
+      setWorksheetPage(1);
+      await refetchWorksheetView();
 
       if (!options?.silent) {
         const modeLabel = response.syncSummary?.mode === "full" ? "전체 재동기화" : "빠른 수집";
@@ -2058,15 +2295,15 @@ export default function CoupangShipmentsPage() {
 
   async function saveWorksheetChanges() {
     if (!filters.selectedStoreId || !dirtyCount) {
-      return;
+      return true;
     }
 
-    const items = draftRows
+    const items = Object.values(dirtyRowsBySourceKey)
       .filter((row) => dirtySet.has(row.sourceKey))
       .map((row) => buildWorksheetPatchItem(row));
 
     if (!items.length) {
-      return;
+      return true;
     }
 
     const localToastId = startLocalOperation({
@@ -2094,6 +2331,7 @@ export default function CoupangShipmentsPage() {
         summary: `${items.length}건 저장 완료`,
       });
       window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "배송 시트 저장에 실패했습니다.";
       setFeedback({
@@ -2106,6 +2344,7 @@ export default function CoupangShipmentsPage() {
         status: "error",
         errorMessage: message,
       });
+      return false;
     } finally {
       setBusyAction(null);
     }
@@ -2157,11 +2396,30 @@ export default function CoupangShipmentsPage() {
     );
   }
 
+  async function ensureWorksheetChangesSavedForServerBulk() {
+    if (!dirtyCount) {
+      return true;
+    }
+
+    return saveWorksheetChanges();
+  }
+
+  async function loadFullWorksheetRows() {
+    if (!filters.selectedStoreId) {
+      return [];
+    }
+
+    const response = await getJson<CoupangShipmentWorksheetResponse>(
+      buildWorksheetUrl(filters.selectedStoreId),
+    );
+    return response.items;
+  }
+
   async function downloadWorksheetXlsx(
     scope: ShipmentExcelExportScope,
     sortKey: ShipmentExcelSortKey,
   ) {
-    if (!draftRows.length) {
+    if (!(activeSheet?.filteredRowCount ?? draftRows.length)) {
       setFeedback({
         type: "warning",
         title: "엑셀 다운로드",
@@ -2171,11 +2429,20 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    const sourceRows = scope === "selected" ? selectedRows : notExportedRows;
+    if (scope === "notExported") {
+      const saved = await ensureWorksheetChangesSavedForServerBulk();
+      if (!saved) {
+        return;
+      }
+    }
+
+    const resolvedRows =
+      scope === "selected" ? null : await resolveWorksheetBulkRows("not_exported_download");
+    const sourceRows = scope === "selected" ? selectedRows : resolvedRows?.items ?? [];
     const blockedClaimRows =
-      scope === "selected" ? selectedExportBlockedRows : notExportedClaimRows;
+      scope === "selected" ? selectedExportBlockedRows : resolvedRows?.blockedItems ?? [];
     const blockedClaimDetails = buildExcelClaimBlockedDetails(blockedClaimRows);
-    const targetRows = scope === "selected" ? selectedExportRows : notExportedDownloadRows;
+    const targetRows = scope === "selected" ? selectedExportRows : resolvedRows?.items ?? [];
     if (!targetRows.length) {
       setFeedback({
         type: "warning",
@@ -2185,7 +2452,7 @@ export default function CoupangShipmentsPage() {
             ? sourceRows.length
               ? "클레임이 있는 주문은 엑셀 다운로드 대상에서 제외되어 다운로드할 주문건이 없습니다."
               : "체크한 행이 없어 엑셀을 다운로드할 수 없습니다."
-            : sourceRows.length
+            : resolvedRows?.matchedCount
               ? "미출력 행 중 클레임이 있는 주문은 엑셀 다운로드 대상에서 제외되어 다운로드할 주문건이 없습니다."
               : "미출력 행이 없어 엑셀을 다운로드할 수 없습니다.",
         details: blockedClaimDetails.slice(0, 8),
@@ -2230,20 +2497,17 @@ export default function CoupangShipmentsPage() {
         throw new Error("출력 상태 저장 결과를 확인하지 못했습니다.");
       }
     } catch (error) {
-      const selectedRowIdSet = new Set(targetRows.map((row) => row.id));
-      setDraftRows((current) =>
-        current.map((row) => ({
-          ...row,
-          exportedAt: selectedRowIdSet.has(row.id) ? exportedAt : row.exportedAt,
-        })),
+      applyWorksheetRowUpdates(
+        new Map(
+          targetRows.map((row) => [
+            row.id,
+            {
+              ...row,
+              exportedAt,
+            },
+          ]),
+        ),
       );
-      setDirtySourceKeys((current) => {
-        const next = new Set(current);
-        for (const row of targetRows) {
-          next.add(row.sourceKey);
-        }
-        return next;
-      });
       setFeedback({
         type: "warning",
         title: "엑셀 다운로드 완료",
@@ -2282,8 +2546,18 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    const sourceRows = scope === "selected" ? selectedRows : invoiceReadyRows;
-    const blockedClaimRows = scope === "selected" ? sourceRows.filter((row) => hasShipmentClaimIssue(row)) : [];
+    if (scope === "ready") {
+      const saved = await ensureWorksheetChangesSavedForServerBulk();
+      if (!saved) {
+        return;
+      }
+    }
+
+    const resolvedRows =
+      scope === "selected" ? null : await resolveWorksheetBulkRows("invoice_ready");
+    const sourceRows = scope === "selected" ? selectedRows : resolvedRows?.items ?? [];
+    const blockedClaimRows =
+      scope === "selected" ? sourceRows.filter((row) => hasShipmentClaimIssue(row)) : resolvedRows?.blockedItems ?? [];
     const blockedClaimDetails = buildInvoiceClaimBlockedDetails(blockedClaimRows);
     if (!sourceRows.length) {
       setFeedback({
@@ -2292,8 +2566,10 @@ export default function CoupangShipmentsPage() {
         message:
           scope === "selected"
             ? "선택된 행이 없습니다."
-            : "전송할 신규/실패 송장 행이 없습니다. 이미 완료된 행은 값을 수정하면 다시 전송할 수 있습니다.",
-        details: [],
+            : resolvedRows?.matchedCount
+              ? "클레임 또는 현재 상태 때문에 전송 가능한 송장 행이 없습니다."
+              : "전송할 신규/실패 송장 행이 없습니다. 이미 완료된 행은 값을 수정하면 다시 전송할 수 있습니다.",
+        details: blockedClaimDetails,
       });
       return;
     }
@@ -2649,12 +2925,12 @@ export default function CoupangShipmentsPage() {
     await executeInvoiceTransmission("ready");
   }
 
-  function openShipmentDetailDialog(rowId: string) {
-    setDetailRowId(rowId);
+  function openShipmentDetailDialog(row: CoupangShipmentWorksheetRow) {
+    setDetailRowSnapshot(row);
   }
 
   function closeShipmentDetailDialog() {
-    setDetailRowId(null);
+    setDetailRowSnapshot(null);
   }
 
   function openExcelSortDialog(scope: ShipmentExcelExportScope) {
@@ -2694,8 +2970,9 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
+    const allRows = await loadFullWorksheetRows();
     const rowBySelpickOrderNumber = new Map(
-      draftRows.map((row) => [row.selpickOrderNumber, row] as const),
+      allRows.map((row) => [row.selpickOrderNumber, dirtyRowsBySourceKey[row.sourceKey] ?? row] as const),
     );
     const updates = new Map<string, CoupangShipmentWorksheetRow>();
     const nextIssues = [...issues];
@@ -2795,18 +3072,10 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    const changedRowById = new Map(changedRows.map((row) => [row.id, row] as const));
-    setDraftRows((current) => sortShipmentRows(current.map((row) => changedRowById.get(row.id) ?? row)));
-    setDirtySourceKeys((current) => {
-      const next = new Set(current);
-      for (const row of changedRows) {
-        next.add(row.sourceKey);
-      }
-      return next;
-    });
+    applyWorksheetRowUpdates(new Map(changedRows.map((row) => [row.id, row] as const)));
   }
 
-  function handleGridPaste(event: React.ClipboardEvent<HTMLDivElement>) {
+  async function handleGridPaste(event: React.ClipboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, [contenteditable='true']")) {
       return;
@@ -2820,8 +3089,9 @@ export default function CoupangShipmentsPage() {
     if (looksLikeInvoiceClipboard(clipboardText)) {
       event.preventDefault();
 
+      const allRows = await loadFullWorksheetRows();
       const rowBySelpickOrderNumber = new Map(
-        draftRows.map((row) => [row.selpickOrderNumber, row] as const),
+        allRows.map((row) => [row.selpickOrderNumber, dirtyRowsBySourceKey[row.sourceKey] ?? row] as const),
       );
       const { updates, issues } = parseInvoiceClipboardRows(clipboardText, rowBySelpickOrderNumber);
 
@@ -2873,7 +3143,7 @@ export default function CoupangShipmentsPage() {
     const updates = new Map<string, CoupangShipmentWorksheetRow>();
 
     for (let rowOffset = 0; rowOffset < sanitizedMatrix.length; rowOffset += 1) {
-      const targetRow = pagedVisibleRows[selectedCell.rowIdx + rowOffset];
+      const targetRow = visibleRows[selectedCell.rowIdx + rowOffset];
       if (!targetRow) {
         continue;
       }
@@ -2927,7 +3197,7 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    openShipmentDetailDialog(args.row.id);
+    openShipmentDetailDialog(args.row);
   }
 
   function handleSettingsDrop(targetId: string) {
@@ -3002,9 +3272,9 @@ export default function CoupangShipmentsPage() {
                   선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
                 </div>
               ) : null}
-              {notExportedRows.length > 0 && notExportedClaimRows.length > 0 ? (
+              {(activeSheet?.outputCounts.notExported ?? 0) > 0 && scopeCounts.claims > 0 ? (
                 <div className="muted action-disabled-reason">
-                  미출력 클레임 {notExportedClaimRows.length}건은 엑셀 다운로드에서 제외됩니다.
+                  클레임 주문은 미출력 전체 다운로드에서 자동 제외됩니다.
                 </div>
               ) : null}
               {dirtyCount ? (
@@ -3080,21 +3350,6 @@ export default function CoupangShipmentsPage() {
               }))
             }
           />
-          <select
-            value={filters.status}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                status: event.target.value,
-              }))
-            }
-          >
-            {ORDER_STATUS_OPTIONS.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
           <input
             value={filters.query}
             onChange={(event) =>
@@ -3135,18 +3390,51 @@ export default function CoupangShipmentsPage() {
         </div>
       </div>
 
+      <div className="card shipment-status-toolbar">
+        <div className="shipment-status-group">
+          <div className="shipment-status-group-label">
+            보기 범위
+            <span className="muted">{formatNumber(scopeCounts.all)}건</span>
+          </div>
+          <div className="shipment-status-pill-list">
+            {WORKSHEET_SCOPE_OPTIONS.map((option) => {
+              const active = filters.scope === option.value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`shipment-filter-pill neutral${active ? " active" : ""}`}
+                  aria-pressed={active}
+                  title={option.description}
+                  onClick={() =>
+                    setFilters((current) => ({
+                      ...current,
+                      scope: option.value,
+                    }))
+                  }
+                >
+                  <span>{option.label}</span>
+                  <strong>{formatNumber(scopeCounts[option.value])}</strong>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       <div className="metric-grid">
         <div className="metric">
           <div className="metric-label">전체</div>
-          <div className="metric-value">{draftRows.length}</div>
+          <div className="metric-value">{formatNumber(activeSheet?.totalRowCount ?? 0)}</div>
         </div>
         <div className="metric">
           <div className="metric-label">현재 목록</div>
-          <div className="metric-value">{visibleRows.length}</div>
+          <div className="metric-value">{formatNumber(activeSheet?.filteredRowCount ?? 0)}</div>
         </div>
         <div className="metric">
           <div className="metric-label">전송 대상</div>
-          <div className="metric-value">{invoiceReadyRows.length}</div>
+          <div className="metric-value">{formatNumber(activeSheet?.invoiceReadyCount ?? 0)}</div>
         </div>
         <div className="metric">
           <div className="metric-label">미저장 변경</div>
@@ -3158,7 +3446,7 @@ export default function CoupangShipmentsPage() {
         <div className="shipment-status-group">
           <div className="shipment-status-group-label">
             전송
-            <span className="muted">{formatNumber(quickFilterResult.invoiceCounts.all)}건</span>
+            <span className="muted">{formatNumber(activeSheet?.invoiceCounts.all ?? 0)}건</span>
           </div>
           <div className="shipment-status-pill-list">
             {INVOICE_STATUS_CARD_OPTIONS.map((option) => {
@@ -3178,7 +3466,7 @@ export default function CoupangShipmentsPage() {
                   }
                 >
                   <span>{option.label}</span>
-                  <strong>{formatNumber(quickFilterResult.invoiceCounts[option.value])}</strong>
+                  <strong>{formatNumber(activeSheet?.invoiceCounts[option.value] ?? 0)}</strong>
                 </button>
               );
             })}
@@ -3188,7 +3476,7 @@ export default function CoupangShipmentsPage() {
         <div className="shipment-status-group">
           <div className="shipment-status-group-label">
             출력
-            <span className="muted">{formatNumber(quickFilterResult.outputCounts.all)}건</span>
+            <span className="muted">{formatNumber(activeSheet?.outputCounts.all ?? 0)}건</span>
           </div>
           <div className="shipment-status-pill-list">
             {OUTPUT_STATUS_CARD_OPTIONS.map((option) => {
@@ -3208,7 +3496,7 @@ export default function CoupangShipmentsPage() {
                   }
                 >
                   <span>{option.label}</span>
-                  <strong>{formatNumber(quickFilterResult.outputCounts[option.value])}</strong>
+                  <strong>{formatNumber(activeSheet?.outputCounts[option.value] ?? 0)}</strong>
                 </button>
               );
             })}
@@ -3218,7 +3506,7 @@ export default function CoupangShipmentsPage() {
         <div className="shipment-status-group">
           <div className="shipment-status-group-label">
             주문
-            <span className="muted">{formatNumber(quickFilterResult.orderCounts.all)}건</span>
+            <span className="muted">{formatNumber(activeSheet?.orderCounts.all ?? 0)}건</span>
           </div>
           <div className="shipment-status-pill-list">
             {ORDER_STATUS_CARD_OPTIONS.map((option) => {
@@ -3238,7 +3526,7 @@ export default function CoupangShipmentsPage() {
                   }
                 >
                   <span>{option.label}</span>
-                  <strong>{formatNumber(quickFilterResult.orderCounts[option.value])}</strong>
+                  <strong>{formatNumber(activeSheet?.orderCounts[option.value] ?? 0)}</strong>
                 </button>
               );
             })}
@@ -3310,13 +3598,16 @@ export default function CoupangShipmentsPage() {
 
           {worksheetQuery.isLoading && !activeSheet ? (
             <div className="empty">배송 시트를 불러오는 중입니다...</div>
-          ) : !draftRows.length ? (
+          ) : !(activeSheet?.totalRowCount ?? 0) ? (
             <div className="empty">수집 버튼을 눌러 셀픽 형식 배송 시트를 생성해 주세요.</div>
+          ) : !draftRows.length ? (
+            <div className="empty">현재 조건에 맞는 배송 시트가 없습니다.</div>
           ) : (
             <>
               <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: "0.75rem" }}>
                 <div className="selection-summary">
-                  전체 {formatNumber(visibleRows.length)}행 · 현재 페이지 {formatNumber(pagedVisibleRows.length)}행 ·{" "}
+                  전체 {formatNumber(activeSheet?.filteredRowCount ?? 0)}행 · 현재 페이지 {formatNumber(visibleRows.length)}행
+                  {" · "}
                   {worksheetPage} / {worksheetTotalPages} 페이지
                 </div>
                 <div className="toolbar" style={{ gap: "0.5rem" }}>
@@ -3361,7 +3652,7 @@ export default function CoupangShipmentsPage() {
                   className={`rdg-light shipment-grid${worksheetMode === "invoice" ? " invoice-input-mode" : ""}`}
                   columns={columns}
                   defaultColumnOptions={{ resizable: true }}
-                  rows={pagedVisibleRows}
+                  rows={visibleRows}
                   rowKeyGetter={(row: CoupangShipmentWorksheetRow) => row.id}
                   selectedRows={pageSelectedRowIds}
                   sortColumns={sortColumns}
@@ -3442,9 +3733,9 @@ export default function CoupangShipmentsPage() {
                 선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
               </div>
             ) : null}
-            {notExportedRows.length > 0 && notExportedClaimRows.length > 0 ? (
+            {(activeSheet?.outputCounts.notExported ?? 0) > 0 && scopeCounts.claims > 0 ? (
               <div className="muted action-disabled-reason">
-                미출력 클레임 {notExportedClaimRows.length}건은 엑셀 다운로드에서 제외됩니다.
+                클레임 주문은 미출력 전체 다운로드에서 자동 제외됩니다.
               </div>
             ) : null}
           </div>
@@ -3948,20 +4239,15 @@ export default function CoupangShipmentsPage() {
                 {formatNumber(
                   excelExportScope === "selected"
                     ? selectedExportRows.length
-                    : notExportedDownloadRows.length,
+                    : activeSheet?.outputCounts.notExported ?? 0,
                 )}
                 행을 엑셀로 내보내기 전에 정렬 기준을 선택해 주세요.
               </p>
-              {((excelExportScope === "selected" ? selectedExportBlockedRows : notExportedClaimRows)
-                .length > 0) ? (
+              {(excelExportScope === "selected" ? selectedExportBlockedRows.length : scopeCounts.claims) > 0 ? (
                 <p className="muted shipment-export-dialog-note">
-                  클레임{" "}
-                  {formatNumber(
-                    excelExportScope === "selected"
-                      ? selectedExportBlockedRows.length
-                      : notExportedClaimRows.length,
-                  )}
-                  건은 엑셀 다운로드에서 자동 제외됩니다.
+                  {excelExportScope === "selected"
+                    ? `클레임 ${formatNumber(selectedExportBlockedRows.length)}건은 엑셀 다운로드에서 자동 제외됩니다.`
+                    : "클레임 주문은 실제 다운로드 대상 계산에서 자동 제외됩니다."}
                 </p>
               ) : null}
             </div>

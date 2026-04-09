@@ -1,4 +1,9 @@
-import type { CoupangStoreSummary, CoupangShipmentWorksheetRow } from "@shared/coupang";
+import type {
+  CoupangStoreSummary,
+  CoupangShipmentWorksheetColumnSourceKey,
+  CoupangShipmentWorksheetRow,
+  CoupangShipmentWorksheetViewScope,
+} from "@shared/coupang";
 import type {
   InvoiceStatusCardKey,
   OrderStatusCardKey,
@@ -11,11 +16,11 @@ export interface CoupangStoresResponse {
 
 export type FilterState = {
   selectedStoreId: string;
-  status: string;
   createdAtFrom: string;
   createdAtTo: string;
   query: string;
   maxPerPage: number;
+  scope: CoupangShipmentWorksheetViewScope;
   invoiceStatusCard: InvoiceStatusCardKey;
   orderStatusCard: OrderStatusCardKey;
   outputStatusCard: OutputStatusCardKey;
@@ -44,30 +49,7 @@ export type EditableColumnKey =
   | "invoiceNumber"
   | "deliveryRequest";
 
-export type ShipmentColumnSourceKey =
-  | "blank"
-  | "orderDateText"
-  | "quantity"
-  | "productName"
-  | "optionName"
-  | "productOrderNumber"
-  | "collectedPlatform"
-  | "ordererName"
-  | "contact"
-  | "receiverName"
-  | "collectedAccountName"
-  | "deliveryCompanyCode"
-  | "selpickOrderNumber"
-  | "invoiceNumber"
-  | "salePrice"
-  | "shippingFee"
-  | "receiverAddress"
-  | "deliveryRequest"
-  | "buyerPhoneNumber"
-  | "productNumber"
-  | "exposedProductName"
-  | "productOptionNumber"
-  | "sellerProductCode";
+export type ShipmentColumnSourceKey = CoupangShipmentWorksheetColumnSourceKey;
 
 export type ShipmentColumnConfig = {
   id: string;

@@ -6,11 +6,15 @@
   CoupangOrderRow,
   CoupangReturnDetail,
   CoupangReturnRow,
+  CoupangShipmentWorksheetBulkResolveMode,
+  CoupangShipmentWorksheetBulkResolveResponse,
   CoupangShipmentSyncMode,
   CoupangShipmentWorksheetDetailResponse,
   CoupangShipmentWorksheetResponse,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetSyncSummary,
+  CoupangShipmentWorksheetViewQuery,
+  CoupangShipmentWorksheetViewResponse,
   PatchCoupangShipmentWorksheetInput,
   PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
@@ -31,6 +35,10 @@ import {
   coupangShipmentWorksheetStore,
   type CoupangShipmentWorksheetSyncState,
 } from "./shipment-worksheet-store";
+import {
+  buildShipmentWorksheetViewData,
+  resolveShipmentWorksheetRows,
+} from "./shipment-worksheet-view";
 
 type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsStore.getStore>>>;
 
@@ -350,21 +358,57 @@ async function getStoreOrThrow(storeId: string) {
 
 type WorksheetStoreSheet = Awaited<ReturnType<typeof coupangShipmentWorksheetStore.getStoreSheet>>;
 
+function buildWorksheetRows(sheet: WorksheetStoreSheet) {
+  const nowIso = new Date().toISOString();
+  return sheet.items.map((row) =>
+    decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso),
+  );
+}
+
 function buildWorksheetResponse(
   store: StoredCoupangStore,
   sheet: WorksheetStoreSheet,
   messageOverride?: string | null,
 ): CoupangShipmentWorksheetResponse {
-  const nowIso = new Date().toISOString();
-
   return {
     store: asStoreRef(store),
-    items: sheet.items.map((row) => decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso)),
+    items: buildWorksheetRows(sheet),
     fetchedAt: new Date().toISOString(),
     collectedAt: sheet.collectedAt,
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
     source: sheet.source,
     syncSummary: sheet.syncSummary,
+  };
+}
+
+function buildWorksheetViewResponse(
+  store: StoredCoupangStore,
+  sheet: WorksheetStoreSheet,
+  query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
+  messageOverride?: string | null,
+): CoupangShipmentWorksheetViewResponse {
+  const view = buildShipmentWorksheetViewData(buildWorksheetRows(sheet), query);
+
+  return {
+    store: asStoreRef(store),
+    items: view.items,
+    fetchedAt: new Date().toISOString(),
+    collectedAt: sheet.collectedAt,
+    message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
+    source: sheet.source,
+    syncSummary: sheet.syncSummary,
+    scope: view.scope,
+    page: view.page,
+    pageSize: view.pageSize,
+    totalPages: view.totalPages,
+    totalRowCount: view.totalRowCount,
+    scopeRowCount: view.scopeRowCount,
+    filteredRowCount: view.filteredRowCount,
+    invoiceReadyCount: view.invoiceReadyCount,
+    scopeCounts: view.scopeCounts,
+    invoiceCounts: view.invoiceCounts,
+    orderCounts: view.orderCounts,
+    outputCounts: view.outputCounts,
   };
 }
 
@@ -1363,6 +1407,93 @@ export async function getShipmentWorksheet(storeId: string) {
   });
 
   return buildWorksheetResponse(store, sheet, refreshed.message);
+}
+
+export async function getShipmentWorksheetView(
+  query: CoupangShipmentWorksheetViewQuery,
+): Promise<CoupangShipmentWorksheetViewResponse> {
+  const store = await getStoreOrThrow(query.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(query.storeId);
+  if (!currentSheet.items.length) {
+    return buildWorksheetViewResponse(store, currentSheet, query);
+  }
+
+  const refreshed = await refreshWorksheetCustomerServiceStatuses({
+    storeId: query.storeId,
+    rows: currentSheet.items.map(normalizeWorksheetRow),
+    syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
+    forceRefresh: true,
+  });
+  const hasRowChanges = refreshed.rows.some((row, index) =>
+    hasWorksheetRowChanged(currentSheet.items[index], row),
+  );
+  const nextMessage = normalizeLegacyWorksheetMessage(refreshed.message ?? currentSheet.message);
+  const messageChanged = nextMessage !== normalizeLegacyWorksheetMessage(currentSheet.message);
+
+  if (!hasRowChanges && !messageChanged) {
+    return buildWorksheetViewResponse(store, currentSheet, query, refreshed.message);
+  }
+
+  const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+    ...currentSheet,
+    storeId: query.storeId,
+    items: refreshed.rows,
+    message: refreshed.message ?? currentSheet.message,
+  });
+
+  return buildWorksheetViewResponse(store, sheet, query, refreshed.message);
+}
+
+export async function resolveShipmentWorksheetBulkRows(input: {
+  storeId: string;
+  viewQuery?: Partial<CoupangShipmentWorksheetViewQuery> | null;
+  mode: CoupangShipmentWorksheetBulkResolveMode;
+}): Promise<CoupangShipmentWorksheetBulkResolveResponse> {
+  const store = await getStoreOrThrow(input.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  if (!currentSheet.items.length) {
+    return {
+      store: asStoreRef(store),
+      mode: input.mode,
+      items: [],
+      blockedItems: [],
+      fetchedAt: new Date().toISOString(),
+      message: normalizeLegacyWorksheetMessage(currentSheet.message),
+      source: currentSheet.source,
+      matchedCount: 0,
+      resolvedCount: 0,
+    };
+  }
+
+  const refreshed = await refreshWorksheetCustomerServiceStatuses({
+    storeId: input.storeId,
+    rows: currentSheet.items.map(normalizeWorksheetRow),
+    syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
+    forceRefresh: true,
+  });
+  const resolved = resolveShipmentWorksheetRows(
+    buildWorksheetRows({
+      ...currentSheet,
+      items: refreshed.rows,
+    }),
+    {
+      ...input.viewQuery,
+      storeId: input.storeId,
+    },
+    input.mode,
+  );
+
+  return {
+    store: asStoreRef(store),
+    mode: input.mode,
+    items: resolved.items,
+    blockedItems: resolved.blockedItems,
+    fetchedAt: new Date().toISOString(),
+    message: normalizeLegacyWorksheetMessage(refreshed.message ?? currentSheet.message),
+    source: currentSheet.source,
+    matchedCount: resolved.matchedCount,
+    resolvedCount: resolved.resolvedCount,
+  };
 }
 
 export async function getShipmentWorksheetDetail(input: {

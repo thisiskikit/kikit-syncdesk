@@ -222,11 +222,11 @@ function defaultSeoulDate(offsetDays: number) {
 export function createDefaultFilters(): FilterState {
   return {
     selectedStoreId: "",
-    status: "",
     createdAtFrom: defaultSeoulDate(-3),
     createdAtTo: defaultSeoulDate(0),
     query: "",
     maxPerPage: 20,
+    scope: "dispatch_active",
     invoiceStatusCard: "all",
     orderStatusCard: "all",
     outputStatusCard: "all",
@@ -242,6 +242,7 @@ export function normalizeFiltersToSeoulToday(current: FilterState): FilterState 
     ...current,
     createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
     createdAtTo: today,
+    scope: current.scope ?? "dispatch_active",
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
     outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
@@ -251,11 +252,11 @@ export function normalizeFiltersToSeoulToday(current: FilterState): FilterState 
 export function areFiltersEqual(left: FilterState, right: FilterState) {
   return (
     left.selectedStoreId === right.selectedStoreId &&
-    left.status === right.status &&
     left.createdAtFrom === right.createdAtFrom &&
     left.createdAtTo === right.createdAtTo &&
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
+    left.scope === right.scope &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard

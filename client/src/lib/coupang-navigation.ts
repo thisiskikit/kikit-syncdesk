@@ -4,7 +4,6 @@ export const COUPANG_DEFAULT_WORKSPACE_HREF = "/coupang/shipments";
 
 export const COUPANG_PRIMARY_NAV_ITEMS = [
   { href: "/coupang/shipments", label: "Shipment / Dispatch", badge: "live" },
-  { href: "/coupang/orders", label: "Orders / Outbound", badge: "live" },
   { href: "/coupang/products", label: "Products", badge: "live" },
   { href: "/coupang/control", label: "Price / Stock / Sale", badge: "live" },
   { href: "/coupang/connection", label: "Connection", badge: "live" },

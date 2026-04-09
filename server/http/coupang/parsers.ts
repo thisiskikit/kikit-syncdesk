@@ -10,8 +10,10 @@ import type {
   CoupangProductPriceUpdateTarget,
   CoupangProductQuantityUpdateTarget,
   CoupangProductSaleStatusUpdateTarget,
+  CoupangShipmentWorksheetBulkResolveRequest,
   CoupangReturnActionTarget,
   CoupangReturnCollectionInvoiceTarget,
+  CoupangShipmentWorksheetViewQuery,
   PatchCoupangShipmentWorksheetInput,
   PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
@@ -213,6 +215,115 @@ export function parseShipmentWorksheetPatchInput(
   return {
     storeId: asString(item.storeId),
     items: parseShipmentWorksheetPatchItems(item),
+  };
+}
+
+export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipmentWorksheetViewQuery {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const scope = asOptionalString(item.scope);
+  const invoiceStatusCard = asOptionalString(item.invoiceStatusCard);
+  const orderStatusCard = asOptionalString(item.orderStatusCard);
+  const outputStatusCard = asOptionalString(item.outputStatusCard);
+  const sortField = asOptionalString(item.sortField);
+  const sortDirection = asOptionalString(item.sortDirection);
+
+  return {
+    storeId: asString(item.storeId),
+    scope:
+      scope === "dispatch_active" || scope === "post_dispatch" || scope === "claims" || scope === "all"
+        ? scope
+        : undefined,
+    page: parsePositiveInteger(item.page, 1),
+    pageSize: parsePositiveInteger(item.pageSize, 50),
+    query: asOptionalString(item.query) ?? undefined,
+    invoiceStatusCard:
+      invoiceStatusCard === "all" ||
+      invoiceStatusCard === "idle" ||
+      invoiceStatusCard === "ready" ||
+      invoiceStatusCard === "pending" ||
+      invoiceStatusCard === "failed" ||
+      invoiceStatusCard === "applied"
+        ? invoiceStatusCard
+        : undefined,
+    orderStatusCard:
+      orderStatusCard === "all" ||
+      orderStatusCard === "ACCEPT" ||
+      orderStatusCard === "INSTRUCT" ||
+      orderStatusCard === "DEPARTURE" ||
+      orderStatusCard === "DELIVERING" ||
+      orderStatusCard === "FINAL_DELIVERY" ||
+      orderStatusCard === "NONE_TRACKING" ||
+      orderStatusCard === "SHIPMENT_STOP_REQUESTED" ||
+      orderStatusCard === "SHIPMENT_STOP_HANDLED" ||
+      orderStatusCard === "CANCEL" ||
+      orderStatusCard === "RETURN" ||
+      orderStatusCard === "EXCHANGE"
+        ? orderStatusCard
+        : undefined,
+    outputStatusCard:
+      outputStatusCard === "all" ||
+      outputStatusCard === "notExported" ||
+      outputStatusCard === "exported"
+        ? outputStatusCard
+        : undefined,
+    sortField:
+      sortField === "__orderStatus" ||
+      sortField === "__invoiceTransmissionStatus" ||
+      sortField === "__exportStatus" ||
+      sortField === "orderDateText" ||
+      sortField === "quantity" ||
+      sortField === "productName" ||
+      sortField === "optionName" ||
+      sortField === "productOrderNumber" ||
+      sortField === "collectedPlatform" ||
+      sortField === "ordererName" ||
+      sortField === "contact" ||
+      sortField === "receiverName" ||
+      sortField === "collectedAccountName" ||
+      sortField === "deliveryCompanyCode" ||
+      sortField === "selpickOrderNumber" ||
+      sortField === "invoiceNumber" ||
+      sortField === "salePrice" ||
+      sortField === "shippingFee" ||
+      sortField === "receiverAddress" ||
+      sortField === "deliveryRequest" ||
+      sortField === "buyerPhoneNumber" ||
+      sortField === "productNumber" ||
+      sortField === "exposedProductName" ||
+      sortField === "productOptionNumber" ||
+      sortField === "sellerProductCode"
+        ? sortField
+        : undefined,
+    sortDirection: sortDirection === "desc" ? "desc" : "asc",
+  };
+}
+
+export function parseShipmentWorksheetBulkResolveRequest(
+  value: unknown,
+): CoupangShipmentWorksheetBulkResolveRequest {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const parsedViewQuery =
+    item.viewQuery && typeof item.viewQuery === "object"
+      ? parseShipmentWorksheetViewQuery(item.viewQuery)
+      : undefined;
+  const viewQuery = parsedViewQuery
+    ? {
+        scope: parsedViewQuery.scope,
+        page: parsedViewQuery.page,
+        pageSize: parsedViewQuery.pageSize,
+        query: parsedViewQuery.query,
+        invoiceStatusCard: parsedViewQuery.invoiceStatusCard,
+        orderStatusCard: parsedViewQuery.orderStatusCard,
+        outputStatusCard: parsedViewQuery.outputStatusCard,
+        sortField: parsedViewQuery.sortField,
+        sortDirection: parsedViewQuery.sortDirection,
+      }
+    : undefined;
+
+  return {
+    storeId: asString(item.storeId),
+    mode: asString(item.mode) === "invoice_ready" ? "invoice_ready" : "not_exported_download",
+    viewQuery,
   };
 }
 

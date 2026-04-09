@@ -2,6 +2,57 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-09 / COUPANG Shipment-First Worksheet View
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/types.ts`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/lib/coupang-navigation.ts`
+  - `client/src/lib/coupang-navigation.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - added a server-driven worksheet view API and server-side bulk target resolution for COUPANG shipments
+  - removed `Orders / Outbound` from the main COUPANG navigation while keeping the route itself reachable
+- Change content:
+  - added `GET /api/coupang/shipments/worksheet/view` with scope, search, card filters, sorting, counts, and pagination handled on the server
+  - added `POST /api/coupang/shipments/worksheet/resolve` so invoice transmission and not-exported download targets can be resolved from the current server-side view instead of the browser's in-memory row list
+  - changed the shipment page to default to the `dispatch_active` scope and show `출고업무 / 배송 이후 / 클레임·제외 / 전체` scope counts above the worksheet
+  - removed the raw order-status select from the shipment filter bar and stopped loading the entire worksheet into the browser for normal worksheet interaction
+  - kept claim rows persisted in the worksheet but hid them from the default operational scope; they remain visible in the dedicated `claims` scope
+  - changed worksheet row edits and selection state to follow current-page rows plus local dirty overlays instead of a full-array client model
+- Reason:
+  - the shipment worksheet became noticeably slow once the worksheet exceeded roughly 1000 rows because the browser was recalculating counts, filters, sorting, and bulk targets over the full dataset on every interaction
+  - operators primarily work from `Shipment / Dispatch`, so the main menu and worksheet defaults should favor dispatch work instead of showing claim noise by default
+- Impact scope:
+  - COUPANG shipment worksheet API surface
+  - COUPANG shipment page interaction model
+  - COUPANG primary navigation
+- Remaining issues:
+  - browser-level manual verification for a live 1000+ row worksheet was not run in this task
+  - the legacy full worksheet endpoint still exists for fallback paths such as some paste/import helpers and direct patch responses
+- Next work:
+  - manually verify the new scope bar, server pagination, and large worksheet responsiveness in the browser
+  - consider moving the remaining full-worksheet helper flows to the new resolve/view model so the legacy full endpoint can eventually be reduced further
+- Verification:
+  - passed: `npm run check`
+  - passed: `npx vitest run client/src/lib/coupang-navigation.test.ts`
+  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
+  - not run: `npm run test`
+  - not run: `npm run build`
+  - not run: browser-level manual verification
+
 ## 2026-04-08 / Disable Product Edit and Bulk Price Runtime Surface
 
 - Change type:

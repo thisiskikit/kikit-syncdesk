@@ -1,21 +1,27 @@
 # Current Status
 
-- Snapshot date: 2026-04-08
+- Snapshot date: 2026-04-09
 - Purpose: establish a baseline documentation snapshot from the current repository state.
 - Verification scope: code inspection and targeted validation.
 - Verified files:
   - `package.json`
   - `client/src/App.tsx`
   - `client/src/components/operation-toaster.tsx`
+  - `client/src/features/coupang/shipments/page.tsx`
   - `client/src/features/coupang/products/page.tsx`
   - `client/src/features/coupang/products/product-presenters.tsx`
   - `client/src/lib/coupang-navigation.ts`
   - `client/src/lib/coupang-navigation.test.ts`
   - `client/src/lib/operation-links.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
   - `server/index.ts`
   - `server/routes.ts`
+  - `server/routes/coupang/shipments.ts`
   - `server/routes/coupang/products.ts`
   - `server/storage.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
   - `server/services/shared/work-data-db.ts`
   - `shared/schema.ts`
 - Latest verified files for COUPANG claim-aware orders and shipments:
@@ -31,6 +37,7 @@
 - Verified in the latest change:
   - `npm run check`
   - `npx vitest run client/src/lib/coupang-navigation.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
 - Verified in the previous claim-aware change:
   - `npm run check`
   - `npx vitest run client/src/lib/coupang-customer-service.test.ts`
@@ -48,12 +55,13 @@
 | --- | --- | --- | --- |
 | App shell | Active | `client/src/App.tsx` | Top navigation, workspace tabs, operations toaster, and route switching are wired. |
 | NAVER workspace | Active with disabled product-edit and bulk-price routes | `client/src/App.tsx` | Products, control, orders, shipment, claims, inquiries, settlements, stats, seller info, and logs are connected. `/naver/bulk-price` and `/naver/product-edit` now redirect to `/naver/products`. `Grouped Products` still renders a placeholder page. |
-| COUPANG workspace | Active with disabled product-edit and bulk-price routes | `client/src/App.tsx` | Connection, logistics, products, library, control, orders, shipments, cancel/refunds, returns, exchanges, inquiries, coupons, settlements, rocket growth, and logs are connected. `/coupang/product-edit` and `/coupang/bulk-price` now redirect to `/coupang/products`. |
+| COUPANG workspace | Active with shipment-first primary navigation and disabled product-edit / bulk-price routes | `client/src/App.tsx`, `client/src/lib/coupang-navigation.ts` | `Shipment / Dispatch` is now the primary operational entry in the top navigation. `/coupang/orders` remains directly reachable by URL, but `Orders / Outbound` is no longer shown in the main Coupang menu. `/coupang/product-edit` and `/coupang/bulk-price` redirect to `/coupang/products`. |
 | COUPANG claim-aware order and shipment blocking | Active | `client/src/pages/coupang-orders.tsx`, `client/src/features/coupang/shipments/page.tsx`, `server/services/coupang/customer-service-issues.ts`, `server/services/coupang/shipment-worksheet-service.ts` | Orders load CS/claim data by default, shipment-stop requested and shipment-stop completed states are surfaced in shared status helpers, stale worksheet claim state is refreshed on read, and claim-bearing rows are excluded from preparing and invoice transmission actions. |
 | Shared Draft / Runs engine | Active with mixed persistence | `client/src/App.tsx`, `server/storage.ts` | Catalog, drafts, runs, and field sync routes exist, but shared engine runtime storage is still in memory. |
 | Settings / Operations | Active | `client/src/App.tsx`, `server/routes.ts`, `client/src/components/operation-toaster.tsx` | Settings hub, channel connection settings, operation center, logs, and UI state APIs are mounted. The operation toaster now only shows generic operations and no longer polls bulk-price run state. |
 | PostgreSQL-backed work data | Active when `DATABASE_URL` exists | `server/services/shared/work-data-db.ts`, `shared/schema.ts` | Settings, logs, shipment worksheets, field sync, library, and legacy bulk-price tables are provisioned here. Bulk-price tables still exist in schema, but their runtime routes are disabled. |
 | Product edit / bulk price runtime surface | Disabled | `client/src/App.tsx`, `server/routes.ts`, `server/index.ts`, `server/routes/coupang/products.ts` | NAVER/COUPANG bulk-price pages are no longer reachable through the live app, startup no longer recovers bulk-price runs, bulk-price API routers are no longer mounted, and dedicated COUPANG `/partial` and `/full` product edit routes are removed from the live API surface. |
+| COUPANG shipment worksheet view | Active with server-driven scope, counts, pagination, and bulk resolution | `server/routes/coupang/shipments.ts`, `server/services/coupang/shipment-worksheet-service.ts`, `server/services/coupang/shipment-worksheet-view.ts`, `client/src/features/coupang/shipments/page.tsx` | The shipment page now reads `GET /api/coupang/shipments/worksheet/view` instead of loading the full worksheet into the browser, defaults to the `dispatch_active` scope, and resolves bulk invoice/download targets on the server. Claim rows remain stored but are hidden from the default scope. |
 
 ## Implementation Snapshot
 
@@ -90,6 +98,9 @@
   - shipment worksheet detail responses synthesize claim summary fields from live return/exchange lookups so the detail status box can override the base order status immediately when the popup confirms a claim
   - orders with detected claims are excluded from `markPreparing`, and shipment rows with detected claims are excluded from invoice transmission
   - shipment worksheet Excel downloads exclude claim-bearing rows so only order rows are exported and marked as printed
+  - the shipment worksheet UI now uses server-provided scope counts, card counts, filtered totals, and page slices instead of recomputing those values over the full worksheet array in the browser
+  - the default shipment worksheet scope is `dispatch_active`, which only includes `ACCEPT` and `INSTRUCT` rows without claims
+  - claim rows stay available under the dedicated `claims` scope, and post-shipment rows stay available under `post_dispatch`
 
 ## Change Summary
 

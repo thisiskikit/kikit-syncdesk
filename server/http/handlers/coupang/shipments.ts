@@ -2,8 +2,10 @@ import type { RequestHandler } from "express";
 import {
   collectShipmentWorksheet,
   getShipmentWorksheet,
+  getShipmentWorksheetView,
   getShipmentWorksheetDetail,
   patchShipmentWorksheet,
+  resolveShipmentWorksheetBulkRows,
 } from "../../../services/coupang/shipment-worksheet-service";
 import {
   updateInvoice,
@@ -17,7 +19,9 @@ import {
   asString,
   parseCollectShipmentInput,
   parseInvoiceTargets,
+  parseShipmentWorksheetBulkResolveRequest,
   parseShipmentWorksheetPatchInput,
+  parseShipmentWorksheetViewQuery,
 } from "../../coupang/parsers";
 import {
   ensureStoreId,
@@ -91,6 +95,23 @@ export const getShipmentWorksheetHandler: RequestHandler = async (req, res) => {
   }
 };
 
+export const getShipmentWorksheetViewHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseShipmentWorksheetViewQuery(req.query);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+
+    sendData(res, await getShipmentWorksheetView(input));
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_WORKSHEET_VIEW_FAILED",
+      message:
+        error instanceof Error ? error.message : "Failed to load Coupang shipment worksheet view.",
+    });
+  }
+};
+
 export const getShipmentWorksheetDetailHandler: RequestHandler = async (req, res) => {
   try {
     const storeId = typeof req.query.storeId === "string" ? req.query.storeId : "";
@@ -154,6 +175,32 @@ export const patchShipmentWorksheetHandler: RequestHandler = async (req, res) =>
       code: "COUPANG_SHIPMENT_WORKSHEET_PATCH_FAILED",
       message:
         error instanceof Error ? error.message : "Failed to update Coupang shipment worksheet.",
+    });
+  }
+};
+
+export const resolveShipmentWorksheetBulkRowsHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseShipmentWorksheetBulkResolveRequest(req.body);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+
+    sendData(
+      res,
+      await resolveShipmentWorksheetBulkRows({
+        storeId: input.storeId,
+        viewQuery: input.viewQuery,
+        mode: input.mode,
+      }),
+    );
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_WORKSHEET_RESOLVE_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to resolve Coupang shipment worksheet bulk rows.",
     });
   }
 };

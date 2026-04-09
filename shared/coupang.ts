@@ -1146,6 +1146,126 @@ export interface CoupangShipmentWorksheetResponse {
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
 }
 
+export type CoupangShipmentWorksheetViewScope =
+  | "dispatch_active"
+  | "post_dispatch"
+  | "claims"
+  | "all";
+
+export type CoupangShipmentWorksheetInvoiceStatusCard =
+  | "all"
+  | "idle"
+  | "ready"
+  | "pending"
+  | "failed"
+  | "applied";
+
+export type CoupangShipmentWorksheetOrderStatusCard =
+  | "all"
+  | "ACCEPT"
+  | "INSTRUCT"
+  | "DEPARTURE"
+  | "DELIVERING"
+  | "FINAL_DELIVERY"
+  | "NONE_TRACKING"
+  | "SHIPMENT_STOP_REQUESTED"
+  | "SHIPMENT_STOP_HANDLED"
+  | "CANCEL"
+  | "RETURN"
+  | "EXCHANGE";
+
+export type CoupangShipmentWorksheetOutputStatusCard = "all" | "notExported" | "exported";
+
+export type CoupangShipmentWorksheetColumnSourceKey =
+  | "blank"
+  | "orderDateText"
+  | "quantity"
+  | "productName"
+  | "optionName"
+  | "productOrderNumber"
+  | "collectedPlatform"
+  | "ordererName"
+  | "contact"
+  | "receiverName"
+  | "collectedAccountName"
+  | "deliveryCompanyCode"
+  | "selpickOrderNumber"
+  | "invoiceNumber"
+  | "salePrice"
+  | "shippingFee"
+  | "receiverAddress"
+  | "deliveryRequest"
+  | "buyerPhoneNumber"
+  | "productNumber"
+  | "exposedProductName"
+  | "productOptionNumber"
+  | "sellerProductCode";
+
+export type CoupangShipmentWorksheetSortField =
+  | "__exportStatus"
+  | "__orderStatus"
+  | "__invoiceTransmissionStatus"
+  | Exclude<CoupangShipmentWorksheetColumnSourceKey, "blank">;
+
+export type CoupangShipmentWorksheetSortDirection = "asc" | "desc";
+
+export interface CoupangShipmentWorksheetViewQuery {
+  storeId: string;
+  scope?: CoupangShipmentWorksheetViewScope;
+  page?: number;
+  pageSize?: number;
+  query?: string;
+  invoiceStatusCard?: CoupangShipmentWorksheetInvoiceStatusCard;
+  orderStatusCard?: CoupangShipmentWorksheetOrderStatusCard;
+  outputStatusCard?: CoupangShipmentWorksheetOutputStatusCard;
+  sortField?: CoupangShipmentWorksheetSortField | null;
+  sortDirection?: CoupangShipmentWorksheetSortDirection | null;
+}
+
+export interface CoupangShipmentWorksheetViewResponse {
+  store: CoupangStoreRef;
+  items: CoupangShipmentWorksheetRow[];
+  fetchedAt: string;
+  collectedAt: string | null;
+  message: string | null;
+  source: CoupangDataSource;
+  syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  scope: CoupangShipmentWorksheetViewScope;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalRowCount: number;
+  scopeRowCount: number;
+  filteredRowCount: number;
+  invoiceReadyCount: number;
+  scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
+  invoiceCounts: Record<CoupangShipmentWorksheetInvoiceStatusCard, number>;
+  orderCounts: Record<CoupangShipmentWorksheetOrderStatusCard, number>;
+  outputCounts: Record<CoupangShipmentWorksheetOutputStatusCard, number>;
+}
+
+export type CoupangShipmentWorksheetBulkResolveMode =
+  | "invoice_ready"
+  | "not_exported_download";
+
+export interface CoupangShipmentWorksheetBulkResolveRequest {
+  storeId: string;
+  viewQuery?: Omit<CoupangShipmentWorksheetViewQuery, "storeId">;
+  mode: CoupangShipmentWorksheetBulkResolveMode;
+}
+
+export interface CoupangShipmentWorksheetBulkResolveResponse {
+  store: CoupangStoreRef;
+  mode: CoupangShipmentWorksheetBulkResolveMode;
+  items: CoupangShipmentWorksheetRow[];
+  blockedItems: CoupangShipmentWorksheetRow[];
+  fetchedAt: string;
+  message: string | null;
+  source: CoupangDataSource;
+  matchedCount: number;
+  resolvedCount: number;
+}
+
 export interface CoupangShipmentWorksheetDetail {
   orderDetail: CoupangOrderDetail | null;
   returns: CoupangReturnRow[];
