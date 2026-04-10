@@ -25,6 +25,10 @@ function isActiveOperationStatus(status: OperationToast["status"]) {
   return status === "queued" || status === "running";
 }
 
+export function canDismissOperationToast(_toast: Pick<OperationToast, "source" | "status">) {
+  return true;
+}
+
 function getOperationTone(status: OperationToast["status"]): PanelTone {
   if (status === "error") return "failed";
   if (status === "warning") return "warning";
@@ -80,6 +84,7 @@ function formatPanelTime(entry: PanelEntry) {
 
 function buildOperationEntry(toast: OperationToast, dismissToast: (toastId: string) => void): PanelEntry {
   const active = isActiveOperationStatus(toast.status);
+  const dismissible = canDismissOperationToast(toast);
 
   return {
     id: toast.toastId,
@@ -92,8 +97,8 @@ function buildOperationEntry(toast: OperationToast, dismissToast: (toastId: stri
     startedAt: toast.startedAt,
     updatedAt: toast.finishedAt ?? toast.startedAt,
     active,
-    dismissible: !active,
-    onDismiss: !active ? () => dismissToast(toast.toastId) : undefined,
+    dismissible,
+    onDismiss: dismissible ? () => dismissToast(toast.toastId) : undefined,
   };
 }
 

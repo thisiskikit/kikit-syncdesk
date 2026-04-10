@@ -2,6 +2,31 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-10 / Task Status Manual Dismiss
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `client/src/components/operation-toaster.tsx`
+  - `client/src/components/operation-toaster.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - allowed manual dismiss for active task-status entries so stale log toasts and orphaned local processes can be hidden without waiting for auto-expiry
+- Change content:
+  - the task status panel now shows the manual hide action for running and queued entries as well as completed entries
+  - orphaned local process toasts can now be removed directly from the panel even if they never transitioned out of the active state
+  - added test coverage for the manual-dismiss policy used by the operation toaster
+- Reason:
+  - operators needed a way to close log/task entries that remained visible after the underlying process became stale or detached
+- Impact scope:
+  - shared task status panel behavior
+  - manual cleanup of stale local operation toasts
+- Remaining issues:
+  - browser-level manual verification for the updated task status panel was not run in this task
+- Verification:
+  - `npx vitest run client/src/components/operation-toaster.test.ts`
+
 ## 2026-04-10 / COUPANG Shipment Quick Collect Narrowing
 
 - Change type:
