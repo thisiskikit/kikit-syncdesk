@@ -2,6 +2,33 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-10 / COUPANG Shipment Quick Collect Narrowing
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - narrowed shipment quick collect to the live `ACCEPT` order-sheet status and downgraded partial status misses from full fallback to warning-only when another attempted status already succeeded
+- Change content:
+  - quick collect now requests only the live `ACCEPT` order-sheet status by default instead of rechecking `INSTRUCT` and later shipment states
+  - quick collect warnings now keep successful status results instead of reverting the whole worksheet to fallback when another attempted status already returned live data
+  - tracked shipment collect operations now finish with a warning status whenever the collect response contains warning text, even if live rows were still applied
+  - added coverage that `new_only` quick collect issues exactly one `ACCEPT` lookup and still preserves the current worksheet if that lookup fails outright
+- Reason:
+  - operators wanted the shipment quick collect action to behave like a lightweight payment-complete intake instead of a broader status sweep that was slow and brittle
+- Impact scope:
+  - COUPANG shipment worksheet quick collect semantics
+  - COUPANG shipment collect operation status reporting
+- Remaining issues:
+  - browser-level manual verification for the updated quick-collect warning copy was not run in this task
+- Verification:
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-service.test.ts`
+
 ## 2026-04-09 / COUPANG Shipment Prepare Button
 
 - Change type:

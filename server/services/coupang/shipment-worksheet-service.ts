@@ -419,13 +419,8 @@ const CUSTOMER_SERVICE_READY_TTL_MS = 10 * 60_000;
 const INCREMENTAL_OVERLAP_HOURS = 24;
 const FULL_RECONCILE_STALE_HOURS = 12;
 const ORDER_DETAIL_REFRESH_HOURS = 6;
-const QUICK_COLLECT_REQUIRED_STATUSES = ["ACCEPT", "INSTRUCT"] as const;
-const QUICK_COLLECT_OPTIONAL_STATUSES = [
-  "DEPARTURE",
-  "DELIVERING",
-  "FINAL_DELIVERY",
-  "NONE_TRACKING",
-] as const;
+const QUICK_COLLECT_PRIMARY_STATUS = "ACCEPT" as const;
+const QUICK_COLLECT_REQUIRED_STATUSES = [QUICK_COLLECT_PRIMARY_STATUS] as const;
 const SHIPMENT_WORKSHEET_STATUSES = new Set([
   "ACCEPT",
   "INSTRUCT",
@@ -637,6 +632,7 @@ function resolveSyncPlan(
   nowIso: string,
 ): ShipmentWorksheetSyncPlan {
   const currentSyncState = currentSheet.syncState ?? createEmptySyncState();
+  const requestedStatusFilter = normalizeStatusFilter(input.status);
   const requestedMode =
     input.syncMode === "full"
       ? "full"
@@ -645,13 +641,12 @@ function resolveSyncPlan(
         : DEFAULT_SYNC_MODE;
   const selectedCreatedAtFrom = normalizeCreatedAtDate(input.createdAtFrom, -3);
   const selectedCreatedAtTo = normalizeCreatedAtDate(input.createdAtTo, 0);
-  const statusFilter = normalizeStatusFilter(input.status);
   const isFirstSync =
     !currentSheet.items.length || !currentSyncState.lastIncrementalCollectedAt;
   const expandedEarlierRange =
     Boolean(currentSyncState.coveredCreatedAtFrom) &&
     selectedCreatedAtFrom.localeCompare(currentSyncState.coveredCreatedAtFrom ?? "") < 0;
-  const statusChanged = currentSyncState.lastStatusFilter !== statusFilter;
+  const statusChanged = currentSyncState.lastStatusFilter !== requestedStatusFilter;
   const fullSyncStale = isTimestampOlderThanHours(
     currentSyncState.lastFullCollectedAt,
     nowIso,
@@ -664,7 +659,7 @@ function resolveSyncPlan(
       autoExpanded: false,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
-      statusFilter,
+      statusFilter: requestedStatusFilter,
     };
   }
 
@@ -674,7 +669,7 @@ function resolveSyncPlan(
       autoExpanded: false,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
-      statusFilter,
+      statusFilter: QUICK_COLLECT_PRIMARY_STATUS,
     };
   }
 
@@ -684,7 +679,7 @@ function resolveSyncPlan(
       autoExpanded: true,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
-      statusFilter,
+      statusFilter: requestedStatusFilter,
     };
   }
 
@@ -698,7 +693,7 @@ function resolveSyncPlan(
     autoExpanded: false,
     fetchCreatedAtFrom: maxRequestedDate(selectedCreatedAtFrom, overlapStart),
     fetchCreatedAtTo: selectedCreatedAtTo,
-    statusFilter,
+    statusFilter: requestedStatusFilter,
   };
 }
 
@@ -713,10 +708,10 @@ async function fetchQuickCollectOrders(input: {
   const requiredStatuses = statusFilter
     ? [statusFilter]
     : [...QUICK_COLLECT_REQUIRED_STATUSES];
-  const optionalStatuses = statusFilter ? [] : [...QUICK_COLLECT_OPTIONAL_STATUSES];
   const collectedBySourceKey = new Map<string, CoupangOrderRow>();
   const failures: string[] = [];
   let hasRequiredFailure = false;
+  let succeededStatusCount = 0;
 
   const fetchOne = async (status: string, required: boolean) => {
     try {
@@ -763,6 +758,8 @@ async function fetchQuickCollectOrders(input: {
           collectedBySourceKey.set(sourceKey, row);
         }
       }
+
+      succeededStatusCount += 1;
     } catch (error) {
       void recordSystemErrorEvent({
         source: "coupang.shipment.quick-collect.status",
@@ -793,14 +790,15 @@ async function fetchQuickCollectOrders(input: {
     await fetchOne(status, true);
   }
 
-  for (const status of optionalStatuses) {
-    await fetchOne(status, false);
-  }
+  const partialSuccess = succeededStatusCount > 0 && failures.length > 0;
 
   return {
     items: Array.from(collectedBySourceKey.values()),
-    source: hasRequiredFailure ? "fallback" : "live",
-    message: mergeMessages(failures),
+    source: succeededStatusCount > 0 || !hasRequiredFailure ? "live" : "fallback",
+    message: mergeMessages([
+      partialSuccess ? "실패한 주문 상태를 제외한 결과만 반영했습니다." : null,
+      ...failures,
+    ]),
     hasRequiredFailure,
   } satisfies ShipmentOrderLookupResult;
 }

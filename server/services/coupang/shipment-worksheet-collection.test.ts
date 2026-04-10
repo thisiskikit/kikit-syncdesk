@@ -1202,11 +1202,13 @@ describe("coupang shipment worksheet collection", () => {
       syncMode: "new_only",
     });
 
+    expect(listOrdersMock).toHaveBeenCalledTimes(1);
     expect(listOrdersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeId: "store-1",
         createdAtFrom: "2026-03-25",
         createdAtTo: "2026-03-26",
+        status: "ACCEPT",
         fetchAllPages: true,
         includeCustomerService: false,
       }),
@@ -1232,7 +1234,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("keeps the current worksheet when required quick-collect statuses fail", async () => {
+  it("keeps the current worksheet when the ACCEPT quick-collect lookup fails", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
         buildWorksheetRow({

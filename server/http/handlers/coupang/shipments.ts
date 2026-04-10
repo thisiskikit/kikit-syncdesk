@@ -213,7 +213,7 @@ export const collectShipmentWorksheetHandler: RequestHandler = async (req, res) 
 
         return {
           data,
-          status: data.source === "fallback" ? "warning" : "success",
+          status: data.source === "fallback" || Boolean(data.message) ? "warning" : "success",
           normalizedPayload,
           resultSummary: buildCollectResultSummary(data),
         };
