@@ -1,4 +1,5 @@
 import type {
+  ApplyCoupangShipmentWorksheetInvoiceInput,
   CollectCoupangShipmentInput,
   CoupangCancelOrderTarget,
   CoupangCustomerServiceSummaryRequestItem,
@@ -221,6 +222,25 @@ export function parseShipmentWorksheetPatchInput(
   return {
     storeId: asString(item.storeId),
     items: parseShipmentWorksheetPatchItems(item),
+  };
+}
+
+export function parseShipmentWorksheetInvoiceInputApplyRequest(
+  value: unknown,
+): ApplyCoupangShipmentWorksheetInvoiceInput {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const rows = Array.isArray(item.rows) ? item.rows : [];
+
+  return {
+    storeId: asString(item.storeId),
+    rows: rows.map((rawItem) => {
+      const row = rawItem && typeof rawItem === "object" ? (rawItem as JsonRecord) : {};
+      return {
+        selpickOrderNumber: asString(row.selpickOrderNumber),
+        deliveryCompanyCode: asString(row.deliveryCompanyCode),
+        invoiceNumber: asString(row.invoiceNumber),
+      };
+    }),
   };
 }
 

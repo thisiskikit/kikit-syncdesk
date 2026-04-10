@@ -1,6 +1,13 @@
-﻿import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
-import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 import { RefreshCcw } from "lucide-react";
 import {
@@ -24,17 +31,18 @@ import {
   type CoupangReturnDetail,
   type CoupangReturnRow,
   type CoupangShipmentInvoiceTransmissionStatus,
+  type CoupangShipmentWorksheetInvoiceInputApplyResponse,
+  type CoupangShipmentWorksheetInvoiceInputApplyRow,
   type CoupangShipmentWorksheetBulkResolveResponse,
   type CoupangShipmentWorksheetColumnSourceKey,
   type CoupangShipmentWorksheetDetailResponse,
-  type CoupangShipmentWorksheetResponse,
   type CoupangShipmentWorksheetRow,
+  type CoupangShipmentWorksheetResponse,
   type CoupangShipmentWorksheetSortField,
   type CoupangShipmentWorksheetViewResponse,
   type CoupangShipmentWorksheetViewScope,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
-import { OrderTicketSection, TicketInfoTable } from "@/components/order-ticket-sections";
 import { StatusBadge } from "@/components/status-badge";
 import { useOperations } from "@/components/operation-provider";
 import {
@@ -99,6 +107,15 @@ import {
   looksLikeInvoiceClipboard,
   parseInvoiceClipboardRows,
 } from "./worksheet-clipboard";
+import {
+  dedupeInvoiceInputApplyRows,
+  resolveSourceKeysForTouchedRowIds,
+} from "./invoice-input-apply";
+import type {
+  ShipmentDetailClaimCardView,
+  ShipmentDetailInfoRow,
+  ShipmentDetailTable,
+} from "./shipment-detail-dialog";
 import type {
   CoupangStoresResponse,
   EditableColumnKey,
@@ -115,6 +132,10 @@ import type {
 
 type InvoiceTransmissionMode = "upload" | "update";
 const SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
+const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
+const LazyShipmentDetailDialog = lazy(() => import("./shipment-detail-dialog"));
+const LazyShipmentExcelSortDialog = lazy(() => import("./shipment-excel-sort-dialog"));
+const LazyShipmentInvoiceInputDialog = lazy(() => import("./shipment-invoice-input-dialog"));
 
 type QuickFilterCardOption<TValue extends string> = {
   value: TValue;
@@ -331,10 +352,6 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard
   );
-}
-
-function buildWorksheetUrl(storeId: string) {
-  return `/api/coupang/shipments/worksheet?storeId=${encodeURIComponent(storeId)}`;
 }
 
 function buildWorksheetViewUrl(input: {
@@ -1300,14 +1317,6 @@ function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
     .includes(normalized);
 }
 
-function renderOverlayInBody(content: ReactNode) {
-  if (typeof document === "undefined") {
-    return null;
-  }
-
-  return createPortal(content, document.body);
-}
-
 function upsertRowMap(
   current: Record<string, CoupangShipmentWorksheetRow>,
   rows: readonly CoupangShipmentWorksheetRow[],
@@ -1961,6 +1970,173 @@ export default function CoupangShipmentsPage() {
         { label: "배송완료", value: formatDateTimeLabel(detailOrderDetail?.deliveredDate) },
       ]
     : [];
+  const detailOrderItemsTable: ShipmentDetailTable | null = detailOrderDetail?.items.length
+    ? {
+        title: "주문 상품",
+        headers: ["상품", "옵션", "수량", "상태", "송장"],
+        rows: detailOrderDetail.items.map((item, index) => ({
+          key: `${item.id}:${index}`,
+          cells: [
+            item.productName,
+            item.optionName ?? "-",
+            formatNumber(item.quantity),
+            formatOrderStatusLabel(item.status),
+            formatJoinedText([item.deliveryCompanyCode, item.invoiceNumber]),
+          ],
+        })),
+      }
+    : null;
+  const detailReturnClaimCards = useMemo<ShipmentDetailClaimCardView[]>(
+    () =>
+      detailReturnRows.map((row) => {
+        const detail = returnDetailByReceiptId.get(row.receiptId) ?? null;
+        const summaryRow = detail?.summaryRow ?? row;
+        const actionLabels = buildReturnActionLabels(summaryRow);
+
+        return {
+          id: row.receiptId,
+          title: summaryRow.cancelType === "RETURN" ? "반품" : summaryRow.cancelType,
+          subtitle: summaryRow.receiptId,
+          statusText: summaryRow.status,
+          sections: [
+            {
+              title: "요청 상태",
+              rows: [
+                { label: "상품", value: formatJoinedText([summaryRow.productName, summaryRow.vendorItemName], " / ") },
+                { label: "수량", value: `${formatNumber(summaryRow.cancelCount ?? summaryRow.purchaseCount)}개` },
+                { label: "유형", value: formatJoinedText([summaryRow.cancelType, summaryRow.receiptType, summaryRow.returnDeliveryType], " · ") },
+                { label: "사유", value: formatClaimReasonText(detail?.reason ?? summaryRow.reason, detail?.reasonCode ?? summaryRow.reasonCode) },
+                { label: "책임 구분", value: formatText(detail?.faultByType ?? summaryRow.faultByType) },
+                { label: "선환불", value: detail?.preRefund == null ? "-" : detail.preRefund ? "예" : "아니오" },
+              ],
+            },
+            {
+              title: "요청자 / 회수",
+              rows: [
+                { label: "요청자", value: formatJoinedText([detail?.requester.name ?? summaryRow.requesterName, detail?.requester.mobile ?? detail?.requester.phone ?? summaryRow.requesterMobile ?? summaryRow.requesterPhone]) },
+                { label: "회수지", value: formatAddressText([detail?.requester.postCode ? `(${detail.requester.postCode})` : summaryRow.requesterPostCode ? `(${summaryRow.requesterPostCode})` : null, detail?.requester.address ?? summaryRow.requesterAddress, detail?.requester.addressDetail]) },
+                { label: "회수송장", value: formatReturnDeliverySummary(detail, summaryRow) },
+                { label: "반품비", value: formatCurrency(detail?.returnCharge.amount ?? summaryRow.retrievalChargeAmount) },
+                { label: "가능 작업", value: formatActionsText(actionLabels) },
+              ],
+            },
+            {
+              title: "처리 이력",
+              rows: [
+                { label: "등록일", value: formatDateTimeLabel(detail?.createdAt ?? summaryRow.createdAt) },
+                { label: "수정일", value: formatDateTimeLabel(detail?.modifiedAt ?? summaryRow.modifiedAt) },
+                { label: "완료일", value: formatDateTimeLabel(detail?.completeConfirmDate ?? summaryRow.completeConfirmDate) },
+                { label: "완료 유형", value: formatText(detail?.completeConfirmType ?? summaryRow.completeConfirmType) },
+                { label: "출고 상태", value: formatText(summaryRow.releaseStatus) },
+              ],
+            },
+          ],
+          tables: [
+            ...(detail?.items.length
+              ? [{
+                  title: "반품 상품",
+                  headers: ["상품", "shipmentBoxId", "수량", "상태"],
+                  rows: detail.items.map((item, index) => ({
+                    key: `${summaryRow.receiptId}:item:${index}`,
+                    cells: [item.vendorItemName ?? item.sellerProductName ?? item.vendorItemId ?? "-", item.shipmentBoxId ?? "-", formatNumber(item.cancelCount ?? item.purchaseCount), item.releaseStatusName ?? item.releaseStatus ?? "-"],
+                  })),
+                }]
+              : []),
+            ...(detail?.deliveries.length
+              ? [{
+                  title: "회수 송장 상세",
+                  headers: ["구분", "택배사", "송장번호", "등록번호"],
+                  rows: detail.deliveries.map((delivery, index) => ({
+                    key: `${summaryRow.receiptId}:delivery:${index}`,
+                    cells: [delivery.returnExchangeDeliveryType ?? "-", delivery.deliveryCompanyCode ?? "-", delivery.deliveryInvoiceNo ?? "-", delivery.regNumber ?? "-"],
+                  })),
+                }]
+              : []),
+          ],
+        };
+      }),
+    [detailReturnRows, returnDetailByReceiptId],
+  );
+  const detailExchangeClaimCards = useMemo<ShipmentDetailClaimCardView[]>(
+    () =>
+      detailExchangeRows.map((row) => {
+        const detail = exchangeDetailById.get(row.exchangeId) ?? null;
+        const summaryRow = detail?.summaryRow ?? row;
+        const actionLabels = buildExchangeActionLabels(summaryRow);
+
+        return {
+          id: row.exchangeId,
+          title: "교환",
+          subtitle: summaryRow.exchangeId,
+          statusText: summaryRow.status,
+          sections: [
+            {
+              title: "요청 상태",
+              rows: [
+                { label: "상품", value: formatJoinedText([summaryRow.productName, summaryRow.vendorItemName], " / ") },
+                { label: "수량", value: `${formatNumber(summaryRow.quantity)}개` },
+                { label: "회수 상태", value: formatText(detail?.collectStatus ?? summaryRow.collectStatus) },
+                { label: "사유", value: formatClaimReasonText(detail?.reason ?? summaryRow.reason, detail?.reasonCode ?? summaryRow.reasonCode, detail?.reasonDetail ?? summaryRow.reasonDetail) },
+                { label: "주문 배송상태", value: formatText(detail?.orderDeliveryStatusCode ?? summaryRow.orderDeliveryStatusCode) },
+                { label: "가능 작업", value: formatActionsText(actionLabels) },
+              ],
+            },
+            {
+              title: "회수지 / 메모",
+              rows: [
+                { label: "회수지", value: formatJoinedText([detail?.requester.name ?? summaryRow.returnCustomerName, detail?.requester.mobile ?? detail?.requester.phone ?? summaryRow.returnMobile]) },
+                { label: "주소", value: formatAddressText([detail?.requester.postCode ? `(${detail.requester.postCode})` : null, detail?.requester.address ?? summaryRow.returnAddress, detail?.requester.addressDetail]) },
+                { label: "요청 메모", value: formatText(detail?.requester.memo) },
+                { label: "회수 완료", value: formatDateTimeLabel(detail?.collectCompleteDate ?? summaryRow.collectCompleteDate) },
+              ],
+            },
+            {
+              title: "재배송지 / 메모",
+              rows: [
+                { label: "수령지", value: formatJoinedText([detail?.recipient.name ?? summaryRow.deliveryCustomerName, detail?.recipient.mobile ?? detail?.recipient.phone ?? summaryRow.deliveryMobile]) },
+                { label: "주소", value: formatAddressText([detail?.recipient.postCode ? `(${detail.recipient.postCode})` : null, detail?.recipient.address ?? summaryRow.deliveryAddress, detail?.recipient.addressDetail]) },
+                { label: "수령 메모", value: formatText(detail?.recipient.memo) },
+                { label: "교환 송장", value: formatExchangeInvoiceSummary(detail, summaryRow) },
+              ],
+            },
+          ],
+          tables: [
+            ...(detail?.items.length
+              ? [{
+                  title: "교환 상품",
+                  headers: ["상품", "shipmentBoxId", "수량", "상태"],
+                  rows: detail.items.map((item, index) => ({
+                    key: `${summaryRow.exchangeId}:item:${index}`,
+                    cells: [item.targetItemName ?? item.orderItemName ?? item.vendorItemName ?? "-", item.shipmentBoxId ?? "-", formatNumber(item.quantity), item.collectStatus ?? item.releaseStatus ?? "-"],
+                  })),
+                }]
+              : []),
+            ...(detail?.invoices.length
+              ? [{
+                  title: "교환 송장 상세",
+                  headers: ["shipmentBoxId", "택배사", "송장번호", "예정일", "상태"],
+                  rows: detail.invoices.map((invoice, index) => ({
+                    key: `${summaryRow.exchangeId}:invoice:${index}`,
+                    cells: [invoice.shipmentBoxId ?? "-", invoice.deliverCode ?? "-", invoice.invoiceNumber ?? "-", invoice.estimatedDeliveryDate ?? "-", invoice.statusCode ?? "-"],
+                  })),
+                }]
+              : []),
+          ],
+        };
+      }),
+    [detailExchangeRows, exchangeDetailById],
+  );
+  const detailDialogWarningTitle =
+    shipmentDetailQuery.data?.source === "fallback"
+      ? "실시간 상세 일부를 불러오지 못했습니다."
+      : shipmentDetailQuery.data?.message
+        ? "쿠팡 상세 응답에 안내 메시지가 있습니다."
+        : null;
+  const detailDialogWarningMessage =
+    shipmentDetailQuery.data?.source === "fallback" || shipmentDetailQuery.data?.message
+      ? shipmentDetailQuery.data?.message ??
+        "워크시트에 저장된 정보와 실시간 조회 결과를 함께 보여주고 있습니다."
+      : null;
   const recentActivityItems = useMemo<ShipmentActivityItem[]>(() => {
     const items: ShipmentActivityItem[] = [];
 
@@ -2268,6 +2444,116 @@ export default function CoupangShipmentsPage() {
     return response;
   }
 
+  function clearDirtyRowsBySourceKeys(sourceKeys: readonly string[]) {
+    if (!sourceKeys.length) {
+      return;
+    }
+
+    setDirtySourceKeys((current) => {
+      const next = new Set(current);
+      for (const sourceKey of sourceKeys) {
+        next.delete(sourceKey);
+      }
+      return next;
+    });
+    setDirtyRowsBySourceKey((current) => {
+      const next = { ...current };
+      for (const sourceKey of sourceKeys) {
+        delete next[sourceKey];
+      }
+      return next;
+    });
+  }
+
+  function clearDirtyRowsByRowIds(rowIds: readonly string[]) {
+    const sourceKeys = resolveSourceKeysForTouchedRowIds(rowIds, [
+      draftRows,
+      activeSheet?.items ?? [],
+      Object.values(selectedRowsById),
+      Object.values(dirtyRowsBySourceKey),
+    ]);
+    clearDirtyRowsBySourceKeys(sourceKeys);
+  }
+
+  async function applyInvoiceInputRows(
+    rows: readonly CoupangShipmentWorksheetInvoiceInputApplyRow[],
+    options: {
+      title: string;
+      emptyMessage: string;
+      successMessage: (updatedCount: number) => string;
+      issues: string[];
+      closeDialog?: boolean;
+    },
+  ) {
+    if (!filters.selectedStoreId) {
+      return null;
+    }
+
+    const dedupedRows = dedupeInvoiceInputApplyRows(rows);
+    if (!dedupedRows.length) {
+      setFeedback({
+        type: "warning",
+        title: options.title,
+        message: options.emptyMessage,
+        details: options.issues,
+      });
+      return null;
+    }
+
+    setBusyAction("save");
+    try {
+      const response = await apiRequestJson<CoupangShipmentWorksheetInvoiceInputApplyResponse>(
+        "POST",
+        "/api/coupang/shipments/worksheet/invoice-input/apply",
+        {
+          storeId: filters.selectedStoreId,
+          rows: dedupedRows,
+        },
+      );
+      const nextIssues = [...options.issues, ...response.issues];
+
+      clearDirtyRowsByRowIds(response.touchedRowIds);
+      await refetchWorksheetView();
+
+      if (options.closeDialog) {
+        closeInvoiceInputDialog();
+      }
+
+      setWorksheetMode("invoice");
+      setFeedback({
+        type:
+          response.updatedCount === 0 || nextIssues.length || Boolean(response.message)
+            ? "warning"
+            : "success",
+        title: options.title,
+        message:
+          response.updatedCount > 0
+            ? options.successMessage(response.updatedCount)
+            : response.message ?? options.emptyMessage,
+        details: nextIssues,
+      });
+      return response;
+    } catch (error) {
+      if (options.closeDialog) {
+        closeInvoiceInputDialog();
+      }
+
+      setWorksheetMode("invoice");
+      setFeedback({
+        type: "error",
+        title: options.title,
+        message:
+          error instanceof Error
+            ? error.message
+            : "송장 입력 반영 중 오류가 발생했습니다.",
+        details: options.issues,
+      });
+      return null;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function mapRowsByInvoiceIdentity(rows: CoupangShipmentWorksheetRow[]) {
     return new Map(
       rows.map(
@@ -2562,17 +2848,6 @@ export default function CoupangShipmentsPage() {
     }
 
     return saveWorksheetChanges();
-  }
-
-  async function loadFullWorksheetRows() {
-    if (!filters.selectedStoreId) {
-      return [];
-    }
-
-    const response = await getJson<CoupangShipmentWorksheetResponse>(
-      buildWorksheetUrl(filters.selectedStoreId),
-    );
-    return response.items;
   }
 
   async function downloadWorksheetXlsx(
@@ -3123,84 +3398,21 @@ export default function CoupangShipmentsPage() {
     if (!rows.length) {
       setFeedback({
         type: "warning",
-        title: "송장 입력 팝업",
-        message: "적용할 송장 데이터가 없습니다.",
+        title: "송장 입력하기",
+        message: "반영할 행을 찾지 못했습니다.",
         details: issues,
       });
       return;
     }
 
-    const allRows = await loadFullWorksheetRows();
-    const rowBySelpickOrderNumber = new Map(
-      allRows.map((row) => [row.selpickOrderNumber, dirtyRowsBySourceKey[row.sourceKey] ?? row] as const),
-    );
-    const updates = new Map<string, CoupangShipmentWorksheetRow>();
-    const nextIssues = [...issues];
-
-    for (const item of rows) {
-      const row = rowBySelpickOrderNumber.get(item.selpickOrderNumber);
-      if (!row) {
-        nextIssues.push(`현재 시트에 없는 셀픽주문번호입니다: ${item.selpickOrderNumber}`);
-        continue;
-      }
-
-      const nextRow = applyEditableCell(
-        applyEditableCell(row, "deliveryCompanyCode", item.deliveryCompanyCode),
-        "invoiceNumber",
-        item.invoiceNumber,
-      );
-      if (nextRow === row) {
-        continue;
-      }
-      updates.set(row.id, nextRow);
-    }
-
-    if (!updates.size) {
-      setFeedback({
-        type: "warning",
-        title: "송장 입력 팝업",
-        message: "현재 워크시트에 반영할 수 있는 송장 데이터가 없습니다.",
-        details: nextIssues,
-      });
-      return;
-    }
-
-    const changedRows = Array.from(updates.values());
-
-    setBusyAction("save");
-    try {
-      const response = await patchWorksheetRows(
-        changedRows.map((row) => buildWorksheetPatchItem(row)),
-        { clearDirtyMode: "touched" },
-      );
-      if (!response) {
-        throw new Error("송장 입력 반영 결과를 확인하지 못했습니다.");
-      }
-
-      setWorksheetMode("invoice");
-      closeInvoiceInputDialog();
-      setFeedback({
-        type: nextIssues.length ? "warning" : "success",
-        title: "송장 입력 팝업 적용",
-        message: `${updates.size}건의 택배사와 운송장번호를 셀픽주문번호 기준으로 반영했습니다.`,
-        details: nextIssues,
-      });
-    } catch (error) {
-      applyWorksheetRowUpdates(updates);
-      setWorksheetMode("invoice");
-      closeInvoiceInputDialog();
-      setFeedback({
-        type: "warning",
-        title: "송장 입력 팝업 적용",
-        message:
-          error instanceof Error
-            ? `값은 워크시트에 반영했지만 저장은 실패했습니다. ${error.message}`
-            : "값은 워크시트에 반영했지만 저장은 실패했습니다. 상단의 변경 저장 버튼으로 다시 저장해 주세요.",
-        details: nextIssues,
-      });
-    } finally {
-      setBusyAction(null);
-    }
+    await applyInvoiceInputRows(rows, {
+      title: "송장 입력하기 반영",
+      emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호를 찾지 못했습니다.",
+      successMessage: (updatedCount) =>
+        `${updatedCount}건의 택배사와 운송장번호를 워크시트에 반영했습니다.`,
+      issues,
+      closeDialog: true,
+    });
   }
 
   function handleVisibleRowsChange(
@@ -3248,14 +3460,28 @@ export default function CoupangShipmentsPage() {
 
     if (looksLikeInvoiceClipboard(clipboardText)) {
       event.preventDefault();
-
-      const allRows = await loadFullWorksheetRows();
-      const rowBySelpickOrderNumber = new Map(
-        allRows.map((row) => [row.selpickOrderNumber, dirtyRowsBySourceKey[row.sourceKey] ?? row] as const),
+      const currentRowsBySelpickOrderNumber = new Map(
+        [
+          ...Object.values(dirtyRowsBySourceKey),
+          ...Object.values(selectedRowsById),
+          ...(activeSheet?.items ?? []),
+          ...draftRows,
+        ].map((row) => [row.selpickOrderNumber, row] as const),
       );
-      const { updates, issues } = parseInvoiceClipboardRows(clipboardText, rowBySelpickOrderNumber);
+      const { updates, issues } = parseInvoiceClipboardRows(
+        clipboardText,
+        currentRowsBySelpickOrderNumber,
+      );
+      const invoiceRows = Array.from(updates.values()).map(
+        (row) =>
+          ({
+            selpickOrderNumber: row.selpickOrderNumber,
+            deliveryCompanyCode: row.deliveryCompanyCode,
+            invoiceNumber: row.invoiceNumber,
+          }) satisfies CoupangShipmentWorksheetInvoiceInputApplyRow,
+      );
 
-      if (!updates.size) {
+      if (!invoiceRows.length) {
         setFeedback({
           type: "warning",
           title: "송장 붙여넣기",
@@ -3267,12 +3493,12 @@ export default function CoupangShipmentsPage() {
         return;
       }
 
-      applyWorksheetRowUpdates(updates);
-      setFeedback({
-        type: issues.length ? "warning" : "success",
+      await applyInvoiceInputRows(invoiceRows, {
         title: "송장 붙여넣기 적용",
-        message: `${updates.size}건의 택배사와 송장번호를 워크시트에 반영했습니다.`,
-        details: issues,
+        emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호를 찾지 못했습니다.",
+        successMessage: (updatedCount) =>
+          `${updatedCount}건의 택배사와 송장번호를 워크시트에 반영했습니다.`,
+        issues,
       });
       return;
     }
@@ -3873,630 +4099,102 @@ export default function CoupangShipmentsPage() {
           )}
         </div>
       ) : (
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 style={{ margin: 0 }}>다운로드 컬럼 설정</h2>
-              <div className="muted shipment-grid-note">
-                컬럼명 변경, 소스 변경, 삭제와 추가가 가능합니다. 여기에서 바꾼 순서와 구성이
-                워크시트와 엑셀 다운로드에 같이 적용됩니다.
-              </div>
+        <Suspense
+          fallback={
+            <div className="card">
+              <div className="empty">컬럼 설정을 불러오는 중입니다...</div>
             </div>
-            <div className="toolbar">
-              <button className="button ghost" onClick={() => setActiveTab("worksheet")}>
-                워크시트로 돌아가기
-              </button>
-              <button className="button ghost" onClick={addColumnConfig}>
-                컬럼 추가
-              </button>
-              <button className="button ghost" onClick={resetColumnConfigs}>
-                기본값 복원
-              </button>
-              <button
-                className="button"
-                onClick={() => openExcelSortDialog("selected")}
-                disabled={openExcelExportDisabled}
-              >
-                선택 행 엑셀 다운로드
-              </button>
-              <button
-                className="button ghost"
-                onClick={() => openExcelSortDialog("notExported")}
-                disabled={openNotExportedExcelExportDisabled}
-              >
-                미출력건 전부 다운로드
-              </button>
-            </div>
-            {selectedRows.length > 0 && selectedExportBlockedRows.length > 0 ? (
-              <div className="muted action-disabled-reason">
-                선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
-              </div>
-            ) : null}
-            {(activeSheet?.outputCounts.notExported ?? 0) > 0 && scopeCounts.claims > 0 ? (
-              <div className="muted action-disabled-reason">
-                클레임 주문은 미출력 전체 다운로드에서 자동 제외됩니다.
-              </div>
-            ) : null}
-          </div>
-
-          <div className="column-settings-list">
-            {columnConfigs.map((config) => (
-              <div
-                key={config.id}
-                className={`column-settings-row${draggingConfigId === config.id ? " dragging" : ""}`}
-                draggable
-                onDragStart={() => setDraggingConfigId(config.id)}
-                onDragEnd={() => setDraggingConfigId(null)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => handleSettingsDrop(config.id)}
-              >
-                <div className="column-settings-handle">드래그</div>
-                <input
-                  value={config.label}
-                  onChange={(event) => updateColumnConfig(config.id, { label: event.target.value })}
-                  placeholder="컬럼명"
-                />
-                <select
-                  value={config.sourceKey}
-                  onChange={(event) =>
-                    updateColumnConfig(config.id, {
-                      sourceKey: event.target.value as ShipmentColumnSourceKey,
-                      label: config.label || SHIPMENT_COLUMN_LABELS[event.target.value as ShipmentColumnSourceKey],
-                    })
-                  }
-                >
-                  {SHIPMENT_COLUMN_SOURCE_OPTIONS.map((sourceKey) => (
-                    <option key={sourceKey} value={sourceKey}>
-                      {SHIPMENT_COLUMN_LABELS[sourceKey]}
-                    </option>
-                  ))}
-                </select>
-                <div className="muted">
-                  현재 너비 {columnWidths[config.id] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey]}px
-                </div>
-                <button
-                  className="button ghost"
-                  onClick={() => deleteColumnConfig(config.id)}
-                  disabled={columnConfigs.length <= 1}
-                >
-                  삭제
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+          }
+        >
+          <LazyShipmentColumnSettingsPanel
+            columnConfigs={columnConfigs}
+            columnWidths={columnWidths}
+            draggingConfigId={draggingConfigId}
+            openExcelExportDisabled={openExcelExportDisabled}
+            openNotExportedExcelExportDisabled={openNotExportedExcelExportDisabled}
+            selectedRowsCount={selectedRows.length}
+            selectedExportBlockedRowCount={selectedExportBlockedRows.length}
+            claimScopeCount={scopeCounts.claims}
+            notExportedCount={activeSheet?.outputCounts.notExported ?? 0}
+            shipmentColumnLabels={SHIPMENT_COLUMN_LABELS}
+            shipmentColumnDefaultWidths={SHIPMENT_COLUMN_DEFAULT_WIDTHS}
+            shipmentColumnSourceOptions={SHIPMENT_COLUMN_SOURCE_OPTIONS}
+            onBack={() => setActiveTab("worksheet")}
+            onAdd={addColumnConfig}
+            onReset={resetColumnConfigs}
+            onDelete={deleteColumnConfig}
+            onDragStart={(id) => setDraggingConfigId(id)}
+            onDragEnd={() => setDraggingConfigId(null)}
+            onDrop={handleSettingsDrop}
+            onUpdate={updateColumnConfig}
+            onOpenExcelSortDialog={openExcelSortDialog}
+          />
+        </Suspense>
       )}
 
-      {detailRow ? (
-        <div className="csv-overlay" onMouseDown={closeShipmentDetailDialog}>
-          <div
-            className="csv-dialog detail-dialog shipment-detail-dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="detail-box-header">
-              <div className="shipment-detail-header-stack">
-                <div>
-                  <h3 className="shipment-detail-title">셀픽 워크시트 상세</h3>
-                  <p className="muted shipment-detail-dialog-note">
-                    메모, 현재 상태, 쿠팡 주문 상세와 클레임 내용을 한 번에 확인합니다.
-                  </p>
-                </div>
-
-                <div className="shipment-detail-hero">
-                  <div className="shipment-detail-hero-copy">
-                    <div className="shipment-detail-hero-eyebrow">워크시트 행 요약</div>
-                    <strong className="shipment-detail-hero-title">
-                      {detailRow.exposedProductName || detailRow.productName}
-                    </strong>
-                    <div className="shipment-detail-hero-meta">{detailHeroMeta}</div>
-                  </div>
-                  <div className="shipment-detail-hero-badges">
-                    <div className="shipment-detail-hero-badge">
-                      <span className="shipment-detail-hero-badge-label">워크시트</span>
-                      {detailWorksheetStatusValue}
-                    </div>
-                    <div className="shipment-detail-hero-badge">
-                      <span className="shipment-detail-hero-badge-label">송장</span>
-                      {detailInvoiceStatusValue}
-                    </div>
-                    <div className="shipment-detail-hero-badge">
-                      <span className="shipment-detail-hero-badge-label">클레임</span>
-                      {detailClaimStatusValue}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="detail-actions">
-                <button className="button secondary" onClick={closeShipmentDetailDialog}>
-                  닫기
-                </button>
+      <Suspense
+        fallback={
+          detailRow ? (
+            <div className="csv-overlay">
+              <div className="csv-dialog detail-dialog shipment-detail-dialog">
+                <div className="empty">상세 화면을 불러오는 중입니다...</div>
               </div>
             </div>
+          ) : null
+        }
+      >
+        <LazyShipmentDetailDialog
+          isOpen={Boolean(detailRow)}
+          rowTitle={detailRow?.exposedProductName || detailRow?.productName || ""}
+          heroMeta={detailHeroMeta}
+          worksheetStatusValue={detailWorksheetStatusValue}
+          invoiceStatusValue={detailInvoiceStatusValue}
+          claimStatusValue={detailClaimStatusValue}
+          worksheetRows={detailWorksheetRows}
+          deliveryRows={detailDeliveryRows}
+          statusRows={detailStatusRows}
+          isLoading={shipmentDetailQuery.isLoading}
+          errorMessage={shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null}
+          warningTitle={detailDialogWarningTitle}
+          warningMessage={detailDialogWarningMessage}
+          realtimeOrderRows={detailRealtimeOrderRows}
+          orderItemsTable={detailOrderItemsTable}
+          returnSummaryText={`총 ${formatNumber(detailReturnRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`}
+          returnClaims={detailReturnClaimCards}
+          exchangeSummaryText={`총 ${formatNumber(detailExchangeRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`}
+          exchangeClaims={detailExchangeClaimCards}
+          onClose={closeShipmentDetailDialog}
+        />
+      </Suspense>
 
-            <div className="shipment-detail-section-grid">
-              <OrderTicketSection title="주문 정보">
-                <TicketInfoTable rows={detailWorksheetRows} />
-              </OrderTicketSection>
+      <Suspense fallback={null}>
+        <LazyShipmentExcelSortDialog
+          isOpen={isExcelSortDialogOpen}
+          exportScope={excelExportScope}
+          targetRowCount={
+            excelExportScope === "selected"
+              ? selectedExportRows.length
+              : activeSheet?.outputCounts.notExported ?? 0
+          }
+          blockedClaimCount={
+            excelExportScope === "selected" ? selectedExportBlockedRows.length : scopeCounts.claims
+          }
+          onClose={closeExcelSortDialog}
+          onApply={applyExcelSortDialog}
+          getScopeLabel={getShipmentExcelExportScopeLabel}
+        />
+      </Suspense>
 
-              <OrderTicketSection title="배송 정보">
-                <TicketInfoTable rows={detailDeliveryRows} />
-              </OrderTicketSection>
-
-              <OrderTicketSection title="상태 / 메모">
-                <TicketInfoTable rows={detailStatusRows} />
-              </OrderTicketSection>
-            </div>
-
-            {shipmentDetailQuery.isLoading ? (
-              <div className="empty">쿠팡 주문 상세와 클레임 정보를 불러오는 중입니다...</div>
-            ) : shipmentDetailQuery.error ? (
-              <div className="feedback error">
-                <strong>상세 정보를 불러오지 못했습니다.</strong>
-                <div>{(shipmentDetailQuery.error as Error).message}</div>
-              </div>
-            ) : (
-              <>
-                {shipmentDetailQuery.data?.source === "fallback" || shipmentDetailQuery.data?.message ? (
-                  <div className="feedback warning">
-                    <strong>
-                      {shipmentDetailQuery.data?.source === "fallback"
-                        ? "실시간 상세 일부를 불러오지 못했습니다."
-                        : "쿠팡 상세 응답에 안내 메시지가 있습니다."}
-                    </strong>
-                    <div>
-                      {shipmentDetailQuery.data?.message ??
-                        "워크시트에 저장된 정보와 실시간 조회 결과를 함께 보여주고 있습니다."}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="shipment-detail-section-grid">
-                  <OrderTicketSection title="실시간 주문 상세">
-                    <TicketInfoTable rows={detailRealtimeOrderRows} />
-                  </OrderTicketSection>
-
-                  <OrderTicketSection title="주문 상품">
-                    {detailOrderDetail?.items.length ? (
-                      <div className="shipment-detail-table-wrap">
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              <th>상품</th>
-                              <th>옵션</th>
-                              <th>수량</th>
-                              <th>상태</th>
-                              <th>송장</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {detailOrderDetail.items.map((item, index) => (
-                              <tr key={`${item.id}:${index}`}>
-                                <td>{item.productName}</td>
-                                <td>{item.optionName ?? "-"}</td>
-                                <td>{formatNumber(item.quantity)}</td>
-                                <td>{formatOrderStatusLabel(item.status)}</td>
-                                <td>{formatJoinedText([item.deliveryCompanyCode, item.invoiceNumber])}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className="muted">실시간 주문 상품 상세가 없습니다.</div>
-                    )}
-                  </OrderTicketSection>
-                </div>
-
-                <div className="detail-box">
-                  <div className="detail-box-header">
-                    <div>
-                      <strong>취소 / 반품 클레임</strong>
-                      <div className="table-note">
-                        총 {formatNumber(detailReturnRows.length)}건 · 조회 범위 {detailClaimLookupRange}
-                      </div>
-                    </div>
-                  </div>
-                  {detailReturnRows.length ? (
-                    <div className="shipment-detail-claim-list">
-                      {detailReturnRows.map((row) => {
-                        const detail = returnDetailByReceiptId.get(row.receiptId) ?? null;
-                        const summaryRow = detail?.summaryRow ?? row;
-                        const actionLabels = buildReturnActionLabels(summaryRow);
-
-                        return (
-                          <div key={row.receiptId} className="detail-card shipment-detail-claim-card">
-                            <div className="detail-box-header">
-                              <div>
-                                <strong>{summaryRow.cancelType === "RETURN" ? "반품" : summaryRow.cancelType}</strong>
-                                <div className="table-note">{summaryRow.receiptId}</div>
-                              </div>
-                              <div className="muted">{summaryRow.status}</div>
-                            </div>
-
-                            <div className="detail-grid">
-                              <div className="detail-card">
-                                <strong>요청 상태</strong>
-                                <p>상품: {formatJoinedText([summaryRow.productName, summaryRow.vendorItemName], " / ")}</p>
-                                <p>수량: {formatNumber(summaryRow.cancelCount ?? summaryRow.purchaseCount)}개</p>
-                                <p>
-                                  유형:{" "}
-                                  {formatJoinedText(
-                                    [summaryRow.cancelType, summaryRow.receiptType, summaryRow.returnDeliveryType],
-                                    " · ",
-                                  )}
-                                </p>
-                                <p>
-                                  사유:{" "}
-                                  {formatClaimReasonText(
-                                    detail?.reason ?? summaryRow.reason,
-                                    detail?.reasonCode ?? summaryRow.reasonCode,
-                                  )}
-                                </p>
-                                <p>책임 구분: {formatText(detail?.faultByType ?? summaryRow.faultByType)}</p>
-                                <p>
-                                  선환불:{" "}
-                                  {detail?.preRefund === null || detail?.preRefund === undefined
-                                    ? "-"
-                                    : detail.preRefund
-                                      ? "예"
-                                      : "아니오"}
-                                </p>
-                              </div>
-
-                              <div className="detail-card">
-                                <strong>요청자 / 회수</strong>
-                                <p>
-                                  요청자:{" "}
-                                  {formatJoinedText([
-                                    detail?.requester.name ?? summaryRow.requesterName,
-                                    detail?.requester.mobile ??
-                                      detail?.requester.phone ??
-                                      summaryRow.requesterMobile ??
-                                      summaryRow.requesterPhone,
-                                  ])}
-                                </p>
-                                <p>
-                                  회수지:{" "}
-                                  {formatAddressText([
-                                    detail?.requester.postCode
-                                      ? `(${detail.requester.postCode})`
-                                      : summaryRow.requesterPostCode
-                                        ? `(${summaryRow.requesterPostCode})`
-                                        : null,
-                                    detail?.requester.address ?? summaryRow.requesterAddress,
-                                    detail?.requester.addressDetail,
-                                  ])}
-                                </p>
-                                <p>회수송장: {formatReturnDeliverySummary(detail, summaryRow)}</p>
-                                <p>
-                                  반품비: {formatCurrency(detail?.returnCharge.amount ?? summaryRow.retrievalChargeAmount)}
-                                </p>
-                                <p>가능 작업: {formatActionsText(actionLabels)}</p>
-                              </div>
-
-                              <div className="detail-card">
-                                <strong>처리 이력</strong>
-                                <p>등록일: {formatDateTimeLabel(detail?.createdAt ?? summaryRow.createdAt)}</p>
-                                <p>수정일: {formatDateTimeLabel(detail?.modifiedAt ?? summaryRow.modifiedAt)}</p>
-                                <p>
-                                  완료일:{" "}
-                                  {formatDateTimeLabel(detail?.completeConfirmDate ?? summaryRow.completeConfirmDate)}
-                                </p>
-                                <p>완료 유형: {formatText(detail?.completeConfirmType ?? summaryRow.completeConfirmType)}</p>
-                                <p>출고 상태: {formatText(summaryRow.releaseStatus)}</p>
-                              </div>
-                            </div>
-
-                            {detail?.items.length ? (
-                              <div className="shipment-detail-claim-table">
-                                <strong>반품 상품</strong>
-                                <table className="table">
-                                  <thead>
-                                    <tr>
-                                      <th>상품</th>
-                                      <th>shipmentBoxId</th>
-                                      <th>수량</th>
-                                      <th>상태</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {detail.items.map((item, index) => (
-                                      <tr key={`${summaryRow.receiptId}:item:${index}`}>
-                                        <td>{item.vendorItemName ?? item.sellerProductName ?? item.vendorItemId ?? "-"}</td>
-                                        <td>{item.shipmentBoxId ?? "-"}</td>
-                                        <td>{formatNumber(item.cancelCount ?? item.purchaseCount)}</td>
-                                        <td>{item.releaseStatusName ?? item.releaseStatus ?? "-"}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : null}
-
-                            {detail?.deliveries.length ? (
-                              <div className="shipment-detail-claim-table">
-                                <strong>회수 송장 상세</strong>
-                                <table className="table">
-                                  <thead>
-                                    <tr>
-                                      <th>구분</th>
-                                      <th>택배사</th>
-                                      <th>송장번호</th>
-                                      <th>등록번호</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {detail.deliveries.map((delivery, index) => (
-                                      <tr key={`${summaryRow.receiptId}:delivery:${index}`}>
-                                        <td>{delivery.returnExchangeDeliveryType ?? "-"}</td>
-                                        <td>{delivery.deliveryCompanyCode ?? "-"}</td>
-                                        <td>{delivery.deliveryInvoiceNo ?? "-"}</td>
-                                        <td>{delivery.regNumber ?? "-"}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="muted">현재 확인된 취소/반품 클레임이 없습니다.</div>
-                  )}
-                </div>
-
-                <div className="detail-box">
-                  <div className="detail-box-header">
-                    <div>
-                      <strong>교환 클레임</strong>
-                      <div className="table-note">
-                        총 {formatNumber(detailExchangeRows.length)}건 · 조회 범위 {detailClaimLookupRange}
-                      </div>
-                    </div>
-                  </div>
-                  {detailExchangeRows.length ? (
-                    <div className="shipment-detail-claim-list">
-                      {detailExchangeRows.map((row) => {
-                        const detail = exchangeDetailById.get(row.exchangeId) ?? null;
-                        const summaryRow = detail?.summaryRow ?? row;
-                        const actionLabels = buildExchangeActionLabels(summaryRow);
-
-                        return (
-                          <div key={row.exchangeId} className="detail-card shipment-detail-claim-card">
-                            <div className="detail-box-header">
-                              <div>
-                                <strong>교환</strong>
-                                <div className="table-note">{summaryRow.exchangeId}</div>
-                              </div>
-                              <div className="muted">{summaryRow.status}</div>
-                            </div>
-
-                            <div className="detail-grid">
-                              <div className="detail-card">
-                                <strong>요청 상태</strong>
-                                <p>상품: {formatJoinedText([summaryRow.productName, summaryRow.vendorItemName], " / ")}</p>
-                                <p>수량: {formatNumber(summaryRow.quantity)}개</p>
-                                <p>회수 상태: {formatText(detail?.collectStatus ?? summaryRow.collectStatus)}</p>
-                                <p>
-                                  사유:{" "}
-                                  {formatClaimReasonText(
-                                    detail?.reason ?? summaryRow.reason,
-                                    detail?.reasonCode ?? summaryRow.reasonCode,
-                                    detail?.reasonDetail ?? summaryRow.reasonDetail,
-                                  )}
-                                </p>
-                                <p>주문 배송상태: {formatText(detail?.orderDeliveryStatusCode ?? summaryRow.orderDeliveryStatusCode)}</p>
-                                <p>가능 작업: {formatActionsText(actionLabels)}</p>
-                              </div>
-
-                              <div className="detail-card">
-                                <strong>회수지 / 메모</strong>
-                                <p>
-                                  회수지:{" "}
-                                  {formatJoinedText([
-                                    detail?.requester.name ?? summaryRow.returnCustomerName,
-                                    detail?.requester.mobile ??
-                                      detail?.requester.phone ??
-                                      summaryRow.returnMobile,
-                                  ])}
-                                </p>
-                                <p>
-                                  주소:{" "}
-                                  {formatAddressText([
-                                    detail?.requester.postCode ? `(${detail.requester.postCode})` : null,
-                                    detail?.requester.address ?? summaryRow.returnAddress,
-                                    detail?.requester.addressDetail,
-                                  ])}
-                                </p>
-                                <p>요청 메모: {formatText(detail?.requester.memo)}</p>
-                                <p>회수 완료: {formatDateTimeLabel(detail?.collectCompleteDate ?? summaryRow.collectCompleteDate)}</p>
-                              </div>
-
-                              <div className="detail-card">
-                                <strong>재배송지 / 메모</strong>
-                                <p>
-                                  수령지:{" "}
-                                  {formatJoinedText([
-                                    detail?.recipient.name ?? summaryRow.deliveryCustomerName,
-                                    detail?.recipient.mobile ??
-                                      detail?.recipient.phone ??
-                                      summaryRow.deliveryMobile,
-                                  ])}
-                                </p>
-                                <p>
-                                  주소:{" "}
-                                  {formatAddressText([
-                                    detail?.recipient.postCode ? `(${detail.recipient.postCode})` : null,
-                                    detail?.recipient.address ?? summaryRow.deliveryAddress,
-                                    detail?.recipient.addressDetail,
-                                  ])}
-                                </p>
-                                <p>수령 메모: {formatText(detail?.recipient.memo)}</p>
-                                <p>교환 송장: {formatExchangeInvoiceSummary(detail, summaryRow)}</p>
-                              </div>
-                            </div>
-
-                            {detail?.items.length ? (
-                              <div className="shipment-detail-claim-table">
-                                <strong>교환 상품</strong>
-                                <table className="table">
-                                  <thead>
-                                    <tr>
-                                      <th>상품</th>
-                                      <th>shipmentBoxId</th>
-                                      <th>수량</th>
-                                      <th>상태</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {detail.items.map((item, index) => (
-                                      <tr key={`${summaryRow.exchangeId}:item:${index}`}>
-                                        <td>{item.targetItemName ?? item.orderItemName ?? item.vendorItemName ?? "-"}</td>
-                                        <td>{item.shipmentBoxId ?? "-"}</td>
-                                        <td>{formatNumber(item.quantity)}</td>
-                                        <td>{item.collectStatus ?? item.releaseStatus ?? "-"}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : null}
-
-                            {detail?.invoices.length ? (
-                              <div className="shipment-detail-claim-table">
-                                <strong>교환 송장 상세</strong>
-                                <table className="table">
-                                  <thead>
-                                    <tr>
-                                      <th>shipmentBoxId</th>
-                                      <th>택배사</th>
-                                      <th>송장번호</th>
-                                      <th>예정일</th>
-                                      <th>상태</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {detail.invoices.map((invoice, index) => (
-                                      <tr key={`${summaryRow.exchangeId}:invoice:${index}`}>
-                                        <td>{invoice.shipmentBoxId ?? "-"}</td>
-                                        <td>{invoice.deliverCode ?? "-"}</td>
-                                        <td>{invoice.invoiceNumber ?? "-"}</td>
-                                        <td>{invoice.estimatedDeliveryDate ?? "-"}</td>
-                                        <td>{invoice.statusCode ?? "-"}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="muted">현재 확인된 교환 클레임이 없습니다.</div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {isExcelSortDialogOpen ? (
-        <div className="csv-overlay" onMouseDown={closeExcelSortDialog}>
-          <div
-            className="csv-dialog shipment-export-dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div>
-              <h3 style={{ margin: 0 }}>엑셀 정렬 기준 선택</h3>
-              <p className="muted shipment-export-dialog-note">
-                {getShipmentExcelExportScopeLabel(excelExportScope)}{" "}
-                {formatNumber(
-                  excelExportScope === "selected"
-                    ? selectedExportRows.length
-                    : activeSheet?.outputCounts.notExported ?? 0,
-                )}
-                행을 엑셀로 내보내기 전에 정렬 기준을 선택해 주세요.
-              </p>
-              {(excelExportScope === "selected" ? selectedExportBlockedRows.length : scopeCounts.claims) > 0 ? (
-                <p className="muted shipment-export-dialog-note">
-                  {excelExportScope === "selected"
-                    ? `클레임 ${formatNumber(selectedExportBlockedRows.length)}건은 엑셀 다운로드에서 자동 제외됩니다.`
-                    : "클레임 주문은 실제 다운로드 대상 계산에서 자동 제외됩니다."}
-                </p>
-              ) : null}
-            </div>
-            <div className="shipment-export-dialog-options">
-              <button
-                type="button"
-                className="button shipment-export-dialog-option"
-                onClick={() => applyExcelSortDialog("productName")}
-              >
-                상품명순으로 내보내기
-              </button>
-              <button
-                type="button"
-                className="button secondary shipment-export-dialog-option"
-                onClick={() => applyExcelSortDialog("date")}
-              >
-                날짜순으로 내보내기
-              </button>
-            </div>
-            <div className="toolbar" style={{ justifyContent: "flex-end" }}>
-              <button className="button secondary" onClick={closeExcelSortDialog}>
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {isInvoiceInputDialogOpen
-        ? renderOverlayInBody(
-            <div className="csv-overlay" onMouseDown={closeInvoiceInputDialog}>
-              <div
-                className="csv-dialog shipment-invoice-dialog"
-                onMouseDown={(event) => event.stopPropagation()}
-              >
-                <div>
-                  <h3 style={{ margin: 0 }}>송장 입력하기</h3>
-                  <p className="muted shipment-invoice-dialog-note">
-                    아래 형식으로 붙여넣으면 `셀픽주문번호` 기준으로 현재 워크시트의 `택배사`, `운송장번호`
-                    값을 채웁니다.
-                  </p>
-                </div>
-                <div className="shipment-invoice-dialog-example">
-                  <strong>입력 형식</strong>
-                  <pre>{`택배사\t운송장번호\t셀픽주문번호\nCJ대한통운\t123456789\tO20260326K0001`}</pre>
-                </div>
-                <textarea
-                  className="shipment-invoice-dialog-textarea"
-                  rows={12}
-                  value={invoiceInputDialogValue}
-                  onChange={(event) => setInvoiceInputDialogValue(event.target.value)}
-                  placeholder={"택배사\t운송장번호\t셀픽주문번호"}
-                />
-                <div className="toolbar" style={{ justifyContent: "flex-end" }}>
-                  <button className="button secondary" onClick={closeInvoiceInputDialog}>
-                    닫기
-                  </button>
-                  <button
-                    className="button"
-                    onClick={() => void applyInvoiceInputDialog()}
-                    disabled={!invoiceInputDialogValue.trim() || busyAction !== null}
-                  >
-                    {busyAction === "save" ? "반영 중..." : "값 반영"}
-                  </button>
-                </div>
-              </div>
-            </div>,
-          )
-        : null}
+      <Suspense fallback={null}>
+        <LazyShipmentInvoiceInputDialog
+          isOpen={isInvoiceInputDialogOpen}
+          value={invoiceInputDialogValue}
+          isBusy={busyAction !== null}
+          onChange={setInvoiceInputDialogValue}
+          onClose={closeInvoiceInputDialog}
+          onApply={() => void applyInvoiceInputDialog()}
+        />
+      </Suspense>
     </div>
   );
 }
-

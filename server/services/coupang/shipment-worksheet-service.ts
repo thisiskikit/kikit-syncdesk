@@ -1,4 +1,5 @@
 ﻿import type {
+  ApplyCoupangShipmentWorksheetInvoiceInput,
   CollectCoupangShipmentInput,
   CoupangExchangeDetail,
   CoupangExchangeRow,
@@ -11,6 +12,7 @@
   CoupangShipmentWorksheetBulkResolveResponse,
   CoupangShipmentSyncMode,
   CoupangShipmentWorksheetDetailResponse,
+  CoupangShipmentWorksheetInvoiceInputApplyResponse,
   CoupangShipmentWorksheetResponse,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetSyncSummary,
@@ -2530,4 +2532,107 @@ export async function patchShipmentWorksheet(input: PatchCoupangShipmentWorkshee
     ]),
   );
 }
+
+export async function applyShipmentWorksheetInvoiceInput(
+  input: ApplyCoupangShipmentWorksheetInvoiceInput,
+): Promise<CoupangShipmentWorksheetInvoiceInputApplyResponse> {
+  if (!input.rows.length) {
+    throw new Error("반영할 송장 데이터가 없습니다.");
+  }
+
+  await getStoreOrThrow(input.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const rowBySelpickOrderNumber = new Map(
+    currentSheet.items.map((row) => [row.selpickOrderNumber, row] as const),
+  );
+  const latestInputBySelpickOrderNumber = new Map<
+    string,
+    { deliveryCompanyCode: string; invoiceNumber: string }
+  >();
+
+  for (const row of input.rows) {
+    const selpickOrderNumber = normalizeWhitespace(row.selpickOrderNumber);
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    latestInputBySelpickOrderNumber.set(selpickOrderNumber, {
+      deliveryCompanyCode: normalizeDeliveryCode(row.deliveryCompanyCode),
+      invoiceNumber: normalizeInvoiceNumber(row.invoiceNumber),
+    });
+  }
+
+  const issues: string[] = [];
+  const normalizedItems: PatchCoupangShipmentWorksheetItemInput[] = [];
+  let matchedCount = 0;
+
+  latestInputBySelpickOrderNumber.forEach((invoiceInput, selpickOrderNumber) => {
+    const row = rowBySelpickOrderNumber.get(selpickOrderNumber);
+    if (!row) {
+      issues.push(`현재 워크시트에 없는 셀픽주문번호입니다: ${selpickOrderNumber}`);
+      return;
+    }
+
+    matchedCount += 1;
+
+    if (
+      row.deliveryCompanyCode === invoiceInput.deliveryCompanyCode &&
+      row.invoiceNumber === invoiceInput.invoiceNumber
+    ) {
+      return;
+    }
+
+    normalizedItems.push(
+      normalizePatchAgainstRow(row, {
+        sourceKey: row.sourceKey,
+        selpickOrderNumber,
+        deliveryCompanyCode: invoiceInput.deliveryCompanyCode,
+        invoiceNumber: invoiceInput.invoiceNumber,
+      }),
+    );
+  });
+
+  if (!normalizedItems.length) {
+    return {
+      matchedCount,
+      updatedCount: 0,
+      ignoredCount: issues.length,
+      issues,
+      touchedRowIds: [],
+      message: mergeMessages([
+        currentSheet.message,
+        issues.length ? "일부 셀픽주문번호를 현재 워크시트에서 찾지 못했습니다." : null,
+      ]),
+    };
+  }
+
+  const result = await coupangShipmentWorksheetStore.patchRows({
+    storeId: input.storeId,
+    items: normalizedItems,
+  });
+  const touchedSourceKeySet = new Set(result.touchedSourceKeys);
+  const touchedRowIds = result.sheet.items
+    .filter((row) => touchedSourceKeySet.has(row.sourceKey))
+    .map((row) => row.id);
+
+  return {
+    matchedCount,
+    updatedCount: result.touchedSourceKeys.length,
+    ignoredCount: issues.length + result.missingKeys.length,
+    issues: [
+      ...issues,
+      ...result.missingKeys.map((key) => `현재 워크시트에서 반영하지 못한 행입니다: ${key}`),
+    ],
+    touchedRowIds,
+    message: mergeMessages([
+      result.sheet.message,
+      issues.length || result.missingKeys.length
+        ? "일부 송장 입력은 현재 워크시트와 일치하지 않아 건너뛰었습니다."
+        : null,
+    ]),
+  };
+}
+
+
+
 

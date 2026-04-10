@@ -10,7 +10,11 @@ import {
   type CoupangShipmentWorksheetSyncSummary,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
-import { coupangShipmentRows, coupangShipmentSheets } from "@shared/schema";
+import {
+  coupangShipmentRows,
+  coupangShipmentSheets,
+  type CoupangShipmentRowRow,
+} from "@shared/schema";
 import {
   assertWorkDataDatabaseEnabled,
   ensureWorkDataTables,
@@ -49,6 +53,37 @@ const defaultData: PersistedWorksheetStore = {
 const STALE_INVOICE_PENDING_THRESHOLD_MS = 5 * 60_000;
 const STALE_INVOICE_PENDING_MESSAGE =
   "\uC804\uC1A1 \uACB0\uACFC \uD655\uC778\uC774 \uC9C0\uC5F0\uB418\uC5B4 \uC2E4\uD328\uB85C \uC804\uD658\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC804\uC1A1\uD574 \uC8FC\uC138\uC694.";
+const COLUMN_BACKED_WORKSHEET_ROW_KEYS = new Set<keyof CoupangShipmentWorksheetRow>([
+  "id",
+  "sourceKey",
+  "storeId",
+  "selpickOrderNumber",
+  "orderDateKey",
+  "orderStatus",
+  "orderedAtRaw",
+  "lastOrderHydratedAt",
+  "lastProductHydratedAt",
+  "shipmentBoxId",
+  "orderId",
+  "sellerProductId",
+  "vendorItemId",
+  "receiverName",
+  "receiverBaseName",
+  "personalClearanceCode",
+  "deliveryCompanyCode",
+  "invoiceNumber",
+  "invoiceTransmissionStatus",
+  "invoiceTransmissionMessage",
+  "invoiceTransmissionAt",
+  "invoiceAppliedAt",
+  "exportedAt",
+  "createdAt",
+  "updatedAt",
+]);
+
+type CompactWorksheetRowPayload = Partial<CoupangShipmentWorksheetRow> & {
+  __compact?: true;
+};
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -160,6 +195,146 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
     ...invoiceTransmissionState,
     exportedAt: typeof row.exportedAt === "string" ? row.exportedAt : null,
   } satisfies CoupangShipmentWorksheetRow;
+}
+
+export function buildCompactWorksheetRowData(
+  value: CoupangShipmentWorksheetRow,
+): CompactWorksheetRowPayload {
+  const row = normalizeWorksheetRow(value);
+  const compactRow: CompactWorksheetRowPayload = { __compact: true };
+
+  for (const [key, fieldValue] of Object.entries(row) as Array<
+    [keyof CoupangShipmentWorksheetRow, CoupangShipmentWorksheetRow[keyof CoupangShipmentWorksheetRow]]
+  >) {
+    if (COLUMN_BACKED_WORKSHEET_ROW_KEYS.has(key)) {
+      continue;
+    }
+
+    (compactRow as Record<string, unknown>)[key] = structuredClone(fieldValue);
+  }
+
+  return compactRow;
+}
+
+export function restoreWorksheetRowFromDatabaseRow(
+  row: CoupangShipmentRowRow,
+): CoupangShipmentWorksheetRow {
+  const rawRowData =
+    row.rowDataJson && typeof row.rowDataJson === "object" && !Array.isArray(row.rowDataJson)
+      ? (row.rowDataJson as CompactWorksheetRowPayload)
+      : null;
+
+  if (rawRowData && "sourceKey" in rawRowData && "shipmentBoxId" in rawRowData) {
+    return normalizeWorksheetRow(rawRowData as CoupangShipmentWorksheetRow);
+  }
+
+  const compactPayload = rawRowData
+    ? (() => {
+        const { __compact, ...rest } = rawRowData;
+        return rest;
+      })()
+    : null;
+
+  const createdAt = toIsoString(row.createdAt) ?? new Date().toISOString();
+  const updatedAt = toIsoString(row.updatedAt) ?? createdAt;
+  const baseRow = {
+    id: row.id,
+    sourceKey: row.sourceKey,
+    storeId: row.storeId,
+    storeName: "",
+    orderDateText: "",
+    orderDateKey: row.orderDateKey,
+    quantity: null,
+    productName: "",
+    optionName: null,
+    productOrderNumber: "",
+    collectedPlatform: "",
+    ordererName: null,
+    contact: null,
+    receiverName: row.receiverName,
+    receiverBaseName: row.receiverBaseName,
+    personalClearanceCode: row.personalClearanceCode,
+    collectedAccountName: "",
+    deliveryCompanyCode: row.deliveryCompanyCode,
+    selpickOrderNumber: row.selpickOrderNumber,
+    invoiceNumber: row.invoiceNumber,
+    coupangDeliveryCompanyCode: null,
+    coupangInvoiceNumber: null,
+    coupangInvoiceUploadedAt: null,
+    salePrice: null,
+    shippingFee: 0,
+    receiverAddress: null,
+    deliveryRequest: null,
+    buyerPhoneNumber: null,
+    productNumber: null,
+    exposedProductName: "",
+    productOptionNumber: null,
+    sellerProductCode: null,
+    isOverseas: false,
+    shipmentBoxId: row.shipmentBoxId,
+    orderId: row.orderId,
+    sellerProductId: row.sellerProductId,
+    vendorItemId: row.vendorItemId,
+    availableActions: [],
+    orderStatus: row.orderStatus,
+    customerServiceIssueCount: 0,
+    customerServiceIssueSummary: null,
+    customerServiceIssueBreakdown: [],
+    customerServiceState: "unknown",
+    customerServiceFetchedAt: null,
+    orderedAtRaw: row.orderedAtRaw,
+    lastOrderHydratedAt: toIsoString(row.lastOrderHydratedAt),
+    lastProductHydratedAt: toIsoString(row.lastProductHydratedAt),
+    estimatedShippingDate: null,
+    splitShipping: null,
+    invoiceTransmissionStatus:
+      row.invoiceTransmissionStatus === "pending" ||
+      row.invoiceTransmissionStatus === "succeeded" ||
+      row.invoiceTransmissionStatus === "failed"
+        ? row.invoiceTransmissionStatus
+        : null,
+    invoiceTransmissionMessage: row.invoiceTransmissionMessage,
+    invoiceTransmissionAt: toIsoString(row.invoiceTransmissionAt),
+    exportedAt: toIsoString(row.exportedAt),
+    invoiceAppliedAt: toIsoString(row.invoiceAppliedAt),
+    createdAt,
+    updatedAt,
+  } satisfies CoupangShipmentWorksheetRow;
+
+  return normalizeWorksheetRow({
+    ...baseRow,
+    ...(compactPayload ?? {}),
+    id: row.id,
+    sourceKey: row.sourceKey,
+    storeId: row.storeId,
+    selpickOrderNumber: row.selpickOrderNumber,
+    orderDateKey: row.orderDateKey,
+    orderStatus: row.orderStatus,
+    orderedAtRaw: row.orderedAtRaw,
+    lastOrderHydratedAt: toIsoString(row.lastOrderHydratedAt),
+    lastProductHydratedAt: toIsoString(row.lastProductHydratedAt),
+    shipmentBoxId: row.shipmentBoxId,
+    orderId: row.orderId,
+    sellerProductId: row.sellerProductId,
+    vendorItemId: row.vendorItemId,
+    receiverName: row.receiverName,
+    receiverBaseName: row.receiverBaseName,
+    personalClearanceCode: row.personalClearanceCode,
+    deliveryCompanyCode: row.deliveryCompanyCode,
+    invoiceNumber: row.invoiceNumber,
+    invoiceTransmissionStatus:
+      row.invoiceTransmissionStatus === "pending" ||
+      row.invoiceTransmissionStatus === "succeeded" ||
+      row.invoiceTransmissionStatus === "failed"
+        ? row.invoiceTransmissionStatus
+        : null,
+    invoiceTransmissionMessage: row.invoiceTransmissionMessage,
+    invoiceTransmissionAt: toIsoString(row.invoiceTransmissionAt),
+    invoiceAppliedAt: toIsoString(row.invoiceAppliedAt),
+    exportedAt: toIsoString(row.exportedAt),
+    createdAt,
+    updatedAt,
+  } satisfies CoupangShipmentWorksheetRow);
 }
 
 function normalizeSyncState(
@@ -361,7 +536,7 @@ export class CoupangShipmentWorksheetStore {
                     invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
                     invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
                     exportedAt: toDateOrNull(item.exportedAt),
-                    rowDataJson: normalizeWorksheetRow(item),
+                    rowDataJson: buildCompactWorksheetRowData(item),
                     createdAt: toDateOrNull(item.createdAt) ?? new Date(),
                     updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
                   })),
@@ -415,7 +590,7 @@ export class CoupangShipmentWorksheetStore {
       .orderBy(asc(coupangShipmentRows.sortOrder));
 
     return normalizeStoreEntry({
-      items: itemRows.map((row) => normalizeWorksheetRow(row.rowDataJson as CoupangShipmentWorksheetRow)),
+      items: itemRows.map((row) => restoreWorksheetRowFromDatabaseRow(row)),
       collectedAt: toIsoString(sheet.collectedAt),
       source: sheet.source === "fallback" ? "fallback" : "live",
       message: sheet.message,
@@ -518,7 +693,7 @@ export class CoupangShipmentWorksheetStore {
           invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
           invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
           exportedAt: toDateOrNull(item.exportedAt),
-          rowDataJson: item,
+          rowDataJson: buildCompactWorksheetRowData(item),
           createdAt: toDateOrNull(item.createdAt) ?? new Date(),
           updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
         })),

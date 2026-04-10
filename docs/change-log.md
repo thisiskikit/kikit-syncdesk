@@ -2,6 +2,51 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-10 / COUPANG Shipment Worksheet Efficiency v1
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-invoice-input.test.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/invoice-input-apply.ts`
+  - `client/src/features/coupang/shipments/invoice-input-apply.test.ts`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-detail-dialog.tsx`
+  - `client/src/features/coupang/shipments/shipment-excel-sort-dialog.tsx`
+  - `client/src/features/coupang/shipments/shipment-invoice-input-dialog.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - added a server-side invoice-input apply API, moved low-frequency shipment overlays behind lazy loading, and compacted worksheet row persistence without changing the external worksheet row shape
+- Change content:
+  - added `POST /api/coupang/shipments/worksheet/invoice-input/apply` so popup invoice input and clipboard invoice pastes can match by `selpickOrderNumber` on the server and refresh only the current worksheet view afterward
+  - kept the existing invoice upload/update transmission routes for actual Coupang 송장 전송 while separating the local worksheet invoice-entry apply step into its own API
+  - changed the shipment page so detail, excel-sort, invoice-input, and column-settings overlays are loaded with `React.lazy + Suspense` only when the operator opens them
+  - removed the normal shipment-page dependency on `GET /api/coupang/shipments/worksheet` for invoice popup/paste flows
+  - changed worksheet persistence so `rowDataJson` stores only non-column extra payload fields while DB columns continue to drive filtering, sorting, state tracking, and row reconstruction
+  - preserved compatibility with legacy worksheet rows that still have a full-row JSON payload stored in `rowDataJson`
+- Reason:
+  - the shipment workflow needed lower browser memory pressure and fewer unnecessary worksheet reloads without dropping existing dispatch features
+- Impact scope:
+  - COUPANG shipment worksheet API surface
+  - COUPANG shipment page loading behavior
+  - COUPANG shipment popup/clipboard invoice-entry workflow
+  - COUPANG shipment worksheet persistence payload size
+- Remaining issues:
+  - browser-level manual verification for the lazy dialogs, popup invoice input, and clipboard invoice paste flow was not run in this task
+  - `client/src/features/coupang/shipments/page.tsx` still remains a large coordinating file even though the low-frequency overlays are now split out and lazy-loaded
+- Verification:
+  - `npm run check`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-detail.test.ts server/services/coupang/shipment-worksheet-service.test.ts server/services/coupang/shipment-worksheet-store.test.ts server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts client/src/features/coupang/shipments/worksheet-clipboard.test.ts client/src/features/coupang/shipments/invoice-input-apply.test.ts`
+
 ## 2026-04-10 / Task Status Manual Dismiss
 
 - Change type:

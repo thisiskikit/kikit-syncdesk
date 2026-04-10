@@ -1319,6 +1319,26 @@ export interface PatchCoupangShipmentWorksheetInput {
   items: PatchCoupangShipmentWorksheetItemInput[];
 }
 
+export interface CoupangShipmentWorksheetInvoiceInputApplyRow {
+  selpickOrderNumber: string;
+  deliveryCompanyCode: string;
+  invoiceNumber: string;
+}
+
+export interface ApplyCoupangShipmentWorksheetInvoiceInput {
+  storeId: string;
+  rows: CoupangShipmentWorksheetInvoiceInputApplyRow[];
+}
+
+export interface CoupangShipmentWorksheetInvoiceInputApplyResponse {
+  matchedCount: number;
+  updatedCount: number;
+  ignoredCount: number;
+  issues: string[];
+  touchedRowIds: string[];
+  message: string | null;
+}
+
 export interface CoupangPrepareTarget {
   shipmentBoxId: string;
   orderId?: string | null;
