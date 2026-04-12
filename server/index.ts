@@ -4,6 +4,7 @@ import { createServer } from "http";
 import { registerRoutes } from "./routes";
 import { applyCors } from "./http/cors";
 import { resumeQueuedRuns } from "./services/execution-service";
+import { recoverStaleOperations } from "./services/operations/service";
 import {
   recordApiRequestEvent,
   recordStartupEvent,
@@ -89,6 +90,7 @@ async function runStartupStep<T>(step: string, task: () => Promise<T> | T) {
 
 async function runStartupRecoveries() {
   await runStartupStep("resumeQueuedRuns", () => resumeQueuedRuns());
+  await runStartupStep("recoverStaleOperations", () => recoverStaleOperations());
 }
 
 async function start() {

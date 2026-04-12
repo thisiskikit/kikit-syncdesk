@@ -421,8 +421,9 @@ const CUSTOMER_SERVICE_READY_TTL_MS = 10 * 60_000;
 const INCREMENTAL_OVERLAP_HOURS = 24;
 const FULL_RECONCILE_STALE_HOURS = 12;
 const ORDER_DETAIL_REFRESH_HOURS = 6;
-const QUICK_COLLECT_PRIMARY_STATUS = "ACCEPT" as const;
-const QUICK_COLLECT_REQUIRED_STATUSES = [QUICK_COLLECT_PRIMARY_STATUS] as const;
+const QUICK_COLLECT_REQUIRED_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
+const QUICK_COLLECT_PAGE_SIZE = 50;
+const QUICK_COLLECT_MAX_PAGES = 10;
 const SHIPMENT_WORKSHEET_STATUSES = new Set([
   "ACCEPT",
   "INSTRUCT",
@@ -671,7 +672,7 @@ function resolveSyncPlan(
       autoExpanded: false,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
-      statusFilter: QUICK_COLLECT_PRIMARY_STATUS,
+      statusFilter: null,
     };
   }
 
@@ -714,6 +715,17 @@ async function fetchQuickCollectOrders(input: {
   const failures: string[] = [];
   let hasRequiredFailure = false;
   let succeededStatusCount = 0;
+  const quickCollectPageSize = Math.max(QUICK_COLLECT_PAGE_SIZE, input.maxPerPage ?? QUICK_COLLECT_PAGE_SIZE);
+  const getStatusPriority = (status: string | null | undefined) => {
+    const normalized = normalizeStatusFilter(status);
+    if (normalized === "INSTRUCT") {
+      return 2;
+    }
+    if (normalized === "ACCEPT") {
+      return 1;
+    }
+    return 0;
+  };
 
   const fetchOne = async (status: string, required: boolean) => {
     try {
@@ -722,8 +734,9 @@ async function fetchQuickCollectOrders(input: {
         createdAtFrom: input.fetchCreatedAtFrom,
         createdAtTo: input.fetchCreatedAtTo,
         status,
-        maxPerPage: input.maxPerPage,
+        maxPerPage: quickCollectPageSize,
         fetchAllPages: true,
+        maxPages: QUICK_COLLECT_MAX_PAGES,
         includeCustomerService: false,
       });
 
@@ -756,7 +769,8 @@ async function fetchQuickCollectOrders(input: {
 
       for (const row of response.items) {
         const sourceKey = buildSourceKey(input.storeId, row);
-        if (!collectedBySourceKey.has(sourceKey)) {
+        const existing = collectedBySourceKey.get(sourceKey);
+        if (!existing || getStatusPriority(row.status) >= getStatusPriority(existing.status)) {
           collectedBySourceKey.set(sourceKey, row);
         }
       }
@@ -1862,6 +1876,31 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       } satisfies ShipmentWorksheetCollectionCandidate;
     })
     .filter((candidate) => !insertOnlyMode || !candidate.currentRow);
+  if (insertOnlyMode && !collectionCandidates.length) {
+    const syncState = buildNextSyncState(
+      currentSheet.syncState ?? createEmptySyncState(),
+      syncPlan,
+      now,
+    );
+    const syncSummary = buildSyncSummary({
+      plan: syncPlan,
+      fetchedCount: 0,
+      insertedCount: 0,
+      updatedCount: 0,
+      skippedHydrationCount: 0,
+    });
+    const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+      storeId: input.storeId,
+      items: currentSheet.items,
+      collectedAt: now,
+      source: listResponse.source,
+      message: mergeMessages([listResponse.message, platformKey.warning]),
+      syncState,
+      syncSummary,
+    });
+
+    return buildWorksheetResponse(store, sheet, sheet.message);
+  }
   const collectionCandidateBySourceKey = new Map(
     collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
   );

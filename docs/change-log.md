@@ -2,6 +2,40 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-12 / COUPANG Quick Collect Throughput Recovery
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/operations/service.ts`
+  - `server/services/operations/service.test.ts`
+  - `server/index.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - widened quick collect back to `INSTRUCT + ACCEPT`, bounded the page scan for high-volume days, skipped downstream hydration when no unseen rows exist, and added startup recovery for stale running operations
+- Change content:
+  - changed `빠른 수집(new_only)` so it checks both `INSTRUCT` and `ACCEPT` instead of only `ACCEPT`, while still inserting only rows not already present in the worksheet
+  - raised quick-collect order-sheet page size to `50` and capped status pagination at `10` pages per status so 100+ orders/day ranges do not attempt an unbounded full scan
+  - made quick collect return early before return/exchange lookup, order-detail hydration, and product-detail hydration when the fetched statuses contain no unseen worksheet rows
+  - preserved partial success so a failed `ACCEPT` or `INSTRUCT` lookup can still keep successful rows from the other quick-collect status
+  - added startup recovery that converts stale `queued` or `running` operation logs to `warning` after restarts or Cloud Run request timeouts
+- Reason:
+  - operators were seeing long-running or stuck quick-collect attempts in production while still missing 신규 주문 during heavier daily order volume
+- Impact scope:
+  - COUPANG shipment quick-collect semantics
+  - COUPANG order-sheet pagination behavior during quick collect
+  - shared operation-log recovery on server startup
+- Remaining issues:
+  - browser-level manual verification for live quick collect on production-sized datasets was not run in this task
+  - `빠른 수집` still performs claim/detail/product hydration for newly discovered rows, so very large bursts can still be slower than a pure list-only intake
+- Verification:
+  - `npm run check`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/operations/service.test.ts`
+
 ## 2026-04-10 / COUPANG Shipment Worksheet Efficiency v1
 
 - Change type:

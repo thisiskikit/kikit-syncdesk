@@ -1,6 +1,6 @@
 # Current Status
 
-- Snapshot date: 2026-04-10
+- Snapshot date: 2026-04-12
 - Purpose: establish a baseline documentation snapshot from the current repository state.
 - Verification scope: code inspection and targeted validation.
 - Verified files:
@@ -26,6 +26,9 @@
   - `server/routes/coupang/shipments.ts`
   - `server/routes/coupang/products.ts`
   - `server/storage.ts`
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/operations/service.ts`
+  - `server/services/operations/service.test.ts`
   - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
   - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
   - `server/services/coupang/shipment-worksheet-view.ts`
@@ -45,7 +48,7 @@
   - `client/src/pages/coupang-orders.tsx`
 - Verified in the latest change:
   - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-detail.test.ts server/services/coupang/shipment-worksheet-service.test.ts server/services/coupang/shipment-worksheet-store.test.ts server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts client/src/features/coupang/shipments/worksheet-clipboard.test.ts client/src/features/coupang/shipments/invoice-input-apply.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/operations/service.test.ts`
 - Verified in the previous claim-aware change:
   - `npm run check`
   - `npx vitest run client/src/lib/coupang-customer-service.test.ts`
@@ -104,11 +107,13 @@
   - completed cancel rows can be classified by `completeConfirmDate`, `completeConfirmType`, `releaseStatus`, `releaseStatusName`, and `status` signals
   - shipment worksheet reads force a fresh claim lookup even for recently `ready` rows so the list can surface newly arrived claims before the user opens detail
   - shipment worksheet quick collect fetches live return/exchange claims and can add claim-only rows that no longer appear in the active order list
-- shipment worksheet quick collect now runs in a `new_only` mode that rechecks the selected date range, fetches only the live `ACCEPT` order-sheet status, and only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available via the separate full recollect action
+- shipment worksheet quick collect now runs in a `new_only` mode that rechecks the selected date range, fetches live `INSTRUCT` and `ACCEPT` order-sheet statuses, and only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available via the separate full recollect action
 - shipment worksheet `빠른 수집` no longer auto-runs `markPreparing`, so newly collected `결제완료(ACCEPT)` orders remain visible instead of being immediately pushed to `상품준비중`
 - shipment worksheet now exposes a `결제완료 -> 발송준비중` action beside `빠른 수집`; it resolves the current shipment view on the server, excludes claim rows, and sends only eligible `markPreparing` targets to the Coupang prepare-order API
-- shipment worksheet quick collect now records a Coupang channel error log with the failed status, date range, and store context whenever the live `ACCEPT` lookup fails; a status-specific lookup warning only forces fallback when no attempted live status succeeded
+- shipment worksheet quick collect now records a Coupang channel error log with the failed status, date range, and store context whenever the live `INSTRUCT` or `ACCEPT` lookup fails; a status-specific lookup warning only forces fallback when neither attempted quick-collect status succeeded
+- shipment worksheet quick collect now raises the per-status page size to `50`, caps status pagination to `10` pages, and stops before claim/detail/product hydration when there are no unseen rows, so 100+ orders/day ranges can finish without scanning unnecessary downstream data
 - shipment worksheet collect requests now create a tracked Coupang shipment operation immediately when `빠른 수집`, `전체 재수집`, or `전체 재동기화` starts, so operators can inspect running/failed collection attempts even when the request ends early before a status-specific error event is written
+- startup recovery now marks stale `queued` / `running` operation logs as `warning` so Cloud Run timeout or process restarts do not leave old shipment collect entries stuck in `running`
 - shipment page collection requests now preserve the user-selected `createdAtFrom ~ createdAtTo` values instead of forcing `createdAtTo` back to the current date on the client
 - shipment page normal invoice-entry flows no longer reload `GET /api/coupang/shipments/worksheet`; popup input and clipboard invoice pastes now submit `selpickOrderNumber + 택배사 + 송장번호` rows to `POST /api/coupang/shipments/worksheet/invoice-input/apply`, then refresh only the current `worksheet/view`
 - shipment worksheet detail dialog, excel-sort dialog, invoice-input dialog, and column-settings screen now load with `React.lazy + Suspense` so they stay out of the initial shipment page bundle until the operator opens them
@@ -126,6 +131,7 @@
   - updated the runtime snapshot to reflect disabled NAVER/COUPANG bulk-price workspaces and disabled COUPANG dedicated product editing routes
   - kept the existing COUPANG claim-aware order and shipment snapshot
   - added the shipment worksheet efficiency v1 changes for lazy shipment overlays, server-side invoice input apply, and compact worksheet row persistence
+  - updated quick collect so high-volume 신규 주문 intake uses bounded `INSTRUCT + ACCEPT` paging and startup stale-operation recovery
 - Reason:
   - the bulk-price and dedicated product-info editing features are being taken out of this repository's live runtime surface for now
   - COUPANG operators still need earlier visibility for shipment-stop, cancel, return, and exchange claims before executing preparing or invoice actions
@@ -136,6 +142,7 @@
   - COUPANG order status display, worksheet read behavior, and action eligibility
   - COUPANG shipment popup/clipboard invoice-entry flow
   - COUPANG shipment worksheet persistence payload shape
+  - COUPANG shipment quick-collect throughput and operation-log recovery behavior
   - one new COUPANG shipment API endpoint was added without new DB tables
 
 ## Remaining Issues

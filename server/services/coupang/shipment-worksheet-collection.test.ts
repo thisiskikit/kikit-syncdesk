@@ -1142,7 +1142,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("adds only unseen rows during new-only quick collect", async () => {
+  it("adds only unseen ACCEPT or INSTRUCT rows during new-only quick collect", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
         buildWorksheetRow({
@@ -1168,30 +1168,43 @@ describe("coupang shipment worksheet collection", () => {
       syncSummary: null,
       updatedAt: "2026-03-26T10:00:00.000Z",
     });
-    listOrdersMock.mockResolvedValue({
-      items: [
-        buildOrderRow({
-          id: "100:V-100",
-          shipmentBoxId: "100",
-          orderId: "O-100",
-          vendorItemId: "V-100",
-          status: "ACCEPT",
-          productName: "Stored Product Updated",
-          availableActions: ["markPreparing", "cancelOrderItem"],
-        }),
-        buildOrderRow({
-          id: "200:V-200",
-          shipmentBoxId: "200",
-          orderId: "O-200",
-          vendorItemId: "V-200",
-          status: "ACCEPT",
-          productName: "New Product",
-          availableActions: ["markPreparing", "cancelOrderItem"],
-        }),
-      ],
-      source: "live",
-      message: null,
-    });
+    listOrdersMock.mockImplementation(
+      async (input: { status?: string; maxPerPage?: number; maxPages?: number }) => {
+        if (input.status === "INSTRUCT") {
+          return {
+            items: [
+              buildOrderRow({
+                id: "200:V-200",
+                shipmentBoxId: "200",
+                orderId: "O-200",
+                vendorItemId: "V-200",
+                status: "INSTRUCT",
+                productName: "New Product",
+                availableActions: ["uploadInvoice"],
+              }),
+            ],
+            source: "live" as const,
+            message: null,
+          };
+        }
+
+        return {
+          items: [
+            buildOrderRow({
+              id: "100:V-100",
+              shipmentBoxId: "100",
+              orderId: "O-100",
+              vendorItemId: "V-100",
+              status: "ACCEPT",
+              productName: "Stored Product Updated",
+              availableActions: ["markPreparing", "cancelOrderItem"],
+            }),
+          ],
+          source: "live" as const,
+          message: null,
+        };
+      },
+    );
 
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
@@ -1202,13 +1215,29 @@ describe("coupang shipment worksheet collection", () => {
       syncMode: "new_only",
     });
 
-    expect(listOrdersMock).toHaveBeenCalledTimes(1);
-    expect(listOrdersMock).toHaveBeenCalledWith(
+    expect(listOrdersMock).toHaveBeenCalledTimes(2);
+    expect(listOrdersMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-25",
+        createdAtTo: "2026-03-26",
+        status: "INSTRUCT",
+        maxPerPage: 50,
+        maxPages: 10,
+        fetchAllPages: true,
+        includeCustomerService: false,
+      }),
+    );
+    expect(listOrdersMock).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         storeId: "store-1",
         createdAtFrom: "2026-03-25",
         createdAtTo: "2026-03-26",
         status: "ACCEPT",
+        maxPerPage: 50,
+        maxPages: 10,
         fetchAllPages: true,
         includeCustomerService: false,
       }),
@@ -1221,7 +1250,7 @@ describe("coupang shipment worksheet collection", () => {
       invoiceNumber: "INV-1",
     });
     expect(result.items.find((item) => item.shipmentBoxId === "200")).toMatchObject({
-      orderStatus: "ACCEPT",
+      orderStatus: "INSTRUCT",
       productName: "New Product",
     });
     expect(result.syncSummary).toMatchObject({
@@ -1234,7 +1263,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("keeps the current worksheet when the ACCEPT quick-collect lookup fails", async () => {
+  it("keeps successful INSTRUCT results when the ACCEPT quick-collect lookup fails", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
         buildWorksheetRow({
@@ -1258,6 +1287,24 @@ describe("coupang shipment worksheet collection", () => {
       updatedAt: "2026-03-26T10:00:00.000Z",
     });
     listOrdersMock.mockImplementation(async (input: { status?: string }) => {
+      if (input.status === "INSTRUCT") {
+        return {
+          items: [
+            buildOrderRow({
+              id: "200:V-200",
+              shipmentBoxId: "200",
+              orderId: "O-200",
+              vendorItemId: "V-200",
+              status: "INSTRUCT",
+              productName: "New Instruct Product",
+              availableActions: ["uploadInvoice"],
+            }),
+          ],
+          source: "live" as const,
+          message: null,
+        };
+      }
+
       if (input.status === "ACCEPT") {
         throw new Error("rate limited");
       }
@@ -1279,9 +1326,12 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(markPreparingMock).not.toHaveBeenCalled();
-    expect(result.source).toBe("fallback");
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.shipmentBoxId).toBe("100");
+    expect(result.source).toBe("live");
+    expect(result.items).toHaveLength(2);
+    expect(result.items.find((item) => item.shipmentBoxId === "200")).toMatchObject({
+      orderStatus: "INSTRUCT",
+      productName: "New Instruct Product",
+    });
     expect(result.message).toContain("ACCEPT 신규 주문 조회에 실패했습니다.");
     expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1298,6 +1348,71 @@ describe("coupang shipment worksheet collection", () => {
         }),
       }),
     );
+  });
+
+  it("skips claim and detail hydration when quick collect finds no new rows", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "100",
+          orderId: "O-100",
+          vendorItemId: "V-100",
+          status: "ACCEPT",
+          productName: "Stored Product",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    listOrdersMock.mockImplementation(async (input: { status?: string }) => ({
+      items:
+        input.status === "ACCEPT"
+          ? [
+              buildOrderRow({
+                id: "100:V-100",
+                shipmentBoxId: "100",
+                orderId: "O-100",
+                vendorItemId: "V-100",
+                status: "ACCEPT",
+                productName: "Stored Product Updated",
+                availableActions: ["markPreparing", "cancelOrderItem"],
+              }),
+            ]
+          : [],
+      source: "live" as const,
+      message: null,
+    }));
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "new_only",
+    });
+
+    expect(result.source).toBe("live");
+    expect(result.syncSummary).toMatchObject({
+      mode: "new_only",
+      fetchedCount: 0,
+      insertedCount: 0,
+      updatedCount: 0,
+    });
+    expect(listReturnsMock).not.toHaveBeenCalled();
+    expect(listExchangesMock).not.toHaveBeenCalled();
+    expect(getOrderDetailMock).not.toHaveBeenCalled();
+    expect(getProductDetailMock).not.toHaveBeenCalled();
   });
 
   it("stores the invoice currently registered in Coupang separately from local edits", async () => {

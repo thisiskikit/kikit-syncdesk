@@ -704,6 +704,7 @@ async function requestOrdersForStatus(
     status: (typeof ORDER_SHEET_STATUSES)[number];
     maxPerPage: number;
     fetchAllPages: boolean;
+    maxPages?: number;
   },
 ) {
   const execute = async () =>
@@ -713,6 +714,7 @@ async function requestOrdersForStatus(
           createdAtTo: input.createdAtTo,
           status: input.status,
           maxPerPage: input.maxPerPage,
+          maxPages: input.maxPages,
         })
       : requestOrders(store, {
           createdAtFrom: input.createdAtFrom,
@@ -1001,13 +1003,18 @@ async function requestAllOrderPages(
     status?: string;
     nextToken?: string | null;
     maxPerPage?: number;
+    maxPages?: number;
   },
 ) {
   const rows: CoupangOrderRow[] = [];
   let nextToken = input.nextToken ?? null;
   let pageCount = 0;
+  const maxPages = Math.max(
+    1,
+    Math.min(input.maxPages ?? MAX_ORDER_SHEET_PAGE_COUNT, MAX_ORDER_SHEET_PAGE_COUNT),
+  );
 
-  while (pageCount < MAX_ORDER_SHEET_PAGE_COUNT) {
+  while (pageCount < maxPages) {
     const payload = await requestOrders(store, {
       ...input,
       nextToken,
@@ -1884,6 +1891,7 @@ export async function listOrders(input: {
   nextToken?: string | null;
   maxPerPage?: number;
   fetchAllPages?: boolean;
+  maxPages?: number;
   includeCustomerService?: boolean;
 }) {
   const store = await getStoreOrThrow(input.storeId);
@@ -1911,6 +1919,7 @@ export async function listOrders(input: {
           ...input,
           status: normalizedStatus,
           maxPerPage: pageSize,
+          maxPages: input.maxPages,
         })
       : await requestOrders(store, {
           ...input,
@@ -1953,6 +1962,7 @@ export async function listOrders(input: {
             status,
             maxPerPage: pageSize,
             fetchAllPages,
+            maxPages: input.maxPages,
           });
           return {
             status: "fulfilled",

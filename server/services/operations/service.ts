@@ -16,6 +16,9 @@ type RetryHandler = (input: {
   normalizedPayload: Record<string, unknown> | null;
 }) => Promise<OperationExecutionResponse<unknown>>;
 
+const STALE_OPERATION_THRESHOLD_MS = 15 * 60_000;
+const STALE_OPERATION_SCAN_LIMIT = 500;
+
 type TrackedOperationResult<T> = {
   data: T;
   status?: Extract<OperationStatus, "success" | "warning">;
@@ -183,6 +186,42 @@ export async function updateManualOperation(
   >,
 ) {
   return operationStore.update(id, patch);
+}
+
+export async function recoverStaleOperations() {
+  const now = Date.now();
+  const operations = await operationStore.listRecent(STALE_OPERATION_SCAN_LIMIT);
+  let recoveredCount = 0;
+
+  for (const operation of operations) {
+    if (
+      operation.finishedAt ||
+      (operation.status !== "queued" && operation.status !== "running")
+    ) {
+      continue;
+    }
+
+    const referenceTimestamp = Date.parse(operation.updatedAt || operation.startedAt);
+    if (!Number.isFinite(referenceTimestamp) || now - referenceTimestamp < STALE_OPERATION_THRESHOLD_MS) {
+      continue;
+    }
+
+    await updateManualOperation(operation.id, {
+      status: "warning",
+      finishedAt: new Date(now).toISOString(),
+      errorCode: "STALE_OPERATION_RECOVERED",
+      errorMessage: "이전 실행에서 종료되지 않은 작업을 자동으로 정리했습니다.",
+      resultSummary:
+        operation.resultSummary ??
+        summarizeResult({
+          headline: "중단된 작업 정리",
+          detail: "이전 실행에서 종료되지 않은 작업을 자동으로 정리했습니다.",
+        }),
+    });
+    recoveredCount += 1;
+  }
+
+  return recoveredCount;
 }
 
 export async function runTrackedOperation<T>(
