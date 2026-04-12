@@ -1,11 +1,18 @@
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 
+import type { ShipmentColumnPresetKey } from "./shipment-column-presets";
 import { formatShipmentColumnPreviewValue } from "./shipment-column-preview";
 import type {
   ShipmentColumnConfig,
   ShipmentColumnSourceKey,
   ShipmentExcelExportScope,
 } from "./types";
+
+type ShipmentColumnPresetOption = {
+  key: ShipmentColumnPresetKey;
+  label: string;
+  description: string;
+};
 
 export interface ShipmentColumnSettingsPanelProps {
   columnConfigs: ShipmentColumnConfig[];
@@ -19,11 +26,14 @@ export interface ShipmentColumnSettingsPanelProps {
   selectedExportBlockedRowCount: number;
   claimScopeCount: number;
   notExportedCount: number;
+  activeColumnPreset: ShipmentColumnPresetKey | "custom";
+  columnPresetOptions: readonly ShipmentColumnPresetOption[];
   shipmentColumnLabels: Record<ShipmentColumnSourceKey, string>;
   shipmentColumnDefaultWidths: Record<ShipmentColumnSourceKey, number>;
   shipmentColumnSourceOptions: ShipmentColumnSourceKey[];
   onBack: () => void;
   onAdd: () => void;
+  onApplyColumnPreset: (preset: ShipmentColumnPresetKey) => void;
   onReset: () => void;
   onDelete: (id: string) => void;
   onDragStart: (id: string) => void;
@@ -51,6 +61,13 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
           <div className="muted shipment-grid-note">
             `노출상품명`은 현재 워크시트 조합값이고, `쿠팡 원본 노출상품명`은 상품 상세에서 받은
             `displayProductName` 기준으로 따로 저장됩니다.
+          </div>
+          <div className="muted shipment-grid-note">
+            추천 프리셋을 적용하면 기본 열 수와 폭을 한 번에 바꿀 수 있습니다. 현재 프리셋:
+            {" "}
+            {props.activeColumnPreset === "custom"
+              ? "사용자 정의"
+              : props.columnPresetOptions.find((preset) => preset.key === props.activeColumnPreset)?.label ?? "사용자 정의"}
           </div>
         </div>
         <div className="toolbar">
@@ -88,6 +105,30 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
             클레임 주문은 미출력 전체 다운로드에서 자동 제외됩니다.
           </div>
         ) : null}
+      </div>
+
+      <div className="card shipment-column-preset-card">
+        <div className="shipment-column-preset-card-header">
+          <div>
+            <strong>추천 보기 프리셋</strong>
+            <div className="muted shipment-grid-note">
+              가로 스크롤을 줄이고 싶다면 먼저 프리셋을 적용한 뒤 필요할 때만 개별 컬럼을 조정하세요.
+            </div>
+          </div>
+          <div className="toolbar shipment-column-preset-actions">
+            {props.columnPresetOptions.map((preset) => (
+              <button
+                key={preset.key}
+                type="button"
+                className={`button${props.activeColumnPreset === preset.key ? "" : " ghost"}`}
+                title={preset.description}
+                onClick={() => props.onApplyColumnPreset(preset.key)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="column-settings-list">

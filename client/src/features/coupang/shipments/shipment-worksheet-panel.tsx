@@ -2,12 +2,21 @@ import type { ReactNode } from "react";
 
 import { formatNumber } from "@/lib/utils";
 
+import type { ShipmentColumnPresetKey } from "./shipment-column-presets";
 import type { WorksheetMode } from "./types";
+
+type ShipmentColumnPresetOption = {
+  key: ShipmentColumnPresetKey;
+  label: string;
+  description: string;
+};
 
 type ShipmentWorksheetPanelProps = {
   invoiceModeNotice: string;
   detailGuideNotice: string;
   worksheetMode: WorksheetMode;
+  activeColumnPreset: ShipmentColumnPresetKey | "custom";
+  columnPresetOptions: readonly ShipmentColumnPresetOption[];
   isLoading: boolean;
   hasSheetRows: boolean;
   hasRowsForCurrentFilters: boolean;
@@ -18,6 +27,7 @@ type ShipmentWorksheetPanelProps = {
   worksheetPageSize: number;
   pageSizeOptions: readonly number[];
   onWorksheetModeChange: (mode: WorksheetMode) => void;
+  onApplyColumnPreset: (preset: ShipmentColumnPresetKey) => void;
   onOpenSettings: () => void;
   onPageSizeChange: (pageSize: number) => void;
   onPrevPage: () => void;
@@ -29,6 +39,8 @@ export default function ShipmentWorksheetPanel({
   invoiceModeNotice,
   detailGuideNotice,
   worksheetMode,
+  activeColumnPreset,
+  columnPresetOptions,
   isLoading,
   hasSheetRows,
   hasRowsForCurrentFilters,
@@ -39,6 +51,7 @@ export default function ShipmentWorksheetPanel({
   worksheetPageSize,
   pageSizeOptions,
   onWorksheetModeChange,
+  onApplyColumnPreset,
   onOpenSettings,
   onPageSizeChange,
   onPrevPage,
@@ -52,6 +65,9 @@ export default function ShipmentWorksheetPanel({
           <h2 style={{ margin: 0 }}>출고 작업 목록</h2>
           <div className="muted shipment-grid-note">
             현재 조건에 맞는 주문만 얇은 목록으로 보여줍니다. 판단 근거와 긴 이력은 우측 패널에서 확인하세요.
+          </div>
+          <div className="muted shipment-grid-note">
+            가로 스크롤이 불편하면 `작업 보기`나 `송장 입력 보기` 프리셋을 적용해 기본 열 수를 줄여보세요.
           </div>
           <div className="muted shipment-grid-note">{invoiceModeNotice}</div>
           <div className="muted shipment-grid-note">{detailGuideNotice}</div>
@@ -70,6 +86,25 @@ export default function ShipmentWorksheetPanel({
             >
               송장 입력하기
             </button>
+          </div>
+          <div className="shipment-view-preset-group">
+            <div className="muted shipment-view-preset-label">
+              보기 프리셋
+              {activeColumnPreset === "custom" ? " · 사용자 정의" : ""}
+            </div>
+            <div className="segmented-control">
+              {columnPresetOptions.map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  className={`segmented-button${activeColumnPreset === preset.key ? " active" : ""}`}
+                  title={preset.description}
+                  onClick={() => onApplyColumnPreset(preset.key)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
           </div>
           <button className="button ghost" onClick={onOpenSettings}>
             화면 설정

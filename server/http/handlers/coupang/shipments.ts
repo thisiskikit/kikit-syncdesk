@@ -1,5 +1,6 @@
 import type { RequestHandler } from "express";
 import type { CollectCoupangShipmentInput } from "@shared/coupang";
+import type { OperationTicketDetail } from "@shared/operations";
 import {
   applyShipmentWorksheetInvoiceInput,
   auditShipmentWorksheetMissing,
@@ -41,6 +42,7 @@ import {
 } from "../../coupang/tracked-actions";
 
 let retryHandlersRegistered = false;
+const MAX_OPERATION_TICKET_DETAILS = 5;
 
 function resolveCollectModeLabel(syncMode: CollectCoupangShipmentInput["syncMode"] | undefined) {
   return syncMode === "full"
@@ -50,10 +52,61 @@ function resolveCollectModeLabel(syncMode: CollectCoupangShipmentInput["syncMode
       : "빠른 수집";
 }
 
+export function buildCollectTicketDetailState(
+  response: Awaited<ReturnType<typeof collectShipmentWorksheet>>,
+): {
+  totalCount: number;
+  items: OperationTicketDetail[];
+  truncated: boolean;
+} {
+  const insertedSourceKeys = response.syncSummary?.insertedSourceKeys ?? [];
+  if (!insertedSourceKeys.length) {
+    return {
+      totalCount: 0,
+      items: [],
+      truncated: false,
+    };
+  }
+
+  const insertedSourceKeySet = new Set(insertedSourceKeys);
+  const insertedRows = response.items
+    .filter((row) => insertedSourceKeySet.has(row.sourceKey))
+    .map(
+      (row) =>
+        ({
+          result: "success",
+          label: "신규 주문 추가",
+          message:
+            response.syncSummary?.mode === "new_only"
+              ? "빠른 수집으로 추가됨"
+              : "워크시트에 반영됨",
+          targetId: row.shipmentBoxId,
+          sourceKey: row.sourceKey,
+          selpickOrderNumber: row.selpickOrderNumber,
+          productOrderNumber: row.productOrderNumber,
+          shipmentBoxId: row.shipmentBoxId,
+          orderId: row.orderId,
+          receiptId: null,
+          vendorItemId: row.vendorItemId,
+          productName: row.productName,
+          receiverName: row.receiverName,
+          deliveryCompanyCode: row.deliveryCompanyCode,
+          invoiceNumber: row.invoiceNumber,
+        }) satisfies OperationTicketDetail,
+    );
+
+  return {
+    totalCount: insertedRows.length,
+    items: insertedRows.slice(0, MAX_OPERATION_TICKET_DETAILS),
+    truncated: insertedRows.length > MAX_OPERATION_TICKET_DETAILS,
+  };
+}
+
 function buildCollectResultSummary(
   response: Awaited<ReturnType<typeof collectShipmentWorksheet>>,
 ) {
   const modeLabel = resolveCollectModeLabel(response.syncSummary?.mode);
+  const ticketDetailState = buildCollectTicketDetailState(response);
   const headline =
     response.syncSummary?.mode === "new_only"
       ? `${modeLabel} 신규 ${response.syncSummary.insertedCount}건 추가`
@@ -72,10 +125,18 @@ function buildCollectResultSummary(
           updatedCount: response.syncSummary.updatedCount,
           skippedHydrationCount: response.syncSummary.skippedHydrationCount,
           autoExpanded: response.syncSummary.autoExpanded,
+          ticketDetailsTotalCount: ticketDetailState.totalCount,
+          ticketDetailsRecorded: ticketDetailState.items.length,
+          ticketDetailsTruncated: ticketDetailState.truncated,
+          ticketDetails: ticketDetailState.items,
           source: response.source,
         }
       : {
           rowCount: response.items.length,
+          ticketDetailsTotalCount: ticketDetailState.totalCount,
+          ticketDetailsRecorded: ticketDetailState.items.length,
+          ticketDetailsTruncated: ticketDetailState.truncated,
+          ticketDetails: ticketDetailState.items,
           source: response.source,
         },
     preview: response.message ?? headline,
@@ -113,6 +174,17 @@ export function registerCoupangShipmentRetryHandlers() {
     targetIds: (items) => items.map((item) => item.shipmentBoxId),
     detailLabel: COUPANG_ACTION_LABELS.uploadInvoice,
     validateItem: validateInvoiceTarget,
+    resolveTargetId: (item) => item.shipmentBoxId,
+    buildTicketDetail: ({ sourceItem }) =>
+      sourceItem
+        ? {
+            shipmentBoxId: sourceItem.shipmentBoxId,
+            orderId: sourceItem.orderId,
+            vendorItemId: sourceItem.vendorItemId,
+            deliveryCompanyCode: sourceItem.deliveryCompanyCode,
+            invoiceNumber: sourceItem.invoiceNumber,
+          }
+        : null,
     execute: uploadInvoice,
   });
 
@@ -125,6 +197,17 @@ export function registerCoupangShipmentRetryHandlers() {
     targetIds: (items) => items.map((item) => item.shipmentBoxId),
     detailLabel: COUPANG_ACTION_LABELS.updateInvoice,
     validateItem: validateInvoiceTarget,
+    resolveTargetId: (item) => item.shipmentBoxId,
+    buildTicketDetail: ({ sourceItem }) =>
+      sourceItem
+        ? {
+            shipmentBoxId: sourceItem.shipmentBoxId,
+            orderId: sourceItem.orderId,
+            vendorItemId: sourceItem.vendorItemId,
+            deliveryCompanyCode: sourceItem.deliveryCompanyCode,
+            invoiceNumber: sourceItem.invoiceNumber,
+          }
+        : null,
     execute: updateInvoice,
   });
 }
@@ -387,6 +470,17 @@ export const uploadInvoiceHandler: RequestHandler = async (req, res) => {
       requestPayload: buildInvoicePayload(storeId, "upload", items),
       detailLabel: COUPANG_ACTION_LABELS.uploadInvoice,
       validateItem: validateInvoiceTarget,
+      resolveTargetId: (item) => item.shipmentBoxId,
+      buildTicketDetail: ({ sourceItem }) =>
+        sourceItem
+          ? {
+              shipmentBoxId: sourceItem.shipmentBoxId,
+              orderId: sourceItem.orderId,
+              vendorItemId: sourceItem.vendorItemId,
+              deliveryCompanyCode: sourceItem.deliveryCompanyCode,
+              invoiceNumber: sourceItem.invoiceNumber,
+            }
+          : null,
       execute: uploadInvoice,
     });
   } catch (error) {
@@ -413,6 +507,17 @@ export const updateInvoiceHandler: RequestHandler = async (req, res) => {
       requestPayload: buildInvoicePayload(storeId, "update", items),
       detailLabel: COUPANG_ACTION_LABELS.updateInvoice,
       validateItem: validateInvoiceTarget,
+      resolveTargetId: (item) => item.shipmentBoxId,
+      buildTicketDetail: ({ sourceItem }) =>
+        sourceItem
+          ? {
+              shipmentBoxId: sourceItem.shipmentBoxId,
+              orderId: sourceItem.orderId,
+              vendorItemId: sourceItem.vendorItemId,
+              deliveryCompanyCode: sourceItem.deliveryCompanyCode,
+              invoiceNumber: sourceItem.invoiceNumber,
+            }
+          : null,
       execute: updateInvoice,
     });
   } catch (error) {

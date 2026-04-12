@@ -20,6 +20,9 @@ type StatusOption<TValue extends string> = {
 };
 
 type ShipmentWorksheetOverviewProps = {
+  quickCollectFocusActive: boolean;
+  quickCollectFocusCount: number;
+  quickCollectFocusMessage: string | null;
   activeDecisionStatus: FulfillmentDecisionFilterValue;
   decisionCounts: Record<FulfillmentDecisionFilterValue, number>;
   decisionOptions: readonly DecisionOption[];
@@ -39,12 +42,16 @@ type ShipmentWorksheetOverviewProps = {
   invoiceStatusOptions: readonly StatusOption<InvoiceStatusCardKey>[];
   outputStatusOptions: readonly StatusOption<OutputStatusCardKey>[];
   orderStatusOptions: readonly StatusOption<OrderStatusCardKey>[];
+  onClearQuickCollectFocus: () => void;
   onPatchFilters: (patch: Partial<FilterState>) => void;
   onResetFilters: () => void;
   onToggleDetailFilters: () => void;
 };
 
 export default function ShipmentWorksheetOverview({
+  quickCollectFocusActive,
+  quickCollectFocusCount,
+  quickCollectFocusMessage,
   activeDecisionStatus,
   decisionCounts,
   decisionOptions,
@@ -64,12 +71,27 @@ export default function ShipmentWorksheetOverview({
   invoiceStatusOptions,
   outputStatusOptions,
   orderStatusOptions,
+  onClearQuickCollectFocus,
   onPatchFilters,
   onResetFilters,
   onToggleDetailFilters,
 }: ShipmentWorksheetOverviewProps) {
   return (
     <>
+      {quickCollectFocusActive ? (
+        <div className="card shipment-focus-banner">
+          <div>
+            <div className="shipment-focus-banner-label">방금 수집한 신규 주문만 보는 중</div>
+            <div className="muted shipment-focus-banner-note">
+              {quickCollectFocusMessage ?? `빠른 수집으로 추가된 ${formatNumber(quickCollectFocusCount)}건을 먼저 보여줍니다.`}
+            </div>
+          </div>
+          <button type="button" className="button ghost" onClick={onClearQuickCollectFocus}>
+            전체 보기로 돌아가기
+          </button>
+        </div>
+      ) : null}
+
       <div className="card shipment-decision-toolbar">
         <div className="shipment-status-group">
           <div className="shipment-status-group-label">

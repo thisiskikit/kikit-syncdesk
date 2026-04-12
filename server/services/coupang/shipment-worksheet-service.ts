@@ -1318,6 +1318,7 @@ function buildSyncSummary(input: {
   plan: ShipmentWorksheetSyncPlan;
   fetchedCount: number;
   insertedCount: number;
+  insertedSourceKeys?: string[];
   updatedCount: number;
   skippedHydrationCount: number;
 }): CoupangShipmentWorksheetSyncSummary {
@@ -1325,6 +1326,8 @@ function buildSyncSummary(input: {
     mode: input.plan.mode,
     fetchedCount: input.fetchedCount,
     insertedCount: input.insertedCount,
+    insertedSourceKeys:
+      input.plan.mode === "new_only" ? [...(input.insertedSourceKeys ?? [])] : [],
     updatedCount: input.updatedCount,
     skippedHydrationCount: input.skippedHydrationCount,
     autoExpanded: input.plan.autoExpanded,
@@ -2169,6 +2172,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       mode: syncPlan.mode,
       fetchedCount: 0,
       insertedCount: 0,
+      insertedSourceKeys: [],
       updatedCount: 0,
       skippedHydrationCount: 0,
       autoExpanded: syncPlan.autoExpanded,
@@ -2218,6 +2222,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       plan: syncPlan,
       fetchedCount: 0,
       insertedCount: 0,
+      insertedSourceKeys: [],
       updatedCount: 0,
       skippedHydrationCount: 0,
     });
@@ -2736,6 +2741,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
 
   let insertedCount = 0;
+  const insertedSourceKeys: string[] = [];
   let updatedCount = 0;
   const mergedBySourceKey = new Map(currentSheet.items.map((row) => [row.sourceKey, row] as const));
 
@@ -2743,6 +2749,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     const existingRow = mergedBySourceKey.get(nextRow.sourceKey);
     if (!existingRow) {
       insertedCount += 1;
+      insertedSourceKeys.push(nextRow.sourceKey);
       mergedBySourceKey.set(nextRow.sourceKey, nextRow);
       continue;
     }
@@ -2792,6 +2799,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     plan: syncPlan,
     fetchedCount: collectionCandidates.length,
     insertedCount,
+    insertedSourceKeys,
     updatedCount,
     skippedHydrationCount,
   });

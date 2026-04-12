@@ -1,787 +1,183 @@
-# Change Log
+﻿# Change Log
 
-This file records repository changes that are considered complete only when the related code and documentation stay aligned.
+이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
-## 2026-04-12 / COUPANG Fulfillment Worksheet-Archive Panel Split
+## 2026-04-12 / 작업센터 상세 티켓 샘플 로그
 
-- Change type:
-  - code and documentation
-- Changed files:
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/operations.ts`
+  - `shared/operations.test.ts`
+  - `server/http/coupang/tracked-actions.ts`
+  - `server/http/coupang/tracked-actions.test.ts`
+  - `server/http/handlers/coupang/orders.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/http/handlers/coupang/shipments.test.ts`
+  - `client/src/pages/operation-center.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+  - `docs/structure-overview.md`
+- 변경 내용:
+  - 쿠팡 배치 작업 결과에 주문 단위 티켓 샘플을 최대 5건까지 기록하도록 확장했습니다.
+  - 우선순위는 `실패 -> 경고 -> 건너뜀 -> 성공`입니다.
+  - 메인 작업 목록은 여전히 요약만 유지하고, 상세 패널에서만 티켓 샘플을 노출합니다.
+  - 수집, 상품준비중 처리, 송장 업로드/수정 결과에 주문 식별자와 짧은 상태 메시지를 남깁니다.
+- 이유:
+  - 운영자가 원본 payload를 열지 않고도 어떤 주문이 실제로 처리됐는지 확인할 수 있어야 했습니다.
+- 남은 점:
+  - 최대 5건만 저장하는 capped sample이며, 전체 감사 로그는 아닙니다.
+  - 브라우저에서 실제 클릭 기반 수동 검증은 아직 남아 있습니다.
+- 검증:
+  - `npm run check`
+  - `npx vitest run --root . shared/operations.test.ts server/http/coupang/tracked-actions.test.ts server/http/handlers/coupang/shipments.test.ts`
+  - `npm run build`
+
+## 2026-04-12 / 출고 컬럼 보기 프리셋
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
   - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-presets.ts`
+  - `client/src/features/coupang/shipments/shipment-column-presets.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+  - `docs/structure-overview.md`
+- 변경 내용:
+  - 워크시트에 `작업 보기`, `송장 입력 보기`, `전체 열 보기` 프리셋을 추가했습니다.
+  - 기존 persisted 컬럼 설정은 자동으로 덮어쓰지 않고, 사용자가 프리셋을 명시적으로 적용할 때만 바뀝니다.
+  - `송장 입력 보기` 프리셋을 적용하면 워크시트 모드도 `invoice`로 함께 전환합니다.
+- 이유:
+  - 기본 워크시트가 너무 넓어서 일반 데스크톱 폭에서 가로 스크롤 부담이 컸습니다.
+- 남은 점:
+  - 합성 컬럼 기반의 2차 압축은 아직 남아 있습니다.
+  - 브라우저에서 실제 프리셋 전환 체감 검증은 아직 남아 있습니다.
+- 검증:
+  - `npm run check`
+  - `npx vitest run client/src/features/coupang/shipments/shipment-column-presets.test.ts client/src/features/coupang/shipments/quick-collect-focus.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
+
+## 2026-04-12 / 빠른 수집 직후 신규 주문 우선 보기
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/quick-collect-focus.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus.test.ts`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+  - `docs/structure-overview.md`
+- 변경 내용:
+  - `new_only` 빠른 수집 응답에 `insertedSourceKeys`를 포함시켰습니다.
+  - 빠른 수집 후 실제로 추가된 주문이 있으면 워크시트가 그 주문만 임시로 먼저 보여줍니다.
+  - 이 집중 보기는 필터 변경, 새로고침, 탭 이동 시 자동으로 해제됩니다.
+- 이유:
+  - 빠른 수집 후 신규 주문이 기존 목록에 섞여 보이면 운영자가 바로 확인하기 어려웠습니다.
+- 남은 점:
+  - 브라우저에서 실제 집중 보기 배너와 복귀 흐름 수동 검증이 남아 있습니다.
+- 검증:
+  - `npm run check`
+  - `npm run build`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts client/src/features/coupang/shipments/quick-collect-focus.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
+
+## 2026-04-12 / 출고 상단 구조 및 선택 흐름 정리
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
+  - `client/src/features/coupang/shipments/shipment-selection-summary.ts`
+  - `client/src/features/coupang/shipments/shipment-selection-summary.test.ts`
+  - `client/src/features/coupang/shipments/shipment-selection-action-bar.tsx`
+  - `client/src/features/coupang/shipments/shipment-base-filters.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
   - `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
   - `client/src/features/coupang/shipments/shipment-archive-panel.tsx`
   - `docs/current-status.md`
   - `docs/change-log.md`
   - `docs/structure-overview.md`
-- Code change:
-  - extracted the worksheet card shell and archive card shell into dedicated presentation components while preserving the existing shipment interactions
-- Change content:
-  - moved worksheet header copy, worksheet empty states, and worksheet pagination controls into a focused worksheet panel component
-  - moved archive header copy, archive empty states, archive pagination controls, and archive table markup into a focused archive panel component
-  - kept the page component as the action/data coordinator while reducing the amount of embedded list markup inside it
-- Reason:
-  - the worksheet page was still carrying large inline card markup even after the top filter and selection areas were split out
-- Impact scope:
-  - COUPANG fulfillment presentation structure
-  - page-level reviewability and future refactor safety
-- Remaining issues:
-  - grid event wiring and shipment action orchestration still live in `page.tsx`
-  - browser-level manual verification of the refactored worksheet and archive panels was not run in this task
-- Verification:
+- 변경 내용:
+  - 메인 필터 축을 `출고 판단`으로 고정하고, `작업 대상 / 배송 이후 / 예외·클레임 / 전체`는 보조 범위로 내렸습니다.
+  - `송장 상태 / 출력 상태 / 주문 상태`는 접힌 세부 필터로 이동했습니다.
+  - 상단 영역을 `기본 필터`, `출고 판단 요약`, `선택 일괄 작업`, `워크시트/보관함 패널` 컴포넌트로 나눴습니다.
+  - 혼합 선택 상태에서도 실행 가능한 행만 자동 제외 후 진행하도록 선택 바 흐름을 바꿨습니다.
+- 이유:
+  - 기존 화면은 서로 다른 필터 축이 같은 레벨에 놓여 있어 운영자가 무엇을 먼저 봐야 하는지 이해하기 어려웠습니다.
+- 남은 점:
+  - `page.tsx`는 여전히 큰 coordinator 파일입니다.
+  - 그리드 wiring과 Drawer 상세 조립 분리는 다음 단계입니다.
+- 검증:
   - `npm run check`
   - `npm run build`
   - `npx vitest run client/src/features/coupang/shipments/shipment-selection-summary.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
 
-## 2026-04-12 / COUPANG Fulfillment Top-Layer Component Split
+## 2026-04-12 / 운영 데스크 IA 1차
 
-- Change type:
-  - code and documentation
-- Changed files:
-  - client/src/features/coupang/shipments/page.tsx
-  - client/src/features/coupang/shipments/shipment-base-filters.tsx
-  - client/src/features/coupang/shipments/shipment-worksheet-overview.tsx
-  - docs/current-status.md
-  - docs/change-log.md
-  - docs/structure-overview.md
-- Code change:
-  - split the fulfillment worksheet top layer into focused presentation components without changing the underlying shipment workflow or API behavior
-- Change content:
-  - extracted the base filter row into a dedicated component for store, date, search, refresh, and secondary scope controls
-  - extracted the worksheet overview area into a dedicated component for decision tabs, decision metrics, current filter summary, and collapsed detail filters
-  - kept the selection action bar split introduced earlier so the top section of the worksheet now reads as smaller operator-focused building blocks instead of one long page-level JSX block
-- Reason:
-  - the worksheet coordinator had become too dense to evolve safely while the filter hierarchy and operator messaging were still being refined
-- Impact scope:
-  - COUPANG fulfillment presentation structure
-  - future reviewability of the worksheet page
-- Remaining issues:
-  - the main worksheet grid and action wiring are still coordinated inside page.tsx
-  - browser-level manual verification of the refactored top layer was not run in this task
-- Verification:
-  - `npm run check`
-  - `npm run build`
-  - `npx vitest run client/src/features/coupang/shipments/shipment-selection-summary.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
-## 2026-04-12 / COUPANG Fulfillment Selection Auto-Exclude
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/shipment-selection-summary.ts`
-  - `client/src/features/coupang/shipments/shipment-selection-summary.test.ts`
-  - `client/src/features/coupang/shipments/shipment-selection-action-bar.tsx`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-  - `docs/structure-overview.md`
-- Code change:
-  - changed selected invoice transmission so executable rows still proceed even when blocked decision states are mixed into the selection, while excluded rows are summarized back to the operator
-- Change content:
-  - added a helper that groups blocked selected rows by decision status and reason
-  - changed the selection action bar copy to distinguish `즉시 실행` rows from `제외 또는 확인 필요` rows
-  - selected invoice transmission now runs against executable rows only instead of forcing the operator to clear the whole selection first
-  - feedback messages now include exclusion summaries such as blocked / hold / recheck rows that were skipped automatically
-  - extracted the selection action bar into a focused component to keep the worksheet page easier to evolve
-- Reason:
-  - operators should not have to reselect rows manually when a mixed selection contains both executable and non-executable orders
-- Impact scope:
-  - COUPANG fulfillment selection workflow
-  - invoice transmission feedback messaging
-  - worksheet page presentation structure
-- Remaining issues:
-  - the page still needs further component splitting around the top filter and summary area
-  - browser-level manual verification for the mixed-selection flow was not run in this task
-- Verification:
-  - `npm run check`
-  - `npm run build`
-  - `npx vitest run client/src/features/coupang/shipments/shipment-selection-summary.test.ts`
-## 2026-04-12 / COUPANG Fulfillment Filter Hierarchy Cleanup
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
-  - `client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
-  - `client/src/index.css`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-  - `docs/structure-overview.md`
-- Code change:
-  - reorganized the fulfillment worksheet so the page reads as `출고 판단 -> 현재 적용 조건 -> 세부 필터` instead of exposing multiple filter axes at the same hierarchy level
-- Change content:
-  - changed the worksheet scope labels to operator-facing wording such as `작업 대상` and `예외·클레임`
-  - moved the scope selector into the base filter area instead of showing it as a peer to the main decision cards
-  - promoted `출고 판단` to the only always-visible main tab group
-  - collapsed `송장 상태 / 출력 상태 / 주문 상태` into a toggleable detail-filter section
-  - added a `현재 적용 조건` summary row and a `세부 필터 n개 적용` indicator so operators can read the current view state quickly
-  - updated the worksheet summary cards to focus on the decision groups and current visible list instead of mixing multiple unrelated count axes at the top of the page
-- Reason:
-  - operators had trouble understanding the page because scope, decision, invoice, output, and order-status filters were all shown with similar visual weight
-- Impact scope:
-  - COUPANG fulfillment worksheet presentation
-  - operator filter comprehension
-  - worksheet empty state and selection-bar messaging
-- Remaining issues:
-  - the worksheet page is still a large coordinator file and should be split into smaller presentation components later
-  - browser-level manual verification of the updated hierarchy was not run in this task
-- Verification:
-  - `npm run check`
-  - `npx vitest run client/src/features/coupang/shipments/fulfillment-decision.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
-## 2026-04-12 / KIKIT SyncDesk ?댁쁺 ?곗뒪??UI 媛쒗렪 1李?
-- Change type:
-  - code and documentation
-- Changed files:
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
   - `client/src/App.tsx`
-  - `client/src/components/status-badge.tsx`
   - `client/src/lib/workspace-tabs.ts`
-  - `client/src/lib/workspace-tabs.test.ts`
   - `client/src/lib/coupang-navigation.ts`
-  - `client/src/lib/coupang-navigation.test.ts`
-  - `client/src/lib/operation-links.ts`
   - `client/src/pages/dashboard.tsx`
   - `client/src/pages/fulfillment.tsx`
   - `client/src/pages/cs-hub.tsx`
   - `client/src/pages/channels-hub.tsx`
   - `client/src/pages/operation-center.tsx`
   - `client/src/pages/settings-hub.tsx`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/types.ts`
-  - `client/src/features/coupang/shipments/fulfillment-decision.ts`
-  - `client/src/features/coupang/shipments/fulfillment-decision.test.ts`
-  - `client/src/features/coupang/shipments/shipment-decision-drawer.tsx`
-  - `client/src/features/coupang/shipments/worksheet-config.ts`
-  - `client/src/features/coupang/shipments/worksheet-grid-config.tsx`
-  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
-  - `client/src/index.css`
   - `docs/current-status.md`
   - `docs/change-log.md`
   - `docs/structure-overview.md`
   - `docs/decisions/2026-04-12-syncdesk-operation-desk-ia.md`
-- Code change:
-  - restructured the main UI around an operations-first shell and reframed the Coupang shipment page as the new top-level fulfillment workspace
-- Change content:
-  - replaced the main top navigation with `??쒕낫??, `異쒓퀬`, `CS`, `梨꾨꼸`, `?묒뾽?쇳꽣`, and `?ㅼ젙`
-  - changed the app brand and shell copy to present the product as `KIKIT SyncDesk`, an operations desk focused on fulfillment, CS, and work recovery
-  - added new top-level routes for `異쒓퀬`, `CS`, `梨꾨꼸`, and `?묒뾽?쇳꽣`, while keeping legacy routes through redirect or wrapper behavior
-  - rebuilt the dashboard into an operator start page with action cards, issue priority, recent issues, and quick links
-  - promoted the existing Coupang shipment worksheet into the `異쒓퀬` workspace and added a UI-level fulfillment decision model with `異쒓퀬 媛??, `?≪옣 ?湲?, `蹂대쪟`, `李⑤떒`, and `?ы솗???꾩슂`
-  - added a right-side fulfillment decision drawer so the table stays thin while detail remains deeper
-  - reframed the existing operation center as a failure-recovery work center and moved raw JSON into foldout detail sections
-  - moved channel-native and legacy product-oriented entry points out of the main flow and into `梨꾨꼸` / `?ㅼ젙` level hubs
-- Reason:
-  - the product is used primarily as an operations desk, but the previous shell still taught a channel-first admin-console mental model
-- Impact scope:
-  - app shell and route ownership
-  - workspace tab grouping
-  - dashboard IA
-  - fulfillment UI framing
-  - work-center framing
-  - legacy navigation exposure
-- Remaining issues:
-  - browser-level walkthrough for the new IA was not completed in this task; headless Chrome and Edge both returned `ERR_CONNECTION_REFUSED` against the local dev server even though `Invoke-WebRequest` succeeded
-  - the fulfillment page still remains a large coordinator and should be modularized further in a later phase
-  - CS is still a hub with deep-links rather than a unified cross-channel execution surface
-- Verification:
+- 변경 내용:
+  - 상단 주요 메뉴를 `대시보드`, `출고`, `CS`, `채널`, `작업센터`, `설정`으로 재구성했습니다.
+  - 대시보드를 채널 런처가 아니라 오늘의 운영 시작점으로 재배치했습니다.
+  - 작업센터를 로그 화면이 아니라 실패 작업 복구 공간으로 재정의했습니다.
+  - 채널/설정 아래로 레거시 도구와 direct route 진입점을 내렸습니다.
+- 이유:
+  - 제품 인상을 채널별 관리자 콘솔이 아니라 `출고 / CS / 복구` 중심 운영 데스크로 바꾸기 위해서입니다.
+- 남은 점:
+  - CS는 아직 허브 + deep-link 구조이며, 통합 실행 화면은 아닙니다.
+  - 브라우저 클릭 기반 end-to-end 수동 검증은 아직 남아 있습니다.
+- 검증:
   - `npm run check`
   - `npm run build`
   - `npx vitest run client/src/lib/workspace-tabs.test.ts client/src/lib/coupang-navigation.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
-  - `Invoke-WebRequest` returned `200` for `/dashboard`, `/fulfillment`, `/cs`, `/channels`, and `/work-center` on the local dev server
 
-## 2026-04-12 / COUPANG Shipment Hot-Archive Split
+## 2026-04-12 / 작업센터 및 작업 상태 패널 한국어 정리
 
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/schema.ts`
-  - `shared/coupang.ts`
-  - `server/interfaces/coupang-shipment-worksheet-store.ts`
-  - `server/services/shared/work-data-db.ts`
-  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/http/handlers/coupang/shipments.ts`
-  - `server/routes/coupang/shipments.ts`
-  - `server/routes/internal-coupang-shipments.ts`
-  - `server/routes.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `server/services/coupang/shipment-worksheet-archive.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - split active Coupang shipment rows from archived rows, added read-only archive APIs/UI, and added an internal archive-run endpoint for scheduler-driven cleanup
-- Change content:
-  - introduced `coupang_shipment_archive_rows` plus store methods for archive read and transactional move
-  - added `GET /api/coupang/shipments/archive/view`, `GET /api/coupang/shipments/archive/detail`, and `POST /api/internal/coupang/shipments/archive/run`
-  - shipment page now exposes a read-only `???` tab with search, pagination, and detail access
-  - archive jobs move exported post-dispatch non-claim rows older than 30 days out of the hot worksheet
-  - collect/recollect now checks archived `sourceKey` values too, so archived rows are not recreated in the hot worksheet
-- Reason:
-  - operators needed the active shipment screen to stay stable even when old delivered/exported rows accumulate for a long time
-- Impact scope:
-  - COUPANG shipment worksheet persistence and read paths
-  - COUPANG shipment page navigation and read-only archive UX
-  - scheduler-facing internal archive execution surface
-- Remaining issues:
-  - browser-level manual verification for the new `???` tab and internal archive run was not performed in this task
-  - Cloud Scheduler wiring itself was not added here; this task added the endpoint the scheduler should call
-- Verification:
-  - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-archive.test.ts`
-
-## 2026-04-12 / COUPANG Shipment Prepare Missing Guard
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
-  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - wired the existing shipment missing-audit flow into `寃곗젣?꾨즺 -> 諛쒖넚以鍮꾩쨷` so the prepare action is blocked when the selected audit range still has live Coupang orders missing from the worksheet
-- Change content:
-  - added reusable audit-detail and prepare-block helpers in the shipment audit module
-  - the shipment page now runs `POST /api/coupang/shipments/worksheet/audit-missing` before resolving `prepare_ready` targets
-  - when `missingCount > 0`, the page opens the audit dialog, shows the missing rows in feedback, and does not call `POST /api/coupang/orders/prepare`
-  - `hiddenCount` alone does not block prepare because those rows already exist in the worksheet and are only hidden by the current view filters
-- Reason:
-  - operators wanted `寃곗젣?꾨즺 -> 諛쒖넚以鍮꾩쨷` to stop immediately when shipment collection is incomplete, instead of sending only the subset that had already been collected
-- Impact scope:
-  - COUPANG shipment worksheet prepare workflow
-  - COUPANG shipment missing-audit UX
-- Remaining issues:
-  - the preflight audit still uses the selected `createdAtFrom ~ createdAtTo` range, while the worksheet view itself is not date-filtered
-  - browser-level manual verification for the new prepare guard was not run in this task
-- Verification:
-  - `npm run check`
-  - `npx vitest run client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
-## 2026-04-12 / COUPANG Shipment Column Preview
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/shipment-column-preview.ts`
-  - `client/src/features/coupang/shipments/shipment-column-preview.test.ts`
-  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
-  - `client/src/features/coupang/shipments/worksheet-config.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
-  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
-  - `shared/coupang.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - added a sample-value preview to shipment column settings and stored the live Coupang `displayProductName` on shipment worksheet rows so operators can compare the worksheet-composed name with Coupang's raw exposed product name
-- Change content:
-  - used the first selected shipment row, or the first currently visible row when nothing is selected, as the preview source inside the lazy-loaded shipment column settings panel
-  - added per-column preview text so the active `sourceKey` immediately shows the value that would currently be exported for that row
-  - stored live `displayProductName` from the Coupang product-detail response on each worksheet row as `coupangDisplayProductName` without changing the existing DB column layout
-  - added `荑좏뙜 ?먮낯 ?몄텧?곹뭹紐? as a selectable shipment column source while keeping the previous default column order unchanged
-  - updated column settings so `?몄텧?곹뭹紐? and `荑좏뙜 ?먮낯 ?몄텧?곹뭹紐? can be compared side by side from the same preview row
-- Reason:
-  - operators needed to distinguish between the worksheet-composed exposed name and Coupang's actual raw exposed product name before aligning shipment export columns to external templates
-- Impact scope:
-  - COUPANG shipment column-settings UX
-  - COUPANG worksheet export-column verification workflow
-  - COUPANG shipment worksheet row payload shape
-- Remaining issues:
-  - the raw field now stores product-level `displayProductName`; if we later need option-level raw display text too, that will require a separate field
-  - browser-level manual verification for the new column preview was not run in this task
-- Verification:
-  - `npm run check`
-  - `npx vitest run client/src/features/coupang/shipments/shipment-column-preview.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
-
-## 2026-04-12 / COUPANG Shipment Missing Audit
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/http/handlers/coupang/shipments.ts`
-  - `server/routes/coupang/shipments.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-view.ts`
-  - `server/services/coupang/shipment-worksheet-view.test.ts`
-  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
-  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
-  - `client/src/features/coupang/shipments/shipment-audit-missing-dialog.tsx`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - added a manual read-only shipment worksheet audit that compares live `INSTRUCT + ACCEPT` orders against the stored worksheet and explains whether missing live orders are truly absent or simply hidden by the current view
-- Change content:
-  - added `POST /api/coupang/shipments/worksheet/audit-missing` so the shipment page can send the selected store/date range plus the current scope/search/card filters to the server
-  - compared live `INSTRUCT` and `ACCEPT` rows to worksheet rows with the same `sourceKey`, deduping duplicate live rows in favor of `INSTRUCT`
-  - separated audit results into `missingItems` for live rows not stored in the worksheet and `hiddenItems` for live rows that do exist in the worksheet but are hidden by the current scope or filter state
-  - rejected audit windows longer than `7` days so the operator audit stays within a bounded live comparison range
-  - added a `?꾨씫 寃?? action under `愿由??묒뾽`, a summary feedback card, and a lazy-loaded detail dialog for reviewing missing/hidden rows without changing worksheet data
-- Reason:
-  - operators needed a reliable way to verify whether Coupang `?곹뭹以鍮꾩쨷(INSTRUCT)` or `二쇰Ц?묒닔(ACCEPT)` orders were genuinely missing from the worksheet or only hidden by the current view filters
-- Impact scope:
-  - COUPANG shipment worksheet API surface
-  - COUPANG shipment page operator workflow
-  - shipment worksheet view filtering reuse on the server
-- Remaining issues:
-  - browser-level manual verification for the new `?꾨씫 寃?? dialog and its real-data operator flow was not run in this task
-- Verification:
-  - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/services/coupang/shipment-worksheet-audit-missing.test.ts server/services/coupang/shipment-worksheet-view.test.ts client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
-
-## 2026-04-12 / COUPANG Quick Collect Throughput Recovery
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `server/application/coupang/orders/service.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `server/services/operations/service.ts`
-  - `server/services/operations/service.test.ts`
-  - `server/index.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - widened quick collect back to `INSTRUCT + ACCEPT`, bounded the page scan for high-volume days, skipped downstream hydration when no unseen rows exist, and added startup recovery for stale running operations
-- Change content:
-  - changed `鍮좊Ⅸ ?섏쭛(new_only)` so it checks both `INSTRUCT` and `ACCEPT` instead of only `ACCEPT`, while still inserting only rows not already present in the worksheet
-  - raised quick-collect order-sheet page size to `50` and capped status pagination at `10` pages per status so 100+ orders/day ranges do not attempt an unbounded full scan
-  - made quick collect return early before return/exchange lookup, order-detail hydration, and product-detail hydration when the fetched statuses contain no unseen worksheet rows
-  - preserved partial success so a failed `ACCEPT` or `INSTRUCT` lookup can still keep successful rows from the other quick-collect status
-  - added startup recovery that converts stale `queued` or `running` operation logs to `warning` after restarts or Cloud Run request timeouts
-- Reason:
-  - operators were seeing long-running or stuck quick-collect attempts in production while still missing ?좉퇋 二쇰Ц during heavier daily order volume
-- Impact scope:
-  - COUPANG shipment quick-collect semantics
-  - COUPANG order-sheet pagination behavior during quick collect
-  - shared operation-log recovery on server startup
-- Remaining issues:
-  - browser-level manual verification for live quick collect on production-sized datasets was not run in this task
-  - `鍮좊Ⅸ ?섏쭛` still performs claim/detail/product hydration for newly discovered rows, so very large bursts can still be slower than a pure list-only intake
-- Verification:
-  - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/operations/service.test.ts`
-
-## 2026-04-10 / COUPANG Shipment Worksheet Efficiency v1
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/http/handlers/coupang/shipments.ts`
-  - `server/routes/coupang/shipments.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-invoice-input.test.ts`
-  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
-  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/invoice-input-apply.ts`
-  - `client/src/features/coupang/shipments/invoice-input-apply.test.ts`
-  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
-  - `client/src/features/coupang/shipments/shipment-detail-dialog.tsx`
-  - `client/src/features/coupang/shipments/shipment-excel-sort-dialog.tsx`
-  - `client/src/features/coupang/shipments/shipment-invoice-input-dialog.tsx`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - added a server-side invoice-input apply API, moved low-frequency shipment overlays behind lazy loading, and compacted worksheet row persistence without changing the external worksheet row shape
-- Change content:
-  - added `POST /api/coupang/shipments/worksheet/invoice-input/apply` so popup invoice input and clipboard invoice pastes can match by `selpickOrderNumber` on the server and refresh only the current worksheet view afterward
-  - kept the existing invoice upload/update transmission routes for actual Coupang ?≪옣 ?꾩넚 while separating the local worksheet invoice-entry apply step into its own API
-  - changed the shipment page so detail, excel-sort, invoice-input, and column-settings overlays are loaded with `React.lazy + Suspense` only when the operator opens them
-  - removed the normal shipment-page dependency on `GET /api/coupang/shipments/worksheet` for invoice popup/paste flows
-  - changed worksheet persistence so `rowDataJson` stores only non-column extra payload fields while DB columns continue to drive filtering, sorting, state tracking, and row reconstruction
-  - preserved compatibility with legacy worksheet rows that still have a full-row JSON payload stored in `rowDataJson`
-- Reason:
-  - the shipment workflow needed lower browser memory pressure and fewer unnecessary worksheet reloads without dropping existing dispatch features
-- Impact scope:
-  - COUPANG shipment worksheet API surface
-  - COUPANG shipment page loading behavior
-  - COUPANG shipment popup/clipboard invoice-entry workflow
-  - COUPANG shipment worksheet persistence payload size
-- Remaining issues:
-  - browser-level manual verification for the lazy dialogs, popup invoice input, and clipboard invoice paste flow was not run in this task
-  - `client/src/features/coupang/shipments/page.tsx` still remains a large coordinating file even though the low-frequency overlays are now split out and lazy-loaded
-- Verification:
-  - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-detail.test.ts server/services/coupang/shipment-worksheet-service.test.ts server/services/coupang/shipment-worksheet-store.test.ts server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts client/src/features/coupang/shipments/worksheet-clipboard.test.ts client/src/features/coupang/shipments/invoice-input-apply.test.ts`
-
-## 2026-04-10 / Task Status Manual Dismiss
-
-- Change type:
-  - code and documentation
-- Changed files:
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
   - `client/src/components/operation-toaster.tsx`
-  - `client/src/components/operation-toaster.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - allowed manual dismiss for active task-status entries so stale log toasts and orphaned local processes can be hidden without waiting for auto-expiry
-- Change content:
-  - the task status panel now shows the manual hide action for running and queued entries as well as completed entries
-  - orphaned local process toasts can now be removed directly from the panel even if they never transitioned out of the active state
-  - added test coverage for the manual-dismiss policy used by the operation toaster
-- Reason:
-  - operators needed a way to close log/task entries that remained visible after the underlying process became stale or detached
-- Impact scope:
-  - shared task status panel behavior
-  - manual cleanup of stale local operation toasts
-- Remaining issues:
-  - browser-level manual verification for the updated task status panel was not run in this task
-- Verification:
-  - `npx vitest run client/src/components/operation-toaster.test.ts`
-
-## 2026-04-10 / COUPANG Shipment Quick Collect Narrowing
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/http/handlers/coupang/shipments.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - narrowed shipment quick collect to the live `ACCEPT` order-sheet status and downgraded partial status misses from full fallback to warning-only when another attempted status already succeeded
-- Change content:
-  - quick collect now requests only the live `ACCEPT` order-sheet status by default instead of rechecking `INSTRUCT` and later shipment states
-  - quick collect warnings now keep successful status results instead of reverting the whole worksheet to fallback when another attempted status already returned live data
-  - tracked shipment collect operations now finish with a warning status whenever the collect response contains warning text, even if live rows were still applied
-  - added coverage that `new_only` quick collect issues exactly one `ACCEPT` lookup and still preserves the current worksheet if that lookup fails outright
-- Reason:
-  - operators wanted the shipment quick collect action to behave like a lightweight payment-complete intake instead of a broader status sweep that was slow and brittle
-- Impact scope:
-  - COUPANG shipment worksheet quick collect semantics
-  - COUPANG shipment collect operation status reporting
-- Remaining issues:
-  - browser-level manual verification for the updated quick-collect warning copy was not run in this task
-- Verification:
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-service.test.ts`
-
-## 2026-04-09 / COUPANG Shipment Prepare Button
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/services/coupang/shipment-worksheet-view.ts`
-  - `server/services/coupang/shipment-worksheet-view.test.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - added a shipment-page action that moves current-view `寃곗젣?꾨즺(ACCEPT)` worksheet rows to `諛쒖넚以鍮꾩쨷`
-- Change content:
-  - extended shipment worksheet bulk resolution with a `prepare_ready` mode that resolves only rows exposing `markPreparing`
-  - excluded rows with claim issues from the prepare-ready set so the new action follows the same claim-blocking rule already used for invoice transmission
-  - added a `寃곗젣?꾨즺 -> 諛쒖넚以鍮꾩쨷` button next to `鍮좊Ⅸ ?섏쭛` on the Coupang shipment page
-  - wired the button to resolve the current shipment view on the server, submit the eligible rows to `/api/coupang/orders/prepare`, and refresh the worksheet afterward
-  - surfaced blocked claim rows in the feedback panel so operators can see why some `寃곗젣?꾨즺` rows were not prepared
-- Reason:
-  - operators wanted a visible post-collect action on the shipment screen that can move newly collected `寃곗젣?꾨즺` orders into `諛쒖넚以鍮꾩쨷` without leaving the shipment workflow
-- Impact scope:
-  - COUPANG shipment worksheet view resolution
-  - COUPANG shipment page header actions
-- Remaining issues:
-  - browser-level manual verification for the new button and prepare flow was not run in this task
-- Verification:
-  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts`
-  - passed: `npm run check`
-  - not run: browser-level manual verification
-
-## 2026-04-09 / COUPANG New-Only Quick Collect
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - redefined shipment quick collect as a `new_only` insert mode and moved the previous overlap-based incremental merge behind a separate `?꾩껜 ?ъ닔吏? action
-- Change content:
-  - added a `new_only` shipment sync mode to the shared API contract and request parser
-  - changed quick collect so it rechecks the selected date range, fetches `ACCEPT` and `INSTRUCT` directly as required statuses, only keeps newly discovered worksheet candidates, and does not overwrite already stored rows during that action
-  - limited quick-collect customer-service refresh to newly inserted rows so existing worksheet rows are not re-synced during `鍮좊Ⅸ ?섏쭛`
-  - stopped auto-running `markPreparing` during `鍮좊Ⅸ ?섏쭛` so newly collected `寃곗젣?꾨즺` orders stay visible to operators
-  - added Coupang channel error logging for required quick-collect status lookup failures so operators can inspect which status, date range, and store context caused the miss
-  - wrapped shipment worksheet collect requests in tracked Coupang shipment operations so `鍮좊Ⅸ ?섏쭛` / `?꾩껜 ?ъ닔吏? / `?꾩껜 ?щ룞湲고솕` now leave a running/success/warning/error operation log even if the request ends before status-specific error events are emitted
-  - stopped forcing shipment collection requests to the current client date so the selected date range is sent to the server as entered
-  - added a separate `?꾩껜 ?ъ닔吏? button in the shipment management menu for the previous incremental merge behavior, while keeping `?꾩껜 ?щ룞湲고솕` as the explicit full-range refresh
-- Reason:
-  - operators wanted `鍮좊Ⅸ ?섏쭛` to behave like a lightweight ?쏿dd true new orders only??action rather than a partial re-hydration of the existing worksheet
-- Impact scope:
-  - COUPANG shipment worksheet collect API semantics
-  - COUPANG shipment page button labels and collect workflow
-- Remaining issues:
-  - browser-level manual verification for the new button layout and quick-collect behavior was not run in this task
-- Next work:
-  - consider surfacing the effective quick-collect window in the UI so operators can see which date tail is being checked for unseen orders
-- Verification:
-  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
-  - not run: `npm run check`
-  - not run: browser-level manual verification
-
-## 2026-04-09 / COUPANG Order-Sheet Aggregate Throttling
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `server/application/coupang/orders/service.ts`
-  - `server/services/coupang/order-service.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - serialized aggregate Coupang order-sheet status fetches and added a retryable one-time retry per status
-- Change content:
-  - changed the no-status `listOrders()` path so `ACCEPT`, `INSTRUCT`, `DEPARTURE`, `DELIVERING`, `FINAL_DELIVERY`, and `NONE_TRACKING` are fetched one status at a time instead of being requested in parallel
-  - added a one-time retry for retryable per-status order-sheet failures such as `429`, `503`, and `504` before falling back to partial-success messaging
-- Reason:
-  - new orders could be missed during quick collect or worksheet refresh when one of the per-status order-sheet requests failed under Coupang rate limiting or temporary API pressure
-- Impact scope:
-  - COUPANG order-sheet aggregate lookup
-  - COUPANG quick collect and other worksheet/order views that rely on the no-status `listOrders()` path
-- Remaining issues:
-  - browser-level manual verification for live quick collect behavior was not run in this task
-  - non-retryable status failures can still surface as partial results with a warning message
-- Next work:
-  - if live traffic still drops statuses, consider making the status fetch concurrency and retry budget configurable through environment variables
-- Verification:
-  - passed: `npx vitest run --root . server/services/coupang/order-service.test.ts`
-  - not run: `npm run check`
-  - not run: browser-level manual verification
-
-## 2026-04-09 / COUPANG Shipment-First Worksheet View
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/coupang/parsers.ts`
-  - `server/http/handlers/coupang/shipments.ts`
-  - `server/routes/coupang/shipments.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/shipment-worksheet-view.ts`
-  - `server/services/coupang/shipment-worksheet-view.test.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `client/src/features/coupang/shipments/types.ts`
-  - `client/src/features/coupang/shipments/worksheet-config.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/lib/coupang-navigation.ts`
-  - `client/src/lib/coupang-navigation.test.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - added a server-driven worksheet view API and server-side bulk target resolution for COUPANG shipments
-  - removed `Orders / Outbound` from the main COUPANG navigation while keeping the route itself reachable
-- Change content:
-  - added `GET /api/coupang/shipments/worksheet/view` with scope, search, card filters, sorting, counts, and pagination handled on the server
-  - added `POST /api/coupang/shipments/worksheet/resolve` so invoice transmission and not-exported download targets can be resolved from the current server-side view instead of the browser's in-memory row list
-  - changed the shipment page to default to the `dispatch_active` scope and show `異쒓퀬?낅Т / 諛곗넚 ?댄썑 / ?대젅?꽷룹젣??/ ?꾩껜` scope counts above the worksheet
-  - refined `dispatch_active` so newly collected non-claim rows remain visible there until they are exported, even if Coupang has already moved them into later delivery statuses
-  - removed the raw order-status select from the shipment filter bar and stopped loading the entire worksheet into the browser for normal worksheet interaction
-  - kept claim rows persisted in the worksheet but hid them from the default operational scope; they remain visible in the dedicated `claims` scope
-  - changed worksheet row edits and selection state to follow current-page rows plus local dirty overlays instead of a full-array client model
-- Reason:
-  - the shipment worksheet became noticeably slow once the worksheet exceeded roughly 1000 rows because the browser was recalculating counts, filters, sorting, and bulk targets over the full dataset on every interaction
-  - operators primarily work from `Shipment / Dispatch`, so the main menu and worksheet defaults should favor dispatch work instead of showing claim noise by default
-- Impact scope:
-  - COUPANG shipment worksheet API surface
-  - COUPANG shipment page interaction model
-  - COUPANG primary navigation
-- Remaining issues:
-  - browser-level manual verification for a live 1000+ row worksheet was not run in this task
-  - the legacy full worksheet endpoint still exists for fallback paths such as some paste/import helpers and direct patch responses
-- Next work:
-  - manually verify the new scope bar, server pagination, and large worksheet responsiveness in the browser
-  - consider moving the remaining full-worksheet helper flows to the new resolve/view model so the legacy full endpoint can eventually be reduced further
-- Verification:
-  - passed: `npm run check`
-  - passed: `npx vitest run client/src/lib/coupang-navigation.test.ts`
-  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
-  - not run: `npm run test`
-  - not run: `npm run build`
-  - not run: browser-level manual verification
-
-## 2026-04-08 / Disable Product Edit and Bulk Price Runtime Surface
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/App.tsx`
-  - `client/src/components/operation-toaster.tsx`
-  - `client/src/features/coupang/products/page.tsx`
-  - `client/src/features/coupang/products/product-presenters.tsx`
-  - `client/src/lib/coupang-navigation.ts`
-  - `client/src/lib/coupang-navigation.test.ts`
-  - `client/src/lib/operation-links.ts`
-  - `server/index.ts`
-  - `server/routes.ts`
-  - `server/routes/coupang/products.ts`
+  - `client/src/pages/operation-center.tsx`
+  - `client/index.html`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
   - `docs/current-status.md`
   - `docs/change-log.md`
   - `docs/structure-overview.md`
-- Code change:
-  - disabled NAVER and COUPANG bulk-price runtime entry points
-  - disabled the dedicated COUPANG product-edit runtime path and its `/partial` and `/full` write routes
-- Change content:
-  - changed `/naver/bulk-price`, `/naver/product-edit`, `/coupang/bulk-price`, and `/coupang/product-edit` to redirect back to the main product pages
-  - removed COUPANG and NAVER bulk-price routers from the server mount registry and removed bulk-price startup recovery from server boot
-  - simplified the shared operation toaster so it only shows generic operations instead of polling bulk-price runs and preview refresh jobs
-  - removed COUPANG products-page links to the dedicated editor and removed the delivery-charge edit path that depended on `/api/coupang/products/partial`
-  - kept price, stock, and sale-status quick actions active on the COUPANG products page
-  - fixed COUPANG order-sheet date-range queries by keeping `ordersheets` on the API-required `yyyy-MM-dd+09:00` format instead of the invalid timestamp form, and corrected fallback collection logs so failed `鍮좊Ⅸ ?섏쭛` attempts report the attempted sync mode instead of reusing the previous worksheet summary
-- Reason:
-  - bulk-price and dedicated product-info editing features are being taken out of this repository's active runtime surface for now
-- Impact scope:
-  - NAVER workspace routing
-  - COUPANG workspace routing
-  - COUPANG products quick-action behavior
-  - server startup and API mount behavior
-- Remaining issues:
-  - bulk-price and product-edit implementation files still exist on disk for later extraction, even though the runtime no longer exposes them
-  - browser-level manual verification of the redirect paths and disabled UI paths was not run in this task
-- Next work:
-  - decide whether to delete the dormant bulk-price and product-edit source files after the external migration is complete
-  - if route-level disablement should also return HTTP 404/410 instead of redirecting, tighten that behavior in a follow-up
-- Verification:
-  - passed: `npm run check`
-  - passed: `npx vitest run client/src/lib/coupang-navigation.test.ts`
-  - not run: `npm run test`
-  - not run: `npm run build`
-  - not run: browser-level manual verification
-
-## 2026-04-07 / COUPANG Claim-Aware Orders and Shipments
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `shared/coupang.ts`
-  - `server/http/handlers/coupang/orders.ts`
-  - `server/services/coupang/customer-service-issues.ts`
-  - `server/services/coupang/shipment-worksheet-service.ts`
-  - `server/services/coupang/order-service.test.ts`
-  - `server/services/coupang/shipment-worksheet-collection.test.ts`
-  - `client/src/lib/coupang-customer-service.ts`
-  - `client/src/lib/coupang-order-status.ts`
-  - `client/src/lib/coupang-shipment-quick-filters.ts`
-  - `client/src/lib/coupang-shipment-quick-filters.test.ts`
-  - `client/src/features/coupang/shipments/page.tsx`
-  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
-  - `client/src/pages/coupang-orders.tsx`
-  - `client/src/lib/order-ticket.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-- Code change:
-  - expanded COUPANG customer-service issue modeling to include shipment-stop requested/handled states
-  - made the orders list API include claim lookup by default
-  - refreshed shipment worksheet customer-service state on read when rows are stale or unknown
-  - blocked claim-bearing orders from `markPreparing` and blocked claim-bearing shipment rows from invoice transmission
-- Change content:
-  - added claim priority so shipment-stop requested/handled outrank cancel, return, exchange, and the base order status in shared display helpers
-  - updated shipment quick filters and worksheet status pills so shipment-stop rows are visible without a manual CS-only step
-  - surfaced skip/block reasons for invoice transmission and prepare flows using order or shipment identifiers plus the detected claim summary
-  - made shipment worksheet detail responses return synthesized CS summary fields from live claim lookups, and updated the detail popup to use those fields before falling back to persisted worksheet row values
-  - patched the local shipment worksheet cache after detail lookup so the popup and row list stay aligned once a live claim is confirmed
-  - changed shipment worksheet reads to force a fresh CS lookup instead of reusing the 10-minute summary cache, and refetch the worksheet again on mount/window refocus so claim state is visible before opening row detail
-  - extended shipment worksheet quick collect to fetch live return/exchange claims and insert claim-only rows even when the active order list no longer contains that order
-  - excluded claim-bearing rows from shipment worksheet Excel downloads so only order rows are exported and marked as printed
-- Reason:
-  - users need to notice cancel, return, exchange, and shipment-stop requests before sending invoices or moving rows into preparing
-- Impact scope:
-  - COUPANG orders list behavior
-  - COUPANG shipment worksheet read behavior
-  - COUPANG shared claim/status display helpers
-- Remaining issues:
-  - the COUPANG orders page still contains older mixed-language UI copy outside this task's behavioral changes
-  - browser-level manual verification for order `16100182558956` / receiver was not run in this task
-- Next work:
-  - manually verify the COUPANG orders and shipment pages show the expected shipment-stop status for a live matching order
-  - consider cleaning legacy COUPANG order-page copy so all visible Korean labels are normalized
-- Verification:
-  - passed: `npm run check`
-  - passed: `npx vitest run client/src/lib/coupang-customer-service.test.ts`
-  - passed: `npx vitest run client/src/lib/coupang-shipment-quick-filters.test.ts`
-  - passed: `npx vitest run --root . server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
-  - passed: `npx vitest run --root . server/services/coupang/shipment-worksheet-detail.test.ts`
-
-## 2026-04-03 / Bulk-Price Preset Persistence
-
-- Change type:
-  - code and documentation
-- Changed files:
-  - `client/src/features/naver/bulk-price/page.tsx`
-  - `client/src/features/naver/bulk-price/state.ts`
-  - `client/src/features/coupang/bulk-price/page.tsx`
-  - `client/src/features/coupang/bulk-price/state.ts`
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-  - `docs/structure-overview.md`
-  - `docs/decisions/2026-04-03-bulk-price-preset-ui-state.md`
-- Code change:
-  - persisted NAVER and COUPANG bulk-price preset editor state through the existing `/api/ui-state` store
-- Change content:
-  - moved selected source/rule preset IDs and preset name/memo draft inputs from page-local React state into server-backed UI state
-  - added a guard so preset selection is cleared only after the preset list query successfully confirms the preset is gone
-- Reason:
-  - users experienced bulk-price template values as reset after refresh because only the preset list itself was durable; the active selection and draft fields were not
-- Impact scope:
-  - NAVER bulk-price UI
-  - COUPANG bulk-price UI
-  - `ui_state_entries` payload shape for `naver.bulk-price.ui` and `coupang.bulk-price.ui`
-- Remaining issues:
-  - browser-level end-to-end verification was not run in this task
-  - preview caches and run recovery behavior were not changed
-- Next work:
-  - manually verify refresh persistence on both channel pages
-  - decide whether other draft-only bulk operations should follow the same `ui_state_entries` persistence pattern
-- Verification:
-  - passed: `npm run check`
-  - not run: `npm run test`
-  - not run: `npm run build`
-
-## 2026-04-03
-
-- Change type:
-  - documentation baseline
-- Changed files:
-  - `docs/current-status.md`
-  - `docs/change-log.md`
-  - `docs/structure-overview.md`
-  - `docs/decisions/README.md`
-  - `docs/handoffs/README.md`
-- Code change:
-  - none
-- Change content:
-  - added baseline project documentation derived from the current code layout and inspected runtime entry points
-- Reason:
-  - future tasks in this repository must update code and docs together, so a starting point was needed
-- Impact scope:
-  - documentation only
-  - no API, DB, UI, or runtime behavior changed by this task
-- Remaining issues:
-  - this entry is based on code inspection only
-  - no runtime validation was performed in this task
-  - shared engine persistence and NAVER preview cache behavior remain operational risks documented in `docs/current-status.md`
-- Next work:
-  - append a new dated entry for every code change
-  - include verification notes and clearly mark anything not tested
-- Verification:
-  - not run: `npm run check`
-  - not run: `npm run test`
-  - not run: `npm run build`
-
-
-
+- 변경 내용:
+  - 작업 상태 패널의 상태 라벨, 버튼, 빈 상태 문구를 한국어로 정리했습니다.
+  - 작업센터의 메트릭, 필터, 목록, 상세 패널, 티켓 상세 레이블을 한국어로 정리했습니다.
+  - 출고 범위 라벨과 현재 적용 조건 토큰도 한국어 레이블로 다시 맞췄습니다.
+  - 문서와 브라우저 스크린샷 기준으로 `KIKIT SyncDesk`, `출고`, `작업센터`, `작업 상태` 패널이 현재 한국어로 렌더되는 것을 확인했습니다.
+- 이유:
+  - 운영 데스크 개편 이후에도 일부 사용자 노출 문자열이 깨진 인코딩 또는 혼합 언어 상태로 남아 있어 읽기 흐름을 방해했습니다.
+- 남은 점:
+  - 완전한 클릭 기반 수동 검증은 아직 남아 있습니다.
+- 검증:
+  - `npm run check`
+  - `npm run build`
+  - `npx vitest run client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
+  - Chrome headless fresh profile 스크린샷으로 `출고`, `작업센터`, `작업 상태` 패널 렌더 확인

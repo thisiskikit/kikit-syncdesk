@@ -132,6 +132,11 @@ import {
   buildShipmentFilterSummaryTokens,
   countActiveShipmentDetailFilters,
 } from "./fulfillment-filter-summary";
+import {
+  buildQuickCollectFocusSignature,
+  resolveQuickCollectFocusRows,
+  type QuickCollectFocusState,
+} from "./quick-collect-focus";
 import ShipmentBaseFilters from "./shipment-base-filters";
 import ShipmentArchivePanel from "./shipment-archive-panel";
 import ShipmentSelectionActionBar from "./shipment-selection-action-bar";
@@ -141,6 +146,13 @@ import {
 } from "./shipment-selection-summary";
 import ShipmentWorksheetPanel from "./shipment-worksheet-panel";
 import ShipmentWorksheetOverview from "./shipment-worksheet-overview";
+import {
+  buildShipmentColumnPresetConfigs,
+  buildShipmentColumnPresetWidths,
+  detectShipmentColumnPresetKey,
+  SHIPMENT_COLUMN_PRESETS,
+  type ShipmentColumnPresetKey,
+} from "./shipment-column-presets";
 import type {
   ShipmentDetailClaimCardView,
   ShipmentDetailInfoRow,
@@ -1457,6 +1469,7 @@ export default function CoupangShipmentsPage() {
   const [isFullDetailDialogOpen, setIsFullDetailDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"worksheet" | "archive" | "settings">("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
+  const [quickCollectFocus, setQuickCollectFocus] = useState<QuickCollectFocusState | null>(null);
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
     "kikit:coupang-shipments:worksheet-page-size",
     50,
@@ -1479,6 +1492,10 @@ export default function CoupangShipmentsPage() {
   const [columnWidths, setColumnWidths] = usePersistentState<Record<string, number>>(
     "kikit:layout:rdg:coupang-shipments",
     {},
+  );
+  const activeColumnPreset = useMemo(
+    () => detectShipmentColumnPresetKey(columnConfigs),
+    [columnConfigs],
   );
 
   useEffect(() => {
@@ -1630,6 +1647,7 @@ export default function CoupangShipmentsPage() {
       setAuditResult(null);
       setIsAuditDialogOpen(false);
       setDraftRows([]);
+      setQuickCollectFocus(null);
       setSelectedRowIds(new Set());
       setSelectedRowsById({});
       setDirtySourceKeys(new Set());
@@ -1643,6 +1661,12 @@ export default function CoupangShipmentsPage() {
   useEffect(() => {
     setDetailRowSnapshot(null);
     setIsFullDetailDialogOpen(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "worksheet") {
+      setQuickCollectFocus(null);
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -1701,7 +1725,7 @@ export default function CoupangShipmentsPage() {
     filters.outputStatusCard,
   ]);
 
-  const activeSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
+  const baseActiveSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
   const archiveSheet = archiveQuery.data ?? null;
   const selectedStoreName =
     stores.find((store) => store.id === filters.selectedStoreId)?.storeName ?? null;
@@ -1709,15 +1733,130 @@ export default function CoupangShipmentsPage() {
   const activeOrderStatusCard = normalizeOrderStatusCardKey(filters.orderStatusCard);
   const activeOutputStatusCard = normalizeOutputStatusCardKey(filters.outputStatusCard);
   const activeDecisionStatus = filters.decisionStatus ?? "all";
-  const decisionCounts = useMemo(() => buildFulfillmentDecisionCounts(draftRows), [draftRows]);
+  const quickCollectFocusSignature = useMemo(
+    () =>
+      buildQuickCollectFocusSignature({
+        selectedStoreId: filters.selectedStoreId,
+        createdAtFrom: filters.createdAtFrom,
+        createdAtTo: filters.createdAtTo,
+        query: filters.query,
+        scope: filters.scope,
+        decisionStatus: activeDecisionStatus,
+        invoiceStatusCard: activeInvoiceStatusCard,
+        orderStatusCard: activeOrderStatusCard,
+        outputStatusCard: activeOutputStatusCard,
+      }),
+    [
+      activeDecisionStatus,
+      activeInvoiceStatusCard,
+      activeOrderStatusCard,
+      activeOutputStatusCard,
+      filters.createdAtFrom,
+      filters.createdAtTo,
+      filters.query,
+      filters.scope,
+      filters.selectedStoreId,
+    ],
+  );
+  const isQuickCollectFocusActive =
+    activeTab === "worksheet" &&
+    quickCollectFocus?.active === true &&
+    quickCollectFocus.filterSignature === quickCollectFocusSignature;
+  useEffect(() => {
+    if (quickCollectFocus && quickCollectFocus.filterSignature !== quickCollectFocusSignature) {
+      setQuickCollectFocus(null);
+    }
+  }, [quickCollectFocus, quickCollectFocusSignature]);
+  const quickCollectFocusResult = useMemo(() => {
+    if (!isQuickCollectFocusActive || !quickCollectFocus) {
+      return null;
+    }
+
+    const sortedRows = sortShipmentRows(
+      quickCollectFocus.rows.map((row) => dirtyRowsBySourceKey[row.sourceKey] ?? row),
+      sortColumns,
+      columnConfigs,
+    );
+
+    return resolveQuickCollectFocusRows({
+      rows: sortedRows,
+      sourceKeys: quickCollectFocus.sourceKeys,
+      decisionStatus: activeDecisionStatus,
+      page: worksheetPage,
+      pageSize: worksheetPageSize,
+    });
+  }, [
+    activeDecisionStatus,
+    columnConfigs,
+    dirtyRowsBySourceKey,
+    isQuickCollectFocusActive,
+    quickCollectFocus,
+    sortColumns,
+    worksheetPage,
+    worksheetPageSize,
+  ]);
+  const activeSheet =
+    isQuickCollectFocusActive && quickCollectFocusResult
+        ? {
+          ...(baseActiveSheet ?? {
+            store:
+              stores.find((store) => store.id === filters.selectedStoreId)
+                ? {
+                    id: filters.selectedStoreId,
+                    name: selectedStoreName ?? "",
+                    vendorId:
+                      stores.find((store) => store.id === filters.selectedStoreId)?.vendorId ?? "",
+                  }
+                : {
+                    id: filters.selectedStoreId,
+                    name: selectedStoreName ?? "",
+                    vendorId: "",
+                  },
+            fetchedAt: new Date().toISOString(),
+            collectedAt: null,
+            message: null,
+            source: "live" as const,
+            syncSummary: null,
+            scope: filters.scope,
+            scopeCounts: {
+              dispatch_active: 0,
+              post_dispatch: 0,
+              claims: 0,
+              all: 0,
+            },
+          }),
+          items: quickCollectFocusResult.focusedRows,
+          page: quickCollectFocusResult.page,
+          pageSize: worksheetPageSize,
+          totalPages: quickCollectFocusResult.totalPages,
+          totalRowCount: quickCollectFocusResult.focusedRows.length,
+          scopeRowCount: quickCollectFocusResult.focusedRows.length,
+          filteredRowCount: quickCollectFocusResult.focusedRows.length,
+          invoiceReadyCount: quickCollectFocusResult.invoiceReadyCount,
+          invoiceCounts: quickCollectFocusResult.invoiceCounts,
+          orderCounts: quickCollectFocusResult.orderCounts,
+          outputCounts: quickCollectFocusResult.outputCounts,
+        }
+      : baseActiveSheet;
+  const effectiveDraftRows =
+    isQuickCollectFocusActive && quickCollectFocusResult
+      ? quickCollectFocusResult.pageRows
+      : draftRows;
+  const decisionCounts = useMemo(
+    () => buildFulfillmentDecisionCounts(effectiveDraftRows),
+    [effectiveDraftRows],
+  );
   const visibleRows = useMemo(
-    () => draftRows.filter((row) => matchesFulfillmentDecisionFilter(row, activeDecisionStatus)),
-    [activeDecisionStatus, draftRows],
+    () =>
+      isQuickCollectFocusActive && quickCollectFocusResult
+        ? quickCollectFocusResult.visibleRows
+        : effectiveDraftRows.filter((row) => matchesFulfillmentDecisionFilter(row, activeDecisionStatus)),
+    [activeDecisionStatus, effectiveDraftRows, isQuickCollectFocusActive, quickCollectFocusResult],
   );
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
   const archiveRows = archiveSheet?.items ?? [];
   const archiveTotalPages = archiveSheet?.totalPages ?? 1;
-  const scopeCounts = activeSheet?.scopeCounts ?? {
+  const scopeCounts = (isQuickCollectFocusActive ? baseActiveSheet : activeSheet)?.scopeCounts ?? {
     dispatch_active: 0,
     post_dispatch: 0,
     claims: 0,
@@ -1732,33 +1871,46 @@ export default function CoupangShipmentsPage() {
       }),
     [activeInvoiceStatusCard, activeOrderStatusCard, activeOutputStatusCard],
   );
-  const activeFilterSummaryTokens = useMemo(
-    () =>
-      buildShipmentFilterSummaryTokens({
-        storeName: selectedStoreName,
-        filters: {
-          createdAtFrom: filters.createdAtFrom,
-          createdAtTo: filters.createdAtTo,
-          query: deferredQuery,
-          scope: filters.scope,
-          decisionStatus: activeDecisionStatus,
-          invoiceStatusCard: activeInvoiceStatusCard,
-          orderStatusCard: activeOrderStatusCard,
-          outputStatusCard: activeOutputStatusCard,
-        },
-      }),
-    [
-      activeDecisionStatus,
-      activeInvoiceStatusCard,
-      activeOrderStatusCard,
-      activeOutputStatusCard,
-      deferredQuery,
-      filters.createdAtFrom,
-      filters.createdAtTo,
-      filters.scope,
-      selectedStoreName,
-    ],
-  );
+  const activeFilterSummaryTokens = useMemo(() => {
+    if (isQuickCollectFocusActive && quickCollectFocusResult) {
+      return [
+        ...(selectedStoreName ? [selectedStoreName] : []),
+        ...(filters.createdAtFrom && filters.createdAtTo
+          ? [`${filters.createdAtFrom} ~ ${filters.createdAtTo}`]
+          : []),
+        "신규 주문 우선 보기",
+        ...(activeDecisionStatus !== "all"
+          ? [FULFILLMENT_DECISION_OPTIONS.find((option) => option.value === activeDecisionStatus)?.label ?? ""]
+          : []),
+      ].filter(Boolean);
+    }
+
+    return buildShipmentFilterSummaryTokens({
+      storeName: selectedStoreName,
+      filters: {
+        createdAtFrom: filters.createdAtFrom,
+        createdAtTo: filters.createdAtTo,
+        query: deferredQuery,
+        scope: filters.scope,
+        decisionStatus: activeDecisionStatus,
+        invoiceStatusCard: activeInvoiceStatusCard,
+        orderStatusCard: activeOrderStatusCard,
+        outputStatusCard: activeOutputStatusCard,
+      },
+    });
+  }, [
+    activeDecisionStatus,
+    activeInvoiceStatusCard,
+    activeOrderStatusCard,
+    activeOutputStatusCard,
+    deferredQuery,
+    filters.createdAtFrom,
+    filters.createdAtTo,
+    filters.scope,
+    isQuickCollectFocusActive,
+    quickCollectFocusResult,
+    selectedStoreName,
+  ]);
   const hasCustomWorksheetFilters =
     Boolean(deferredQuery) ||
     filters.scope !== "dispatch_active" ||
@@ -1819,7 +1971,17 @@ export default function CoupangShipmentsPage() {
   const dirtySet = useMemo(() => new Set(dirtySourceKeys), [dirtySourceKeys]);
   const detailFilterToggleLabel =
     activeDetailFilterCount > 0 ? `세부 필터 ${formatNumber(activeDetailFilterCount)}개 적용` : "세부 필터";
+  const effectiveDetailFilterCount = isQuickCollectFocusActive ? 0 : activeDetailFilterCount;
+  const effectiveDetailFilterToggleLabel = isQuickCollectFocusActive
+    ? "세부 필터"
+    : detailFilterToggleLabel;
+  const effectiveHasCustomWorksheetFilters = isQuickCollectFocusActive
+    ? activeDecisionStatus !== "all"
+    : hasCustomWorksheetFilters;
   const filterSummarySupportText = [
+    isQuickCollectFocusActive && quickCollectFocusResult
+      ? `빠른 수집 신규 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건 우선 표시 중`
+      : null,
     dirtyCount > 0 ? `미저장 변경 ${formatNumber(dirtyCount)}건` : null,
     (activeSheet?.invoiceReadyCount ?? 0) > 0
       ? `송장 전송 대상 ${formatNumber(activeSheet?.invoiceReadyCount ?? 0)}건`
@@ -2450,7 +2612,8 @@ export default function CoupangShipmentsPage() {
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const refreshActionDisabled =
     !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
-  const openInvoiceInputDisabled = !(activeSheet?.totalRowCount ?? draftRows.length) || busyAction !== null;
+  const openInvoiceInputDisabled =
+    !(activeSheet?.totalRowCount ?? effectiveDraftRows.length) || busyAction !== null;
   const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
   const openNotExportedExcelExportDisabled =
     !(activeSheet?.outputCounts.notExported ?? 0) || busyAction !== null;
@@ -2730,6 +2893,16 @@ export default function CoupangShipmentsPage() {
     return nextSheet;
   }
 
+  async function handleShipmentRefresh() {
+    setQuickCollectFocus(null);
+    if (activeTab === "archive") {
+      await archiveQuery.refetch();
+      return;
+    }
+
+    await refetchWorksheetView();
+  }
+
   function applyWorksheetRowUpdates(updates: Map<string, CoupangShipmentWorksheetRow>) {
     if (!updates.size) {
       return;
@@ -2759,6 +2932,14 @@ export default function CoupangShipmentsPage() {
       }
       return next;
     });
+    setQuickCollectFocus((current) =>
+      current
+        ? {
+            ...current,
+            rows: current.rows.map((row) => updates.get(row.id) ?? row),
+          }
+        : current,
+    );
     setDetailRowSnapshot((current) => {
       if (!current) {
         return current;
@@ -2853,7 +3034,7 @@ export default function CoupangShipmentsPage() {
 
   function clearDirtyRowsByRowIds(rowIds: readonly string[]) {
     const sourceKeys = resolveSourceKeysForTouchedRowIds(rowIds, [
-      draftRows,
+      effectiveDraftRows,
       activeSheet?.items ?? [],
       Object.values(selectedRowsById),
       Object.values(dirtyRowsBySourceKey),
@@ -3059,6 +3240,33 @@ export default function CoupangShipmentsPage() {
       setDetailRowSnapshot(null);
       setWorksheetPage(1);
       await refetchWorksheetView();
+      if (syncMode === "new_only") {
+        const insertedSourceKeys = Array.from(
+          new Set(response.syncSummary?.insertedSourceKeys ?? []),
+        );
+        if (insertedSourceKeys.length > 0) {
+          setQuickCollectFocus({
+            active: true,
+            sourceKeys: insertedSourceKeys,
+            rows: response.items,
+            filterSignature: buildQuickCollectFocusSignature({
+              selectedStoreId: requestFilters.selectedStoreId,
+              createdAtFrom: requestFilters.createdAtFrom,
+              createdAtTo: requestFilters.createdAtTo,
+              query: requestFilters.query,
+              scope: requestFilters.scope,
+              decisionStatus: requestFilters.decisionStatus,
+              invoiceStatusCard: requestFilters.invoiceStatusCard,
+              orderStatusCard: requestFilters.orderStatusCard,
+              outputStatusCard: requestFilters.outputStatusCard,
+            }),
+          });
+        } else {
+          setQuickCollectFocus(null);
+        }
+      } else {
+        setQuickCollectFocus(null);
+      }
 
       if (!options?.silent) {
         const modeLabel =
@@ -3228,6 +3436,28 @@ export default function CoupangShipmentsPage() {
     );
   }
 
+  function applyColumnPreset(preset: ShipmentColumnPresetKey) {
+    const nextConfigs = buildShipmentColumnPresetConfigs(preset);
+    setColumnConfigs(nextConfigs);
+    setColumnWidths(buildShipmentColumnPresetWidths(nextConfigs, preset));
+    setWorksheetMode(preset === "invoice_input" ? "invoice" : "default");
+    setWorksheetPage(1);
+    setFeedback({
+      type: "success",
+      title: "보기 프리셋 적용",
+      message:
+        preset === "operations"
+          ? "작업 보기 프리셋으로 기본 열 수를 줄였습니다."
+          : preset === "invoice_input"
+            ? "송장 입력 보기 프리셋으로 송장 작업 중심 열 구성을 적용했습니다."
+            : "전체 열 보기 프리셋으로 기본 전체 열 구성을 적용했습니다.",
+      details: [
+        "기존 수집 데이터는 유지되고, 보이는 컬럼 순서와 폭만 바뀝니다.",
+        "필요하면 화면 설정에서 다시 개별 컬럼을 조정할 수 있습니다.",
+      ],
+    });
+  }
+
   async function ensureWorksheetChangesSavedForServerBulk() {
     if (!dirtyCount) {
       return true;
@@ -3240,7 +3470,7 @@ export default function CoupangShipmentsPage() {
     scope: ShipmentExcelExportScope,
     sortKey: ShipmentExcelSortKey,
   ) {
-    if (!(activeSheet?.filteredRowCount ?? draftRows.length)) {
+    if (!(activeSheet?.filteredRowCount ?? effectiveDraftRows.length)) {
       setFeedback({
         type: "warning",
         title: "엑셀 다운로드",
@@ -3873,7 +4103,7 @@ export default function CoupangShipmentsPage() {
           ...Object.values(dirtyRowsBySourceKey),
           ...Object.values(selectedRowsById),
           ...(activeSheet?.items ?? []),
-          ...draftRows,
+          ...effectiveDraftRows,
         ].map((row) => [row.selpickOrderNumber, row] as const),
       );
       const { updates, issues } = parseInvoiceClipboardRows(
@@ -4175,21 +4405,28 @@ export default function CoupangShipmentsPage() {
             ...patch,
           }))
         }
-        onRefresh={() => void (activeTab === "archive" ? archiveQuery.refetch() : worksheetQuery.refetch())}
+        onRefresh={() => void handleShipmentRefresh()}
       />
 
       {activeTab === "worksheet" ? (
         <ShipmentWorksheetOverview
+          quickCollectFocusActive={isQuickCollectFocusActive}
+          quickCollectFocusCount={quickCollectFocusResult?.focusedRows.length ?? 0}
+          quickCollectFocusMessage={
+            isQuickCollectFocusActive && quickCollectFocusResult
+              ? `빠른 수집으로 추가된 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건을 먼저 보여줍니다.`
+              : null
+          }
           activeDecisionStatus={activeDecisionStatus}
           decisionCounts={decisionCounts}
           decisionOptions={FULFILLMENT_DECISION_OPTIONS}
-          detailFilterToggleLabel={detailFilterToggleLabel}
+          detailFilterToggleLabel={effectiveDetailFilterToggleLabel}
           detailFiltersOpen={detailFiltersOpen}
-          activeDetailFilterCount={activeDetailFilterCount}
+          activeDetailFilterCount={effectiveDetailFilterCount}
           activeFilterSummaryTokens={activeFilterSummaryTokens}
           filterSummarySupportText={filterSummarySupportText}
-          hasCustomWorksheetFilters={hasCustomWorksheetFilters}
-          pageRowCount={draftRows.length}
+          hasCustomWorksheetFilters={effectiveHasCustomWorksheetFilters}
+          pageRowCount={effectiveDraftRows.length}
           visibleRowsCount={visibleRows.length}
           filters={filters}
           activeSheet={activeSheet}
@@ -4199,6 +4436,10 @@ export default function CoupangShipmentsPage() {
           invoiceStatusOptions={INVOICE_STATUS_CARD_OPTIONS}
           outputStatusOptions={OUTPUT_STATUS_CARD_OPTIONS}
           orderStatusOptions={ORDER_STATUS_CARD_OPTIONS}
+          onClearQuickCollectFocus={() => {
+            setQuickCollectFocus(null);
+            setWorksheetPage(1);
+          }}
           onPatchFilters={(patch) =>
             setFilters((current) => ({
               ...current,
@@ -4312,9 +4553,11 @@ export default function CoupangShipmentsPage() {
           invoiceModeNotice={invoiceModeNotice}
           detailGuideNotice={detailGuideNotice}
           worksheetMode={worksheetMode}
+          activeColumnPreset={activeColumnPreset}
+          columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
           isLoading={worksheetQuery.isLoading && !activeSheet}
           hasSheetRows={Boolean(activeSheet?.totalRowCount ?? 0)}
-          hasRowsForCurrentFilters={Boolean(draftRows.length)}
+          hasRowsForCurrentFilters={Boolean(effectiveDraftRows.length)}
           filteredRowCount={activeSheet?.filteredRowCount ?? 0}
           visibleRowsCount={visibleRows.length}
           worksheetPage={worksheetPage}
@@ -4322,6 +4565,7 @@ export default function CoupangShipmentsPage() {
           worksheetPageSize={worksheetPageSize}
           pageSizeOptions={SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS}
           onWorksheetModeChange={setWorksheetMode}
+          onApplyColumnPreset={applyColumnPreset}
           onOpenSettings={() => setActiveTab("settings")}
           onPageSizeChange={(pageSize) => {
             setWorksheetPageSize(pageSize);
@@ -4416,11 +4660,14 @@ export default function CoupangShipmentsPage() {
             selectedExportBlockedRowCount={selectedExportBlockedRows.length}
             claimScopeCount={scopeCounts.claims}
             notExportedCount={activeSheet?.outputCounts.notExported ?? 0}
+            activeColumnPreset={activeColumnPreset}
+            columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
             shipmentColumnLabels={SHIPMENT_COLUMN_LABELS}
             shipmentColumnDefaultWidths={SHIPMENT_COLUMN_DEFAULT_WIDTHS}
             shipmentColumnSourceOptions={SHIPMENT_COLUMN_SOURCE_OPTIONS}
             onBack={() => setActiveTab("worksheet")}
             onAdd={addColumnConfig}
+            onApplyColumnPreset={applyColumnPreset}
             onReset={resetColumnConfigs}
             onDelete={deleteColumnConfig}
             onDragStart={(id) => setDraggingConfigId(id)}

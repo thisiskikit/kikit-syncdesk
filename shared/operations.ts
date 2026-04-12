@@ -28,6 +28,39 @@ export interface OperationResultSummary {
   preview: string | null;
 }
 
+export const operationTicketDetailResults = [
+  "success",
+  "warning",
+  "error",
+  "skipped",
+] as const;
+export type OperationTicketDetailResult = (typeof operationTicketDetailResults)[number];
+
+export interface OperationTicketDetail {
+  result: OperationTicketDetailResult;
+  label: string | null;
+  message: string | null;
+  targetId: string | null;
+  sourceKey: string | null;
+  selpickOrderNumber: string | null;
+  productOrderNumber: string | null;
+  shipmentBoxId: string | null;
+  orderId: string | null;
+  receiptId: string | null;
+  vendorItemId: string | null;
+  productName: string | null;
+  receiverName: string | null;
+  deliveryCompanyCode: string | null;
+  invoiceNumber: string | null;
+}
+
+export interface OperationTicketDetailState {
+  totalCount: number;
+  recordedCount: number;
+  truncated: boolean;
+  items: OperationTicketDetail[];
+}
+
 export interface OperationLogEntry {
   id: string;
   channel: OperationChannel;
@@ -83,6 +116,45 @@ function titleCaseWords(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asNullableString(value: unknown) {
+  return typeof value === "string" && value.trim().length ? value : null;
+}
+
+function isOperationTicketDetailResult(value: unknown): value is OperationTicketDetailResult {
+  return (
+    typeof value === "string" &&
+    (operationTicketDetailResults as readonly string[]).includes(value)
+  );
+}
+
+function normalizeOperationTicketDetail(value: unknown): OperationTicketDetail | null {
+  if (!isRecord(value) || !isOperationTicketDetailResult(value.result)) {
+    return null;
+  }
+
+  return {
+    result: value.result,
+    label: asNullableString(value.label),
+    message: asNullableString(value.message),
+    targetId: asNullableString(value.targetId),
+    sourceKey: asNullableString(value.sourceKey),
+    selpickOrderNumber: asNullableString(value.selpickOrderNumber),
+    productOrderNumber: asNullableString(value.productOrderNumber),
+    shipmentBoxId: asNullableString(value.shipmentBoxId),
+    orderId: asNullableString(value.orderId),
+    receiptId: asNullableString(value.receiptId),
+    vendorItemId: asNullableString(value.vendorItemId),
+    productName: asNullableString(value.productName),
+    receiverName: asNullableString(value.receiverName),
+    deliveryCompanyCode: asNullableString(value.deliveryCompanyCode),
+    invoiceNumber: asNullableString(value.invoiceNumber),
+  };
 }
 
 const menuLabelMap: Record<string, string> = {
@@ -176,6 +248,43 @@ export function getOperationResultSummaryText(summary: OperationResultSummary | 
   }
 
   return summary.headline ?? summary.preview ?? summary.detail ?? null;
+}
+
+export function getOperationTicketDetailState(
+  summary: OperationResultSummary | null,
+): OperationTicketDetailState {
+  const stats = summary?.stats;
+  if (!isRecord(stats)) {
+    return {
+      totalCount: 0,
+      recordedCount: 0,
+      truncated: false,
+      items: [],
+    };
+  }
+
+  const items = Array.isArray(stats.ticketDetails)
+    ? stats.ticketDetails
+        .map((item) => normalizeOperationTicketDetail(item))
+        .filter((item): item is OperationTicketDetail => Boolean(item))
+    : [];
+
+  const recordedCount =
+    typeof stats.ticketDetailsRecorded === "number" && Number.isFinite(stats.ticketDetailsRecorded)
+      ? Math.max(0, Math.trunc(stats.ticketDetailsRecorded))
+      : items.length;
+  const totalCount =
+    typeof stats.ticketDetailsTotalCount === "number" &&
+    Number.isFinite(stats.ticketDetailsTotalCount)
+      ? Math.max(0, Math.trunc(stats.ticketDetailsTotalCount))
+      : recordedCount;
+
+  return {
+    totalCount,
+    recordedCount,
+    truncated: stats.ticketDetailsTruncated === true,
+    items,
+  };
 }
 
 export function getOperationErrorSummary(

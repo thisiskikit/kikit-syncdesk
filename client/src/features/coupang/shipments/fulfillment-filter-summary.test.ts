@@ -9,9 +9,9 @@ import {
 
 describe("fulfillment filter summary helpers", () => {
   it("returns operator-facing labels for scope and decision filters", () => {
-    expect(getShipmentScopeLabel("dispatch_active")).toBe("�۾� ���");
-    expect(getShipmentScopeLabel("claims")).toBe("���ܡ�Ŭ����");
-    expect(getFulfillmentDecisionFilterLabel("invoice_waiting")).toBe("���� ���");
+    expect(getShipmentScopeLabel("dispatch_active")).toBe("작업 대상");
+    expect(getShipmentScopeLabel("claims")).toBe("예외·클레임");
+    expect(getFulfillmentDecisionFilterLabel("invoice_waiting")).toBe("송장 대기");
   });
 
   it("counts only detail filters that are actively narrowed", () => {
@@ -35,11 +35,11 @@ describe("fulfillment filter summary helpers", () => {
   it("builds readable filter tokens in operator reading order", () => {
     expect(
       buildShipmentFilterSummaryTokens({
-        storeName: "����_�ÿ�����",
+        storeName: "쿠팡_올웨이팜",
         filters: {
           createdAtFrom: "2026-04-08",
           createdAtTo: "2026-04-13",
-          query: "ȫ�浿",
+          query: "홍길동",
           scope: "dispatch_active",
           decisionStatus: "recheck",
           invoiceStatusCard: "failed",
@@ -48,14 +48,14 @@ describe("fulfillment filter summary helpers", () => {
         },
       }),
     ).toEqual([
-      "����_�ÿ�����",
+      "쿠팡_올웨이팜",
       "2026-04-08 ~ 2026-04-13",
-      "�۾� ���",
-      "��Ȯ�� �ʿ�",
-      "���� ���� ����",
-      "��� �����",
-      "�ֹ� ��ǰ�غ���",
-      "�˻�: ȫ�浿",
+      "작업 대상",
+      "재확인 필요",
+      "송장 전송 실패",
+      "출력 미출력",
+      "주문 상품준비중",
+      "검색: 홍길동",
     ]);
   });
 });

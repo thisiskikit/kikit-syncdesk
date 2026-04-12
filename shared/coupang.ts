@@ -1129,6 +1129,7 @@ export interface CoupangShipmentWorksheetSyncSummary {
   mode: CoupangShipmentSyncMode;
   fetchedCount: number;
   insertedCount: number;
+  insertedSourceKeys: string[];
   updatedCount: number;
   skippedHydrationCount: number;
   autoExpanded: boolean;

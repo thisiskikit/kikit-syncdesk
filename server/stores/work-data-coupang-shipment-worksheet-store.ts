@@ -395,11 +395,19 @@ function normalizeSyncSummary(
   }
 
   return {
-    mode: value.mode === "full" ? "full" : "incremental",
+    mode:
+      value.mode === "full"
+        ? "full"
+        : value.mode === "new_only"
+          ? "new_only"
+          : "incremental",
     fetchedCount: Number.isFinite(value.fetchedCount) ? Math.max(0, value.fetchedCount ?? 0) : 0,
     insertedCount: Number.isFinite(value.insertedCount)
       ? Math.max(0, value.insertedCount ?? 0)
       : 0,
+    insertedSourceKeys: Array.isArray(value.insertedSourceKeys)
+      ? value.insertedSourceKeys.filter((item): item is string => typeof item === "string")
+      : [],
     updatedCount: Number.isFinite(value.updatedCount) ? Math.max(0, value.updatedCount ?? 0) : 0,
     skippedHydrationCount: Number.isFinite(value.skippedHydrationCount)
       ? Math.max(0, value.skippedHydrationCount ?? 0)

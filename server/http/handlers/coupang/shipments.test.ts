@@ -65,6 +65,7 @@ describe("collectShipmentWorksheetHandler", () => {
         mode: "new_only",
         fetchedCount: 2,
         insertedCount: 1,
+        insertedSourceKeys: ["store-1:100:V-100"],
         updatedCount: 0,
         skippedHydrationCount: 0,
         autoExpanded: false,
@@ -115,6 +116,11 @@ describe("collectShipmentWorksheetHandler", () => {
         syncSummary: expect.objectContaining({ mode: "new_only", insertedCount: 1 }),
       }),
     );
+    expect(runTrackedOperationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execute: expect.any(Function),
+      }),
+    );
   });
 
   it("marks fallback collection results as warning operations", async () => {
@@ -141,6 +147,7 @@ describe("collectShipmentWorksheetHandler", () => {
         mode: "new_only",
         fetchedCount: 0,
         insertedCount: 0,
+        insertedSourceKeys: [],
         updatedCount: 0,
         skippedHydrationCount: 0,
         autoExpanded: false,
@@ -168,5 +175,83 @@ describe("collectShipmentWorksheetHandler", () => {
     );
 
     expect(executedStatus).toBe("warning");
+  });
+
+  it("stores up to five collected order ticket details in the tracked result summary", async () => {
+    let executedSummary: Record<string, unknown> | null | undefined;
+    runTrackedOperationMock.mockImplementationOnce(async (input: { execute: () => Promise<unknown> }) => {
+      const executed = (await input.execute()) as { data: unknown; resultSummary?: { stats?: Record<string, unknown> | null } };
+      executedSummary = executed.resultSummary?.stats;
+      return {
+        operation: {
+          id: "operation-3",
+          status: "success",
+        },
+        data: executed.data,
+      };
+    });
+    collectShipmentWorksheetMock.mockResolvedValue({
+      store: { id: "store-1", name: "쿠팡 스토어" },
+      items: Array.from({ length: 6 }, (_, index) => ({
+        sourceKey: `store-1:10${index}:V-${index}`,
+        shipmentBoxId: `10${index}`,
+        orderId: `ORDER-${index}`,
+        vendorItemId: `V-${index}`,
+        productName: `상품 ${index}`,
+        receiverName: `수령인 ${index}`,
+        deliveryCompanyCode: "",
+        invoiceNumber: "",
+        selpickOrderNumber: `SP-${index}`,
+        productOrderNumber: `PO-${index}`,
+      })),
+      fetchedAt: "2026-04-09T01:00:00.000Z",
+      collectedAt: "2026-04-09T01:00:00.000Z",
+      message: "신규 주문을 반영했습니다.",
+      source: "live",
+      syncSummary: {
+        mode: "new_only",
+        fetchedCount: 6,
+        insertedCount: 6,
+        insertedSourceKeys: Array.from({ length: 6 }, (_, index) => `store-1:10${index}:V-${index}`),
+        updatedCount: 0,
+        skippedHydrationCount: 0,
+        autoExpanded: false,
+        fetchCreatedAtFrom: "2026-04-08",
+        fetchCreatedAtTo: "2026-04-09",
+        statusFilter: null,
+      },
+    });
+
+    const res = { json: vi.fn(), status: vi.fn() } as unknown as Parameters<
+      typeof collectShipmentWorksheetHandler
+    >[1];
+
+    await collectShipmentWorksheetHandler(
+      {
+        body: {
+          storeId: "store-1",
+          createdAtFrom: "2026-04-08",
+          createdAtTo: "2026-04-09",
+          syncMode: "new_only",
+        },
+      } as Parameters<typeof collectShipmentWorksheetHandler>[0],
+      res,
+      vi.fn(),
+    );
+
+    expect(executedSummary).toEqual(
+      expect.objectContaining({
+        ticketDetailsTotalCount: 6,
+        ticketDetailsRecorded: 5,
+        ticketDetailsTruncated: true,
+        ticketDetails: expect.arrayContaining([
+          expect.objectContaining({
+            label: "신규 주문 추가",
+            sourceKey: "store-1:100:V-0",
+            selpickOrderNumber: "SP-0",
+          }),
+        ]),
+      }),
+    );
   });
 });

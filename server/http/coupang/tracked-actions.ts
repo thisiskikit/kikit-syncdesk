@@ -1,4 +1,9 @@
-import type { CoupangBatchActionResponse } from "@shared/coupang";
+﻿import type {
+  CoupangActionItemResult,
+  CoupangActionItemStatus,
+  CoupangBatchActionResponse,
+} from "@shared/coupang";
+import type { OperationTicketDetail } from "@shared/operations";
 import {
   registerOperationRetryHandler,
   runTrackedOperation,
@@ -13,6 +18,8 @@ import { asString } from "./parsers";
 
 type JsonRecord = Record<string, unknown>;
 type ResponseTarget = Parameters<typeof sendData>[0];
+
+const MAX_OPERATION_TICKET_DETAILS = 5;
 
 export function summarizeVendorItemAction(action: string, result: { message: string }) {
   return `${action}: ${result.message}`;
@@ -31,10 +38,117 @@ function buildFailurePreview(result: CoupangBatchActionResponse) {
   return failedItems.length ? failedItems.join(" | ") : null;
 }
 
+function mapBatchItemStatusToTicketResult(
+  status: CoupangActionItemStatus,
+): OperationTicketDetail["result"] {
+  if (status === "failed") {
+    return "error";
+  }
+  if (status === "warning") {
+    return "warning";
+  }
+  if (status === "skipped") {
+    return "skipped";
+  }
+  return "success";
+}
+
+function getTicketPriority(result: OperationTicketDetail["result"]) {
+  if (result === "error") {
+    return 0;
+  }
+  if (result === "warning") {
+    return 1;
+  }
+  if (result === "skipped") {
+    return 2;
+  }
+  return 3;
+}
+
+function toNullableString(value: unknown) {
+  return typeof value === "string" && value.trim().length ? value : null;
+}
+
+function createBatchTicketDetail(
+  item: CoupangActionItemResult,
+  extra?: Partial<OperationTicketDetail> | null,
+): OperationTicketDetail {
+  return {
+    result: mapBatchItemStatusToTicketResult(item.status),
+    label: toNullableString(extra?.label),
+    message: toNullableString(extra?.message) ?? item.message,
+    targetId: toNullableString(extra?.targetId) ?? item.targetId,
+    sourceKey: toNullableString(extra?.sourceKey),
+    selpickOrderNumber: toNullableString(extra?.selpickOrderNumber),
+    productOrderNumber: toNullableString(extra?.productOrderNumber),
+    shipmentBoxId: toNullableString(extra?.shipmentBoxId) ?? item.shipmentBoxId,
+    orderId: toNullableString(extra?.orderId) ?? item.orderId,
+    receiptId: toNullableString(extra?.receiptId) ?? item.receiptId,
+    vendorItemId: toNullableString(extra?.vendorItemId) ?? item.vendorItemId,
+    productName: toNullableString(extra?.productName),
+    receiverName: toNullableString(extra?.receiverName),
+    deliveryCompanyCode: toNullableString(extra?.deliveryCompanyCode),
+    invoiceNumber: toNullableString(extra?.invoiceNumber),
+  };
+}
+
+export function buildBatchTicketDetailState<TTarget>(
+  result: CoupangBatchActionResponse,
+  items: readonly TTarget[],
+  input?: {
+    resolveTargetId?: (item: TTarget) => string | null;
+    buildTicketDetail?: (params: {
+      itemResult: CoupangActionItemResult;
+      sourceItem: TTarget | null;
+    }) => Partial<OperationTicketDetail> | null;
+  },
+) {
+  const sourceByTargetId = new Map<string, TTarget>();
+  if (input?.resolveTargetId) {
+    for (const item of items) {
+      const targetId = input.resolveTargetId(item);
+      if (targetId && !sourceByTargetId.has(targetId)) {
+        sourceByTargetId.set(targetId, item);
+      }
+    }
+  }
+
+  const details = result.items
+    .map((item) =>
+      createBatchTicketDetail(
+        item,
+        input?.buildTicketDetail
+          ? input.buildTicketDetail({
+              itemResult: item,
+              sourceItem: sourceByTargetId.get(item.targetId) ?? null,
+            })
+          : null,
+      ),
+    )
+    .sort((left, right) => {
+      const priorityGap = getTicketPriority(left.result) - getTicketPriority(right.result);
+      if (priorityGap !== 0) {
+        return priorityGap;
+      }
+
+      return (left.targetId ?? "").localeCompare(right.targetId ?? "");
+    });
+
+  return {
+    items: details.slice(0, MAX_OPERATION_TICKET_DETAILS),
+    truncated: details.length > MAX_OPERATION_TICKET_DETAILS,
+  };
+}
+
 export function buildBatchResultSummary(
   result: CoupangBatchActionResponse,
   detailLabel: string,
   itemCount: number,
+  ticketDetailState?: {
+    items: OperationTicketDetail[];
+    truncated: boolean;
+  },
 ) {
   const headline = buildOperationSummaryText(result.summary);
   const failurePreview = buildFailurePreview(result);
@@ -45,6 +159,10 @@ export function buildBatchResultSummary(
     stats: {
       ...result.summary,
       failurePreview,
+      ticketDetailsTotalCount: result.items.length,
+      ticketDetailsRecorded: ticketDetailState?.items.length ?? 0,
+      ticketDetailsTruncated: ticketDetailState?.truncated ?? false,
+      ticketDetails: ticketDetailState?.items ?? [],
     },
     preview: failurePreview ? `${headline} / ${failurePreview}` : headline,
   });
@@ -87,6 +205,11 @@ export async function handleTrackedBatchAction<TTarget>(input: {
   detailLabel: string;
   retryable?: boolean;
   validateItem?: (item: TTarget) => string | null;
+  resolveTargetId?: (item: TTarget) => string | null;
+  buildTicketDetail?: (params: {
+    itemResult: CoupangActionItemResult;
+    sourceItem: TTarget | null;
+  }) => Partial<OperationTicketDetail> | null;
   execute: (params: { storeId: string; items: TTarget[] }) => Promise<CoupangBatchActionResponse>;
 }) {
   if (!ensureStoreId(input.res, input.storeId)) {
@@ -126,11 +249,20 @@ export async function handleTrackedBatchAction<TTarget>(input: {
         storeId: input.storeId,
         items: input.items,
       });
+      const ticketDetailState = buildBatchTicketDetailState(data, input.items, {
+        resolveTargetId: input.resolveTargetId,
+        buildTicketDetail: input.buildTicketDetail,
+      });
 
       return {
         data,
         status: resolveTrackedOperationStatus(data.summary),
-        resultSummary: buildBatchResultSummary(data, input.detailLabel, input.items.length),
+        resultSummary: buildBatchResultSummary(
+          data,
+          input.detailLabel,
+          input.items.length,
+          ticketDetailState,
+        ),
       };
     },
   });
@@ -150,6 +282,11 @@ export function registerBatchRetryHandler<TTarget>(input: {
   targetIds: (items: TTarget[]) => string[];
   detailLabel: string;
   validateItem?: (item: TTarget) => string | null;
+  resolveTargetId?: (item: TTarget) => string | null;
+  buildTicketDetail?: (params: {
+    itemResult: CoupangActionItemResult;
+    sourceItem: TTarget | null;
+  }) => Partial<OperationTicketDetail> | null;
   execute: (params: { storeId: string; items: TTarget[] }) => Promise<CoupangBatchActionResponse>;
 }) {
   registerOperationRetryHandler(
@@ -188,10 +325,20 @@ export function registerBatchRetryHandler<TTarget>(input: {
         retryOfOperationId: operation.id,
         execute: async () => {
           const data = await input.execute({ storeId, items });
+          const ticketDetailState = buildBatchTicketDetailState(data, items, {
+            resolveTargetId: input.resolveTargetId,
+            buildTicketDetail: input.buildTicketDetail,
+          });
+
           return {
             data,
             status: resolveTrackedOperationStatus(data.summary),
-            resultSummary: buildBatchResultSummary(data, input.detailLabel, items.length),
+            resultSummary: buildBatchResultSummary(
+              data,
+              input.detailLabel,
+              items.length,
+              ticketDetailState,
+            ),
           };
         },
       });

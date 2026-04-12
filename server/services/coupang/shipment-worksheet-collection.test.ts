@@ -487,6 +487,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.syncSummary).toMatchObject({
       mode: "full",
       insertedCount: 3,
+      insertedSourceKeys: [],
       updatedCount: 0,
       autoExpanded: true,
     });
@@ -905,6 +906,7 @@ describe("coupang shipment worksheet collection", () => {
         mode: "incremental",
         fetchedCount: 1,
         insertedCount: 0,
+        insertedSourceKeys: [],
         updatedCount: 0,
         skippedHydrationCount: 0,
         autoExpanded: false,
@@ -1262,6 +1264,7 @@ describe("coupang shipment worksheet collection", () => {
       mode: "new_only",
       fetchedCount: 1,
       insertedCount: 1,
+      insertedSourceKeys: ["store-1:200:V-200"],
       updatedCount: 0,
       autoExpanded: false,
       fetchCreatedAtFrom: "2026-03-25",
@@ -1412,6 +1415,7 @@ describe("coupang shipment worksheet collection", () => {
       mode: "new_only",
       fetchedCount: 0,
       insertedCount: 0,
+      insertedSourceKeys: [],
       updatedCount: 0,
     });
     expect(listReturnsMock).not.toHaveBeenCalled();

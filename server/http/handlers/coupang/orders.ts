@@ -1,4 +1,4 @@
-import type { RequestHandler } from "express";
+﻿import type { RequestHandler } from "express";
 import {
   cancelOrderItem,
   getOrderCustomerServiceSummary,
@@ -44,6 +44,14 @@ export function registerCoupangOrderRetryHandlers() {
     targetIds: (items) => items.map((item) => item.shipmentBoxId),
     detailLabel: "상품준비중 처리",
     validateItem: (item) => (item.shipmentBoxId ? null : "shipmentBoxId is required."),
+    resolveTargetId: (item) => item.shipmentBoxId,
+    buildTicketDetail: ({ sourceItem }) =>
+      sourceItem
+        ? {
+            shipmentBoxId: sourceItem.shipmentBoxId,
+            orderId: sourceItem.orderId,
+          }
+        : null,
     execute: markPreparing,
   });
 
@@ -161,6 +169,14 @@ export const markPreparingHandler: RequestHandler = async (req, res) => {
       requestPayload: buildPreparePayload(storeId, items),
       detailLabel: "상품준비중 처리",
       validateItem: (item) => (item.shipmentBoxId ? null : "shipmentBoxId is required."),
+      resolveTargetId: (item) => item.shipmentBoxId,
+      buildTicketDetail: ({ sourceItem }) =>
+        sourceItem
+          ? {
+              shipmentBoxId: sourceItem.shipmentBoxId,
+              orderId: sourceItem.orderId,
+            }
+          : null,
       execute: markPreparing,
     });
   } catch (error) {

@@ -635,6 +635,52 @@ textarea {
   gap: 0.9rem;
 }
 
+.shipment-focus-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  border: 1px solid #d7e6ff;
+  background: linear-gradient(180deg, #f7fbff 0%, #eef5ff 100%);
+}
+
+.shipment-focus-banner-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #2d5b9f;
+}
+
+.shipment-focus-banner-note {
+  margin-top: 0.35rem;
+}
+
+.shipment-view-preset-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.shipment-view-preset-label {
+  font-size: 0.75rem;
+}
+
+.shipment-column-preset-card {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+}
+
+.shipment-column-preset-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.shipment-column-preset-actions {
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .shipment-filter-summary-header,
 .shipment-detail-filter-header {
   display: flex;
@@ -1066,6 +1112,39 @@ textarea {
   margin-top: 0.8rem;
 }
 
+.work-center-ticket-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.work-center-ticket-item {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid #e2e9f1;
+  background: white;
+}
+
+.work-center-ticket-item-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.work-center-ticket-item-label {
+  font-weight: 700;
+  color: #152033;
+}
+
+.work-center-ticket-item-meta {
+  color: #5c6a7d;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .shipment-decision-toolbar,
 .shipment-decision-summary-grid {
   margin-bottom: 0;
@@ -1294,6 +1373,16 @@ textarea {
   .shipment-decision-drawer-header-main,
   .shipment-filter-summary-header,
   .shipment-detail-filter-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .shipment-focus-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .shipment-column-preset-card-header {
     flex-direction: column;
     align-items: stretch;
   }

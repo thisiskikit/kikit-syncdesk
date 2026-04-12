@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { getOperationLogsHref } from "@/lib/operation-links";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { type OperationToast, useOperations } from "./operation-provider";
@@ -39,15 +39,15 @@ function getOperationTone(status: OperationToast["status"]): PanelTone {
 function formatStatusLabel(status: OperationToast["status"]) {
   switch (status) {
     case "queued":
-      return "Queued";
+      return "대기";
     case "running":
-      return "Running";
+      return "진행 중";
     case "success":
-      return "Done";
+      return "완료";
     case "warning":
-      return "Warning";
+      return "경고";
     case "error":
-      return "Failed";
+      return "실패";
     default:
       return status;
   }
@@ -70,16 +70,16 @@ function formatPanelTime(entry: PanelEntry) {
 
   const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
   if (seconds < 60) {
-    return `${seconds}s ago`;
+    return `${seconds}초 전`;
   }
 
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return `${minutes}m ago`;
+    return `${minutes}분 전`;
   }
 
   const hours = Math.round(minutes / 60);
-  return `${hours}h ago`;
+  return `${hours}시간 전`;
 }
 
 function buildOperationEntry(toast: OperationToast, dismissToast: (toastId: string) => void): PanelEntry {
@@ -89,8 +89,8 @@ function buildOperationEntry(toast: OperationToast, dismissToast: (toastId: stri
   return {
     id: toast.toastId,
     title: toast.title,
-    subtitle: `${toast.channel.toUpperCase()} / ${toast.targetCount} items`,
-    body: toast.errorMessage ?? toast.summary ?? "The operation is in progress.",
+    subtitle: `${toast.channel.toUpperCase()} / ${toast.targetCount}건`,
+    body: toast.errorMessage ?? toast.summary ?? "작업이 진행 중입니다.",
     statusLabel: formatStatusLabel(toast.status),
     tone: getOperationTone(toast.status),
     href: getOperationLogsHref(toast.channel, toast.operationId),
@@ -145,7 +145,7 @@ export function OperationToaster() {
             className="task-status-entry-button"
             onClick={() => openTab(entry.href)}
           >
-            Open
+            열기
           </button>
           {entry.dismissible && entry.onDismiss ? (
             <button
@@ -153,7 +153,7 @@ export function OperationToaster() {
               className="task-status-entry-button"
               onClick={() => entry.onDismiss?.()}
             >
-              Hide
+              숨기기
             </button>
           ) : null}
         </div>
@@ -170,11 +170,11 @@ export function OperationToaster() {
         aria-expanded={!collapsed}
       >
         <div className="task-status-toggle-copy">
-          <strong>Task Status</strong>
-          <span className="muted">{activeCount ? `${activeCount} active` : "No active jobs"}</span>
+          <strong>작업 상태</strong>
+          <span className="muted">{activeCount ? `${activeCount}건 진행 중` : "진행 중인 작업 없음"}</span>
         </div>
         <span className={`status-pill ${activeCount ? "pending" : "draft"}`}>
-          {collapsed ? "Show" : "Hide"}
+          {collapsed ? "보기" : "숨기기"}
         </span>
       </button>
 
@@ -182,7 +182,7 @@ export function OperationToaster() {
         <div className="task-status-body">
           <section className="task-status-section">
             <div className="task-status-section-header">
-              <strong>Running Now</strong>
+              <strong>현재 진행 중</strong>
               <span className="muted">{activeCount}</span>
             </div>
 
@@ -190,7 +190,7 @@ export function OperationToaster() {
               <div className="task-status-list">{activeEntries.map(renderEntry)}</div>
             ) : (
               <div className="task-status-empty">
-                No jobs are currently running. This panel stays visible across tabs.
+                현재 진행 중인 작업이 없습니다. 이 패널은 탭을 옮겨도 계속 유지됩니다.
               </div>
             )}
           </section>
@@ -198,7 +198,7 @@ export function OperationToaster() {
           {recentEntries.length ? (
             <section className="task-status-section">
               <div className="task-status-section-header">
-                <strong>Recent Updates</strong>
+                <strong>최근 업데이트</strong>
                 <span className="muted">{recentEntries.length}</span>
               </div>
               <div className="task-status-list">{recentEntries.map(renderEntry)}</div>
