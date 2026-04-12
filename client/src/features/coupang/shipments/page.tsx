@@ -113,7 +113,10 @@ import {
   resolveSourceKeysForTouchedRowIds,
 } from "./invoice-input-apply";
 import {
+  buildShipmentWorksheetAuditDetails,
   buildShipmentWorksheetAuditRequest,
+  shouldBlockPrepareForShipmentAudit,
+  summarizeShipmentPrepareAuditBlock,
   summarizeShipmentWorksheetAuditResult,
 } from "./shipment-audit-missing";
 import type {
@@ -2274,7 +2277,7 @@ export default function CoupangShipmentsPage() {
     };
   }
 
-  async function executeShipmentAuditMissing() {
+  async function requestShipmentAuditMissingForCurrentFilters() {
     const requestFilters = normalizeFiltersToSeoulToday(filters);
     if (!requestFilters.selectedStoreId) {
       return null;
@@ -2282,6 +2285,27 @@ export default function CoupangShipmentsPage() {
 
     if (!areFiltersEqual(filters, requestFilters)) {
       setFilters(requestFilters);
+    }
+
+    return apiRequestJson<CoupangShipmentWorksheetAuditMissingResponse>(
+      "POST",
+      "/api/coupang/shipments/worksheet/audit-missing",
+      buildShipmentWorksheetAuditRequest({
+        storeId: requestFilters.selectedStoreId,
+        createdAtFrom: requestFilters.createdAtFrom,
+        createdAtTo: requestFilters.createdAtTo,
+        scope: requestFilters.scope,
+        query: deferredQuery,
+        invoiceStatusCard: requestFilters.invoiceStatusCard,
+        orderStatusCard: requestFilters.orderStatusCard,
+        outputStatusCard: requestFilters.outputStatusCard,
+      }),
+    );
+  }
+
+  async function executeShipmentAuditMissing() {
+    if (!filters.selectedStoreId) {
+      return null;
     }
 
     const localToastId = startLocalOperation({
@@ -2294,30 +2318,13 @@ export default function CoupangShipmentsPage() {
     setAuditResult(null);
 
     try {
-      const response = await apiRequestJson<CoupangShipmentWorksheetAuditMissingResponse>(
-        "POST",
-        "/api/coupang/shipments/worksheet/audit-missing",
-        buildShipmentWorksheetAuditRequest({
-          storeId: requestFilters.selectedStoreId,
-          createdAtFrom: requestFilters.createdAtFrom,
-          createdAtTo: requestFilters.createdAtTo,
-          scope: requestFilters.scope,
-          query: deferredQuery,
-          invoiceStatusCard: requestFilters.invoiceStatusCard,
-          orderStatusCard: requestFilters.orderStatusCard,
-          outputStatusCard: requestFilters.outputStatusCard,
-        }),
-      );
+      const response = await requestShipmentAuditMissingForCurrentFilters();
+      if (!response) {
+        return null;
+      }
 
       const warning = response.missingCount > 0 || response.hiddenCount > 0;
-      const details = [
-        ...response.missingItems
-          .slice(0, 4)
-          .map((item) => `[누락] ${item.status ?? "-"} / ${item.productName} / ${item.shipmentBoxId}`),
-        ...response.hiddenItems
-          .slice(0, 4)
-          .map((item) => `[숨김] ${item.status ?? "-"} / ${item.productName} / ${item.hiddenReason}`),
-      ];
+      const details = buildShipmentWorksheetAuditDetails(response);
 
       setAuditResult(response);
       setIsAuditDialogOpen(warning);
@@ -2331,7 +2338,10 @@ export default function CoupangShipmentsPage() {
         status: warning ? "warning" : "success",
         summary: `누락 ${response.missingCount}건 / 숨김 ${response.hiddenCount}건`,
       });
-      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+      const finishedToastId = localToastId;
+      if (finishedToastId) {
+        window.setTimeout(() => removeLocalOperation(finishedToastId), 1_200);
+      }
       return response;
     } catch (error) {
       const message = error instanceof Error ? error.message : "누락 검수에 실패했습니다.";
@@ -2377,39 +2387,70 @@ export default function CoupangShipmentsPage() {
     if (isFallback) {
       setFeedback({
         type: "warning",
-        title: "발송준비중 처리 불가",
-        message: "대체 데이터에서는 결제완료 주문을 발송준비중으로 처리할 수 없습니다.",
+        title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uBD88\uAC00",
+        message:
+          "\uB300\uCCB4 \uB370\uC774\uD130\uC5D0\uC11C\uB294 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC744 \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uCC98\uB9AC\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.",
         details: [],
       });
       return;
     }
 
-    const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
-    const blockedClaimRows = resolvedRows?.blockedItems ?? [];
-    const blockedClaimDetails = buildPrepareClaimBlockedDetails(blockedClaimRows);
-    const targetRows = resolvedRows?.items ?? [];
-
-    if (!targetRows.length) {
-      setFeedback({
-        type: "warning",
-        title: "발송준비중 처리",
-        message: resolvedRows?.matchedCount
-          ? "클레임이 있는 주문은 제외되어 발송준비중으로 넘길 결제완료 주문이 없습니다."
-          : "현재 화면 조건에서 발송준비중으로 넘길 결제완료 주문이 없습니다.",
-        details: blockedClaimDetails.slice(0, 8),
-      });
-      return;
-    }
-
-    const localToastId = startLocalOperation({
-      channel: "coupang",
-      actionName: "쿠팡 결제완료 주문 발송준비중 처리",
-      targetCount: targetRows.length,
-    });
     setBusyAction("prepare-orders");
     setFeedback(null);
+    let localToastId: string | null = null;
 
     try {
+      const auditResponse = await requestShipmentAuditMissingForCurrentFilters();
+      if (!auditResponse) {
+        setFeedback({
+          type: "error",
+          title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
+          message:
+            "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uC751\uB2F5\uC744 \uBC1B\uC9C0 \uBABB\uD574 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC\uB97C \uC9C4\uD589\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
+          details: [],
+        });
+        return;
+      }
+
+      if (shouldBlockPrepareForShipmentAudit(auditResponse)) {
+        setAuditResult(auditResponse);
+        setIsAuditDialogOpen(true);
+        setFeedback({
+          type: "warning",
+          title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
+          message: summarizeShipmentPrepareAuditBlock(auditResponse),
+          details: buildShipmentWorksheetAuditDetails(auditResponse, {
+            limit: 8,
+            includeHidden: false,
+          }),
+        });
+        return;
+      }
+
+      const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
+      const blockedClaimRows = resolvedRows?.blockedItems ?? [];
+      const blockedClaimDetails = buildPrepareClaimBlockedDetails(blockedClaimRows);
+      const targetRows = resolvedRows?.items ?? [];
+
+      if (!targetRows.length) {
+        setFeedback({
+          type: "warning",
+          title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC",
+          message: resolvedRows?.matchedCount
+            ? "\uD074\uB808\uC784\uC774 \uC788\uB294 \uC8FC\uBB38\uC774 \uC81C\uC678\uB418\uC5B4 \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
+            : "\uD604\uC7AC \uD654\uBA74 \uC870\uAC74\uC5D0\uC11C \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+          details: blockedClaimDetails.slice(0, 8),
+        });
+        return;
+      }
+
+      localToastId = startLocalOperation({
+        channel: "coupang",
+        actionName:
+          "\uCFE0\uD321 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38 \uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC",
+        targetCount: targetRows.length,
+      });
+
       const result = await apiRequestJson<CoupangBatchActionResponse>(
         "POST",
         "/api/coupang/orders/prepare",
@@ -2444,28 +2485,35 @@ export default function CoupangShipmentsPage() {
 
       setFeedback({
         type: warning ? "warning" : "success",
-        title: "발송준비중 처리 결과",
-        message: `${buildResultSummary(result)} / 결제완료 ${targetRows.length}건 처리`,
+        title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uACB0\uACFC",
+        message: `${buildResultSummary(result)} / \uACB0\uC81C\uC644\uB8CC ${targetRows.length}\uAC74 \uCC98\uB9AC`,
         details: detailLines,
       });
       finishLocalOperation(localToastId, {
         status: warning ? "warning" : "success",
-        summary: `${targetRows.length}건 발송준비중 처리`,
+        summary: `${targetRows.length}\uAC74 \uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC`,
       });
-      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+      const finishedToastId = localToastId;
+      if (finishedToastId) {
+        window.setTimeout(() => removeLocalOperation(finishedToastId), 1_200);
+      }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "결제완료 주문을 발송준비중으로 넘기지 못했습니다.";
+        error instanceof Error
+          ? `\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uB610\uB294 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. ${error.message}`
+          : "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uB610\uB294 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
       setFeedback({
         type: "error",
-        title: "발송준비중 처리 실패",
+        title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
         message,
         details: [],
       });
-      finishLocalOperation(localToastId, {
-        status: "error",
-        errorMessage: message,
-      });
+      if (localToastId) {
+        finishLocalOperation(localToastId, {
+          status: "error",
+          errorMessage: message,
+        });
+      }
     } finally {
       setBusyAction(null);
     }

@@ -51,3 +51,37 @@ export function summarizeShipmentWorksheetAuditResult(
 
   return `live ${result.liveCount}건 중 누락 ${result.missingCount}건, 현재 뷰 숨김 ${result.hiddenCount}건입니다.`;
 }
+
+export function buildShipmentWorksheetAuditDetails(
+  result: CoupangShipmentWorksheetAuditMissingResponse,
+  options?: {
+    limit?: number;
+    includeHidden?: boolean;
+  },
+) {
+  const limit = options?.limit ?? 4;
+  const includeHidden = options?.includeHidden ?? true;
+
+  return [
+    ...result.missingItems
+      .slice(0, limit)
+      .map((item) => `[누락] ${item.status ?? "-"} / ${item.productName} / ${item.shipmentBoxId}`),
+    ...(includeHidden
+      ? result.hiddenItems
+          .slice(0, limit)
+          .map((item) => `[숨김] ${item.status ?? "-"} / ${item.productName} / ${item.hiddenReason}`)
+      : []),
+  ];
+}
+
+export function shouldBlockPrepareForShipmentAudit(
+  result: CoupangShipmentWorksheetAuditMissingResponse,
+) {
+  return result.missingCount > 0;
+}
+
+export function summarizeShipmentPrepareAuditBlock(
+  result: CoupangShipmentWorksheetAuditMissingResponse,
+) {
+  return `수집 누락 ${result.missingCount}건이 있어 상품준비중 처리를 차단했습니다. 먼저 누락 주문을 수집한 뒤 다시 시도해 주세요.`;
+}

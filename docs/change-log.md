@@ -2,6 +2,34 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-12 / COUPANG Shipment Prepare Missing Guard
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - wired the existing shipment missing-audit flow into `결제완료 -> 발송준비중` so the prepare action is blocked when the selected audit range still has live Coupang orders missing from the worksheet
+- Change content:
+  - added reusable audit-detail and prepare-block helpers in the shipment audit module
+  - the shipment page now runs `POST /api/coupang/shipments/worksheet/audit-missing` before resolving `prepare_ready` targets
+  - when `missingCount > 0`, the page opens the audit dialog, shows the missing rows in feedback, and does not call `POST /api/coupang/orders/prepare`
+  - `hiddenCount` alone does not block prepare because those rows already exist in the worksheet and are only hidden by the current view filters
+- Reason:
+  - operators wanted `결제완료 -> 발송준비중` to stop immediately when shipment collection is incomplete, instead of sending only the subset that had already been collected
+- Impact scope:
+  - COUPANG shipment worksheet prepare workflow
+  - COUPANG shipment missing-audit UX
+- Remaining issues:
+  - the preflight audit still uses the selected `createdAtFrom ~ createdAtTo` range, while the worksheet view itself is not date-filtered
+  - browser-level manual verification for the new prepare guard was not run in this task
+- Verification:
+  - `npm run check`
+  - `npx vitest run client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
 ## 2026-04-12 / COUPANG Shipment Column Preview
 
 - Change type:
