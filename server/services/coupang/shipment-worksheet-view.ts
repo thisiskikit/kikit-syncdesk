@@ -1,4 +1,5 @@
 import {
+  type CoupangShipmentWorksheetAuditHiddenReason,
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangCustomerServiceIssueBreakdownItem,
   type CoupangShipmentWorksheetBulkResolveMode,
@@ -441,6 +442,28 @@ function resolveFilteredRows(
     searchedRows,
     filteredRows,
   };
+}
+
+export function getShipmentWorksheetRowHiddenReason(
+  row: CoupangShipmentWorksheetRow,
+  rawQuery: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
+): CoupangShipmentWorksheetAuditHiddenReason | null {
+  const query = normalizeShipmentWorksheetViewQuery(rawQuery);
+
+  if (!matchesScope(row, query.scope)) {
+    return "out_of_scope";
+  }
+
+  if (
+    !matchesQuery(row, query.query) ||
+    !matchesInvoiceStatusCard(row, query.invoiceStatusCard) ||
+    !matchesOrderStatusCard(row, query.orderStatusCard) ||
+    !matchesOutputStatusCard(row, query.outputStatusCard)
+  ) {
+    return "filtered_out";
+  }
+
+  return null;
 }
 
 export function buildShipmentWorksheetViewData(

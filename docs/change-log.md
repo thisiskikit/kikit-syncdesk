@@ -2,6 +2,74 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-12 / COUPANG Shipment Column Preview
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-preview.ts`
+  - `client/src/features/coupang/shipments/shipment-column-preview.test.ts`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - added a sample-value preview to shipment column settings so operators can see what each selected worksheet column currently resolves to before matching it to downstream export columns
+- Change content:
+  - used the first selected shipment row, or the first currently visible row when nothing is selected, as the preview source inside the lazy-loaded shipment column settings panel
+  - added per-column preview text so the active `sourceKey` immediately shows the value that would currently be exported for that row
+  - added an explicit note that `exposedProductName` still reflects the current worksheet-computed value rather than a separate raw Coupang field
+- Reason:
+  - operators needed a quick way to verify what shipment worksheet values were actually flowing into configurable columns before lining them up with external templates
+- Impact scope:
+  - COUPANG shipment column-settings UX
+  - COUPANG worksheet export-column verification workflow
+- Remaining issues:
+  - this task improves visibility only; it does not yet ingest a separate raw Coupang exposed-product-name field
+  - browser-level manual verification for the new column preview was not run in this task
+- Verification:
+  - `npm run check`
+  - `npx vitest run client/src/features/coupang/shipments/shipment-column-preview.test.ts`
+
+## 2026-04-12 / COUPANG Shipment Missing Audit
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing-dialog.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - added a manual read-only shipment worksheet audit that compares live `INSTRUCT + ACCEPT` orders against the stored worksheet and explains whether missing live orders are truly absent or simply hidden by the current view
+- Change content:
+  - added `POST /api/coupang/shipments/worksheet/audit-missing` so the shipment page can send the selected store/date range plus the current scope/search/card filters to the server
+  - compared live `INSTRUCT` and `ACCEPT` rows to worksheet rows with the same `sourceKey`, deduping duplicate live rows in favor of `INSTRUCT`
+  - separated audit results into `missingItems` for live rows not stored in the worksheet and `hiddenItems` for live rows that do exist in the worksheet but are hidden by the current scope or filter state
+  - rejected audit windows longer than `7` days so the operator audit stays within a bounded live comparison range
+  - added a `누락 검수` action under `관리 작업`, a summary feedback card, and a lazy-loaded detail dialog for reviewing missing/hidden rows without changing worksheet data
+- Reason:
+  - operators needed a reliable way to verify whether Coupang `상품준비중(INSTRUCT)` or `주문접수(ACCEPT)` orders were genuinely missing from the worksheet or only hidden by the current view filters
+- Impact scope:
+  - COUPANG shipment worksheet API surface
+  - COUPANG shipment page operator workflow
+  - shipment worksheet view filtering reuse on the server
+- Remaining issues:
+  - browser-level manual verification for the new `누락 검수` dialog and its real-data operator flow was not run in this task
+- Verification:
+  - `npm run check`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/services/coupang/shipment-worksheet-audit-missing.test.ts server/services/coupang/shipment-worksheet-view.test.ts client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+
 ## 2026-04-12 / COUPANG Quick Collect Throughput Recovery
 
 - Change type:

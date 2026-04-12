@@ -8,6 +8,11 @@
   - `client/src/App.tsx`
   - `client/src/components/operation-toaster.tsx`
   - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing-dialog.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-preview.ts`
+  - `client/src/features/coupang/shipments/shipment-column-preview.test.ts`
   - `client/src/features/coupang/shipments/invoice-input-apply.ts`
   - `client/src/features/coupang/shipments/invoice-input-apply.test.ts`
   - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
@@ -33,6 +38,7 @@
   - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
   - `server/services/coupang/shipment-worksheet-view.ts`
   - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
   - `server/services/coupang/shipment-worksheet-invoice-input.test.ts`
   - `server/services/shared/work-data-db.ts`
   - `shared/schema.ts`
@@ -48,7 +54,7 @@
   - `client/src/pages/coupang-orders.tsx`
 - Verified in the latest change:
   - `npm run check`
-  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/operations/service.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts server/services/coupang/shipment-worksheet-audit-missing.test.ts server/services/coupang/shipment-worksheet-view.test.ts client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
 - Verified in the previous claim-aware change:
   - `npm run check`
   - `npx vitest run client/src/lib/coupang-customer-service.test.ts`
@@ -72,7 +78,8 @@
 | Settings / Operations | Active | `client/src/App.tsx`, `server/routes.ts`, `client/src/components/operation-toaster.tsx` | Settings hub, channel connection settings, operation center, logs, and UI state APIs are mounted. The operation toaster now only shows generic operations, no longer polls bulk-price run state, and allows manual dismiss for active entries so stale local process toasts can be cleared from the panel. |
 | PostgreSQL-backed work data | Active when `DATABASE_URL` exists | `server/services/shared/work-data-db.ts`, `shared/schema.ts` | Settings, logs, shipment worksheets, field sync, library, and legacy bulk-price tables are provisioned here. Bulk-price tables still exist in schema, but their runtime routes are disabled. |
 | Product edit / bulk price runtime surface | Disabled | `client/src/App.tsx`, `server/routes.ts`, `server/index.ts`, `server/routes/coupang/products.ts` | NAVER/COUPANG bulk-price pages are no longer reachable through the live app, startup no longer recovers bulk-price runs, bulk-price API routers are no longer mounted, and dedicated COUPANG `/partial` and `/full` product edit routes are removed from the live API surface. |
-| COUPANG shipment worksheet view | Active with server-driven scope, counts, pagination, lazy secondary overlays, and server-side invoice input apply | `server/routes/coupang/shipments.ts`, `server/services/coupang/shipment-worksheet-service.ts`, `server/services/coupang/shipment-worksheet-view.ts`, `server/stores/work-data-coupang-shipment-worksheet-store.ts`, `client/src/features/coupang/shipments/page.tsx` | The shipment page now reads `GET /api/coupang/shipments/worksheet/view` for normal worksheet interaction, lazy-loads detail/export/column-config/invoice-input overlays, applies popup and clipboard invoice input through `POST /api/coupang/shipments/worksheet/invoice-input/apply`, and persists compact row payloads instead of duplicating the full worksheet row JSON in `rowDataJson`. Claim rows remain stored but are hidden from the default scope. |
+| COUPANG shipment worksheet view | Active with server-driven scope, counts, pagination, lazy secondary overlays, column sample preview, and server-side invoice input apply | `server/routes/coupang/shipments.ts`, `server/services/coupang/shipment-worksheet-service.ts`, `server/services/coupang/shipment-worksheet-view.ts`, `server/stores/work-data-coupang-shipment-worksheet-store.ts`, `client/src/features/coupang/shipments/page.tsx`, `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx` | The shipment page now reads `GET /api/coupang/shipments/worksheet/view` for normal worksheet interaction, lazy-loads detail/export/column-config/invoice-input overlays, shows a sample value preview inside column settings based on the selected row or current first visible row, applies popup and clipboard invoice input through `POST /api/coupang/shipments/worksheet/invoice-input/apply`, and persists compact row payloads instead of duplicating the full worksheet row JSON in `rowDataJson`. `exposedProductName` preview reflects the current worksheet value, which is still derived from `productName + optionName`. Claim rows remain stored but are hidden from the default scope. |
+| COUPANG shipment worksheet missing audit | Active as a manual operator audit | `server/routes/coupang/shipments.ts`, `server/services/coupang/shipment-worksheet-service.ts`, `server/services/coupang/shipment-worksheet-view.ts`, `client/src/features/coupang/shipments/page.tsx`, `client/src/features/coupang/shipments/shipment-audit-missing-dialog.tsx` | The shipment page now exposes `?袁⑥뵭 野꺜?? under `?온???臾믩씜`, sends `POST /api/coupang/shipments/worksheet/audit-missing` with the selected store/date range/current scope/search/card filters, compares live `INSTRUCT + ACCEPT` orders to the stored worksheet by `sourceKey`, and separates truly missing worksheet rows from rows that already exist but are hidden by the current view. |
 
 ## Implementation Snapshot
 
@@ -108,14 +115,15 @@
   - shipment worksheet reads force a fresh claim lookup even for recently `ready` rows so the list can surface newly arrived claims before the user opens detail
   - shipment worksheet quick collect fetches live return/exchange claims and can add claim-only rows that no longer appear in the active order list
 - shipment worksheet quick collect now runs in a `new_only` mode that rechecks the selected date range, fetches live `INSTRUCT` and `ACCEPT` order-sheet statuses, and only inserts rows not already present in the worksheet; the previous overlap-based incremental merge remains available via the separate full recollect action
-- shipment worksheet `빠른 수집` no longer auto-runs `markPreparing`, so newly collected `결제완료(ACCEPT)` orders remain visible instead of being immediately pushed to `상품준비중`
-- shipment worksheet now exposes a `결제완료 -> 발송준비중` action beside `빠른 수집`; it resolves the current shipment view on the server, excludes claim rows, and sends only eligible `markPreparing` targets to the Coupang prepare-order API
+- shipment worksheet `??쥓????륁춿` no longer auto-runs `markPreparing`, so newly collected `野껉퀣??袁⑥┷(ACCEPT)` orders remain visible instead of being immediately pushed to `?怨밸?餓Β??쑴夷?
+- shipment worksheet now exposes a `野껉퀣??袁⑥┷ -> 獄쏆뮇?싦빳???쑴夷? action beside `??쥓????륁춿`; it resolves the current shipment view on the server, excludes claim rows, and sends only eligible `markPreparing` targets to the Coupang prepare-order API
 - shipment worksheet quick collect now records a Coupang channel error log with the failed status, date range, and store context whenever the live `INSTRUCT` or `ACCEPT` lookup fails; a status-specific lookup warning only forces fallback when neither attempted quick-collect status succeeded
 - shipment worksheet quick collect now raises the per-status page size to `50`, caps status pagination to `10` pages, and stops before claim/detail/product hydration when there are no unseen rows, so 100+ orders/day ranges can finish without scanning unnecessary downstream data
-- shipment worksheet collect requests now create a tracked Coupang shipment operation immediately when `빠른 수집`, `전체 재수집`, or `전체 재동기화` starts, so operators can inspect running/failed collection attempts even when the request ends early before a status-specific error event is written
+- shipment worksheet collect requests now create a tracked Coupang shipment operation immediately when `??쥓????륁춿`, `?袁⑷퍥 ???뷂쭪?, or `?袁⑷퍥 ??猷욄묾怨좎넅` starts, so operators can inspect running/failed collection attempts even when the request ends early before a status-specific error event is written
 - startup recovery now marks stale `queued` / `running` operation logs as `warning` so Cloud Run timeout or process restarts do not leave old shipment collect entries stuck in `running`
+- shipment worksheet now has a read-only `?꾨씫 寃?? flow that audits live `INSTRUCT` and `ACCEPT` orders for the selected store/date range, rejects audit windows longer than `7` days, and classifies matched live rows as either visible or hidden by the current worksheet scope/search/card filters
 - shipment page collection requests now preserve the user-selected `createdAtFrom ~ createdAtTo` values instead of forcing `createdAtTo` back to the current date on the client
-- shipment page normal invoice-entry flows no longer reload `GET /api/coupang/shipments/worksheet`; popup input and clipboard invoice pastes now submit `selpickOrderNumber + 택배사 + 송장번호` rows to `POST /api/coupang/shipments/worksheet/invoice-input/apply`, then refresh only the current `worksheet/view`
+- shipment page normal invoice-entry flows no longer reload `GET /api/coupang/shipments/worksheet`; popup input and clipboard invoice pastes now submit `selpickOrderNumber + ??멸컳??+ ??れ삢甕곕뜇?? rows to `POST /api/coupang/shipments/worksheet/invoice-input/apply`, then refresh only the current `worksheet/view`
 - shipment worksheet detail dialog, excel-sort dialog, invoice-input dialog, and column-settings screen now load with `React.lazy + Suspense` so they stay out of the initial shipment page bundle until the operator opens them
 - shipment worksheet persistence still restores the same `CoupangShipmentWorksheetRow` shape to callers, but `rowDataJson` now stores only non-column extra payload fields and reconstructs the full row from DB columns plus the compact payload on read
 - shipment worksheet detail responses synthesize claim summary fields from live return/exchange lookups so the detail status box can override the base order status immediately when the popup confirms a claim
@@ -131,7 +139,8 @@
   - updated the runtime snapshot to reflect disabled NAVER/COUPANG bulk-price workspaces and disabled COUPANG dedicated product editing routes
   - kept the existing COUPANG claim-aware order and shipment snapshot
   - added the shipment worksheet efficiency v1 changes for lazy shipment overlays, server-side invoice input apply, and compact worksheet row persistence
-  - updated quick collect so high-volume 신규 주문 intake uses bounded `INSTRUCT + ACCEPT` paging and startup stale-operation recovery
+  - updated quick collect so high-volume ?醫됲뇣 雅뚯눖揆 intake uses bounded `INSTRUCT + ACCEPT` paging and startup stale-operation recovery
+  - added a manual shipment worksheet missing-audit action and API that compare live `INSTRUCT + ACCEPT` rows against the stored worksheet by `sourceKey`
 - Reason:
   - the bulk-price and dedicated product-info editing features are being taken out of this repository's live runtime surface for now
   - COUPANG operators still need earlier visibility for shipment-stop, cancel, return, and exchange claims before executing preparing or invoice actions
@@ -143,7 +152,8 @@
   - COUPANG shipment popup/clipboard invoice-entry flow
   - COUPANG shipment worksheet persistence payload shape
   - COUPANG shipment quick-collect throughput and operation-log recovery behavior
-  - one new COUPANG shipment API endpoint was added without new DB tables
+  - COUPANG shipment missing-audit operator workflow
+  - two new COUPANG shipment API endpoints were added without new DB tables
 
 ## Remaining Issues
 
@@ -152,7 +162,7 @@
 - Bulk-price and dedicated product-edit implementation files still exist in the repository for later extraction, even though the runtime routes and pages are disabled.
 - `client/src/App.tsx` still contains placeholder routes for some NAVER features, so workspace completeness is uneven.
 - `client/src/features/coupang/shipments/page.tsx` is still a large file even after moving the low-frequency overlays out to lazy-loaded modules, so structural split work remains if we want the page shell itself to become smaller.
-- This task did not run an end-to-end browser verification for the shipment page lazy-dialog loading, invoice-input apply flow, or the disabled-route redirects / COUPANG products quick-action flow.
+- This task did not run an end-to-end browser verification for the shipment page lazy-dialog loading, invoice-input apply flow, missing-audit dialog flow, or the disabled-route redirects / COUPANG products quick-action flow.
 
 ## Next Work
 

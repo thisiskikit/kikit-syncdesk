@@ -1,3 +1,6 @@
+import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
+
+import { formatShipmentColumnPreviewValue } from "./shipment-column-preview";
 import type {
   ShipmentColumnConfig,
   ShipmentColumnSourceKey,
@@ -8,6 +11,8 @@ export interface ShipmentColumnSettingsPanelProps {
   columnConfigs: ShipmentColumnConfig[];
   columnWidths: Record<string, number>;
   draggingConfigId: string | null;
+  previewRow: CoupangShipmentWorksheetRow | null;
+  previewRowDescription: string | null;
   openExcelExportDisabled: boolean;
   openNotExportedExcelExportDisabled: boolean;
   selectedRowsCount: number;
@@ -35,8 +40,17 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
         <div>
           <h2 style={{ margin: 0 }}>다운로드 컬럼 설정</h2>
           <div className="muted shipment-grid-note">
-            컬럼명 변경, 소스 변경, 삭제와 추가가 가능합니다. 여기에서 바꾼 순서와 구성이
+            컬럼명 변경, 필드 변경, 삭제, 추가가 가능합니다. 여기에서 바꾸는 순서와 구성은
             워크시트와 엑셀 다운로드에 같이 적용됩니다.
+          </div>
+          <div className="muted shipment-grid-note">
+            {props.previewRowDescription
+              ? `미리보기 기준: ${props.previewRowDescription}`
+              : "배송 시트를 불러오면 여기에서 컬럼별 실제 값을 미리 볼 수 있습니다."}
+          </div>
+          <div className="muted shipment-grid-note">
+            노출상품명은 현재 별도 쿠팡 원본 필드가 아니라 워크시트의 `상품명 + 옵션명` 조합값을
+            기준으로 표시됩니다.
           </div>
         </div>
         <div className="toolbar">
@@ -61,7 +75,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
             onClick={() => props.onOpenExcelSortDialog("notExported")}
             disabled={props.openNotExportedExcelExportDisabled}
           >
-            미출력건 전부 다운로드
+            미출력건 전체 다운로드
           </button>
         </div>
         {props.selectedRowsCount > 0 && props.selectedExportBlockedRowCount > 0 ? (
@@ -77,54 +91,75 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
       </div>
 
       <div className="column-settings-list">
-        {props.columnConfigs.map((config) => (
-          <div
-            key={config.id}
-            className={`column-settings-row${props.draggingConfigId === config.id ? " dragging" : ""}`}
-            draggable
-            onDragStart={() => props.onDragStart(config.id)}
-            onDragEnd={props.onDragEnd}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => props.onDrop(config.id)}
-          >
-            <div className="column-settings-handle">드래그</div>
-            <input
-              value={config.label}
-              onChange={(event) => props.onUpdate(config.id, { label: event.target.value })}
-              placeholder="컬럼명"
-            />
-            <select
-              value={config.sourceKey}
-              onChange={(event) =>
-                props.onUpdate(config.id, {
-                  sourceKey: event.target.value as ShipmentColumnSourceKey,
-                  label:
-                    config.label ||
-                    props.shipmentColumnLabels[event.target.value as ShipmentColumnSourceKey],
-                })
-              }
+        {props.columnConfigs.map((config) => {
+          const previewValue = formatShipmentColumnPreviewValue(props.previewRow, config.sourceKey);
+          return (
+            <div
+              key={config.id}
+              className={`column-settings-row${props.draggingConfigId === config.id ? " dragging" : ""}`}
+              draggable
+              onDragStart={() => props.onDragStart(config.id)}
+              onDragEnd={props.onDragEnd}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={() => props.onDrop(config.id)}
             >
-              {props.shipmentColumnSourceOptions.map((sourceKey) => (
-                <option key={sourceKey} value={sourceKey}>
-                  {props.shipmentColumnLabels[sourceKey]}
-                </option>
-              ))}
-            </select>
-            <div className="muted">
-              현재 너비{" "}
-              {props.columnWidths[config.id] ??
-                props.shipmentColumnDefaultWidths[config.sourceKey]}
-              px
+              <div className="column-settings-handle">드래그</div>
+              <input
+                value={config.label}
+                onChange={(event) => props.onUpdate(config.id, { label: event.target.value })}
+                placeholder="컬럼명"
+              />
+              <select
+                value={config.sourceKey}
+                onChange={(event) =>
+                  props.onUpdate(config.id, {
+                    sourceKey: event.target.value as ShipmentColumnSourceKey,
+                    label:
+                      config.label ||
+                      props.shipmentColumnLabels[event.target.value as ShipmentColumnSourceKey],
+                  })
+                }
+              >
+                {props.shipmentColumnSourceOptions.map((sourceKey) => (
+                  <option key={sourceKey} value={sourceKey}>
+                    {props.shipmentColumnLabels[sourceKey]}
+                  </option>
+                ))}
+              </select>
+              <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
+                <div className="muted" style={{ fontSize: "0.75rem" }}>
+                  미리보기
+                </div>
+                <div
+                  title={previewValue}
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {previewValue}
+                </div>
+                {config.sourceKey === "exposedProductName" ? (
+                  <div className="muted" style={{ fontSize: "0.75rem" }}>
+                    현재 구현: 상품명 + 옵션명 조합값
+                  </div>
+                ) : null}
+              </div>
+              <div className="muted">
+                현재 너비 {props.columnWidths[config.id] ?? props.shipmentColumnDefaultWidths[config.sourceKey]}
+                px
+              </div>
+              <button
+                className="button ghost"
+                onClick={() => props.onDelete(config.id)}
+                disabled={props.columnConfigs.length <= 1}
+              >
+                삭제
+              </button>
             </div>
-            <button
-              className="button ghost"
-              onClick={() => props.onDelete(config.id)}
-              disabled={props.columnConfigs.length <= 1}
-            >
-              삭제
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

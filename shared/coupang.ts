@@ -1244,6 +1244,49 @@ export interface CoupangShipmentWorksheetViewResponse {
   outputCounts: Record<CoupangShipmentWorksheetOutputStatusCard, number>;
 }
 
+export type CoupangShipmentWorksheetAuditStatus = "INSTRUCT" | "ACCEPT";
+export type CoupangShipmentWorksheetAuditHiddenReason = "out_of_scope" | "filtered_out";
+
+export interface AuditCoupangShipmentWorksheetMissingInput {
+  storeId: string;
+  createdAtFrom: string;
+  createdAtTo: string;
+  viewQuery?: Omit<
+    CoupangShipmentWorksheetViewQuery,
+    "storeId" | "page" | "pageSize" | "sortField" | "sortDirection"
+  >;
+}
+
+export interface CoupangShipmentWorksheetAuditMissingItem {
+  sourceKey: string;
+  shipmentBoxId: string;
+  orderId: string;
+  vendorItemId: string | null;
+  sellerProductId: string | null;
+  status: string | null;
+  productName: string;
+  orderedAt: string | null;
+}
+
+export interface CoupangShipmentWorksheetAuditHiddenItem {
+  sourceKey: string;
+  rowId: string;
+  status: string | null;
+  productName: string;
+  hiddenReason: CoupangShipmentWorksheetAuditHiddenReason;
+}
+
+export interface CoupangShipmentWorksheetAuditMissingResponse {
+  auditedStatuses: CoupangShipmentWorksheetAuditStatus[];
+  liveCount: number;
+  worksheetMatchedCount: number;
+  missingCount: number;
+  hiddenCount: number;
+  missingItems: CoupangShipmentWorksheetAuditMissingItem[];
+  hiddenItems: CoupangShipmentWorksheetAuditHiddenItem[];
+  message: string | null;
+}
+
 export type CoupangShipmentWorksheetBulkResolveMode =
   | "invoice_ready"
   | "not_exported_download"

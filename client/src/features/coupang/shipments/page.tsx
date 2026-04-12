@@ -31,6 +31,7 @@ import {
   type CoupangReturnDetail,
   type CoupangReturnRow,
   type CoupangShipmentInvoiceTransmissionStatus,
+  type CoupangShipmentWorksheetAuditMissingResponse,
   type CoupangShipmentWorksheetInvoiceInputApplyResponse,
   type CoupangShipmentWorksheetInvoiceInputApplyRow,
   type CoupangShipmentWorksheetBulkResolveResponse,
@@ -111,6 +112,10 @@ import {
   dedupeInvoiceInputApplyRows,
   resolveSourceKeysForTouchedRowIds,
 } from "./invoice-input-apply";
+import {
+  buildShipmentWorksheetAuditRequest,
+  summarizeShipmentWorksheetAuditResult,
+} from "./shipment-audit-missing";
 import type {
   ShipmentDetailClaimCardView,
   ShipmentDetailInfoRow,
@@ -133,6 +138,7 @@ import type {
 type InvoiceTransmissionMode = "upload" | "update";
 const SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
+const LazyShipmentAuditMissingDialog = lazy(() => import("./shipment-audit-missing-dialog"));
 const LazyShipmentDetailDialog = lazy(() => import("./shipment-detail-dialog"));
 const LazyShipmentExcelSortDialog = lazy(() => import("./shipment-excel-sort-dialog"));
 const LazyShipmentInvoiceInputDialog = lazy(() => import("./shipment-invoice-input-dialog"));
@@ -1278,6 +1284,19 @@ function getShipmentExportValue(row: CoupangShipmentWorksheetRow, sourceKey: Shi
   }
 }
 
+function summarizeShipmentColumnPreviewRow(
+  row: Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber" | "exposedProductName" | "productName">,
+  mode: "selected" | "visible",
+) {
+  const basisLabel = mode === "selected" ? "선택한 행 기준" : "현재 목록 첫 행 기준";
+  const summaryParts = [
+    row.selpickOrderNumber?.trim() ? `셀픽 ${row.selpickOrderNumber.trim()}` : null,
+    row.exposedProductName?.trim() || row.productName?.trim() || null,
+  ].filter(Boolean);
+
+  return summaryParts.length ? `${basisLabel} · ${summaryParts.join(" · ")}` : basisLabel;
+}
+
 function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
@@ -1370,6 +1389,9 @@ export default function CoupangShipmentsPage() {
     Record<string, CoupangShipmentWorksheetRow>
   >({});
   const [feedback, setFeedback] = useState<FeedbackState>(null);
+  const [auditResult, setAuditResult] =
+    useState<CoupangShipmentWorksheetAuditMissingResponse | null>(null);
+  const [isAuditDialogOpen, setIsAuditDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
@@ -1519,6 +1541,8 @@ export default function CoupangShipmentsPage() {
   useEffect(() => {
     if (!filters.selectedStoreId) {
       setSheetSnapshot(null);
+      setAuditResult(null);
+      setIsAuditDialogOpen(false);
       setDraftRows([]);
       setSelectedRowIds(new Set());
       setSelectedRowsById({});
@@ -1540,6 +1564,20 @@ export default function CoupangShipmentsPage() {
     setSelectedCell(null);
   }, [
     filters.selectedStoreId,
+    filters.scope,
+    deferredQuery,
+    filters.invoiceStatusCard,
+    filters.orderStatusCard,
+    filters.outputStatusCard,
+  ]);
+
+  useEffect(() => {
+    setAuditResult(null);
+    setIsAuditDialogOpen(false);
+  }, [
+    filters.selectedStoreId,
+    filters.createdAtFrom,
+    filters.createdAtTo,
     filters.scope,
     deferredQuery,
     filters.invoiceStatusCard,
@@ -1577,6 +1615,23 @@ export default function CoupangShipmentsPage() {
     [selectedRowIds, visibleRows],
   );
   const selectedRows = useMemo(() => Object.values(selectedRowsById), [selectedRowsById]);
+  const selectedPreviewRow = useMemo(() => {
+    for (const rowId of Array.from(selectedRowIds)) {
+      const row = selectedRowsById[rowId];
+      if (row) {
+        return row;
+      }
+    }
+
+    return null;
+  }, [selectedRowIds, selectedRowsById]);
+  const columnPreviewRow = selectedPreviewRow ?? visibleRows[0] ?? activeSheet?.items[0] ?? null;
+  const columnPreviewDescription = columnPreviewRow
+    ? summarizeShipmentColumnPreviewRow(
+        columnPreviewRow,
+        selectedPreviewRow ? "selected" : "visible",
+      )
+    : null;
   const selectedExportBlockedRows = useMemo(
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
@@ -2213,6 +2268,83 @@ export default function CoupangShipmentsPage() {
       sortField: activeSortField,
       sortDirection: activeSortDirection,
     };
+  }
+
+  async function executeShipmentAuditMissing() {
+    const requestFilters = normalizeFiltersToSeoulToday(filters);
+    if (!requestFilters.selectedStoreId) {
+      return null;
+    }
+
+    if (!areFiltersEqual(filters, requestFilters)) {
+      setFilters(requestFilters);
+    }
+
+    const localToastId = startLocalOperation({
+      channel: "coupang",
+      actionName: "쿠팡 배송 시트 누락 검수",
+      targetCount: 1,
+    });
+    setBusyAction("audit-missing");
+    setFeedback(null);
+    setAuditResult(null);
+
+    try {
+      const response = await apiRequestJson<CoupangShipmentWorksheetAuditMissingResponse>(
+        "POST",
+        "/api/coupang/shipments/worksheet/audit-missing",
+        buildShipmentWorksheetAuditRequest({
+          storeId: requestFilters.selectedStoreId,
+          createdAtFrom: requestFilters.createdAtFrom,
+          createdAtTo: requestFilters.createdAtTo,
+          scope: requestFilters.scope,
+          query: deferredQuery,
+          invoiceStatusCard: requestFilters.invoiceStatusCard,
+          orderStatusCard: requestFilters.orderStatusCard,
+          outputStatusCard: requestFilters.outputStatusCard,
+        }),
+      );
+
+      const warning = response.missingCount > 0 || response.hiddenCount > 0;
+      const details = [
+        ...response.missingItems
+          .slice(0, 4)
+          .map((item) => `[누락] ${item.status ?? "-"} / ${item.productName} / ${item.shipmentBoxId}`),
+        ...response.hiddenItems
+          .slice(0, 4)
+          .map((item) => `[숨김] ${item.status ?? "-"} / ${item.productName} / ${item.hiddenReason}`),
+      ];
+
+      setAuditResult(response);
+      setIsAuditDialogOpen(warning);
+      setFeedback({
+        type: warning ? "warning" : "success",
+        title: "누락 검수 완료",
+        message: response.message ?? summarizeShipmentWorksheetAuditResult(response),
+        details,
+      });
+      finishLocalOperation(localToastId, {
+        status: warning ? "warning" : "success",
+        summary: `누락 ${response.missingCount}건 / 숨김 ${response.hiddenCount}건`,
+      });
+      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "누락 검수에 실패했습니다.";
+      setFeedback({
+        type: "error",
+        title: "누락 검수 실패",
+        message,
+        details: [],
+      });
+      finishLocalOperation(localToastId, {
+        status: "error",
+        errorMessage: message,
+      });
+      return null;
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function resolveWorksheetBulkRows(
@@ -3689,6 +3821,13 @@ export default function CoupangShipmentsPage() {
                 <div className="shipment-manage-actions-menu">
                   <button
                     className="button ghost"
+                    onClick={() => void executeShipmentAuditMissing()}
+                    disabled={collectActionDisabled}
+                  >
+                    {busyAction === "audit-missing" ? "누락 검수 중..." : "누락 검수"}
+                  </button>
+                  <button
+                    className="button ghost"
                     onClick={() => void collectWorksheet("incremental")}
                     disabled={collectActionDisabled}
                   >
@@ -3972,6 +4111,22 @@ export default function CoupangShipmentsPage() {
         </details>
       ) : null}
 
+      {auditResult ? (
+        <div className={`feedback${auditResult.missingCount > 0 || auditResult.hiddenCount > 0 ? " warning" : " success"}`}>
+          <strong>누락 검수 결과</strong>
+          <div className="muted">{auditResult.message ?? summarizeShipmentWorksheetAuditResult(auditResult)}</div>
+          <div className="toolbar" style={{ justifyContent: "space-between", marginTop: 12 }}>
+            <div className="muted">
+              live {formatNumber(auditResult.liveCount)}건 / 누락 {formatNumber(auditResult.missingCount)}건 /
+              현재 뷰 숨김 {formatNumber(auditResult.hiddenCount)}건
+            </div>
+            <button className="button ghost" onClick={() => setIsAuditDialogOpen(true)}>
+              상세 보기
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {activeTab === "worksheet" ? (
         <div className="card">
           <div className="card-header">
@@ -4110,6 +4265,8 @@ export default function CoupangShipmentsPage() {
             columnConfigs={columnConfigs}
             columnWidths={columnWidths}
             draggingConfigId={draggingConfigId}
+            previewRow={columnPreviewRow}
+            previewRowDescription={columnPreviewDescription}
             openExcelExportDisabled={openExcelExportDisabled}
             openNotExportedExcelExportDisabled={openNotExportedExcelExportDisabled}
             selectedRowsCount={selectedRows.length}
@@ -4131,6 +4288,14 @@ export default function CoupangShipmentsPage() {
           />
         </Suspense>
       )}
+
+      <Suspense fallback={null}>
+        <LazyShipmentAuditMissingDialog
+          isOpen={isAuditDialogOpen}
+          result={auditResult}
+          onClose={() => setIsAuditDialogOpen(false)}
+        />
+      </Suspense>
 
       <Suspense
         fallback={

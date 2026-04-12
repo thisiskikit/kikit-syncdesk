@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import type { CollectCoupangShipmentInput } from "@shared/coupang";
 import {
   applyShipmentWorksheetInvoiceInput,
+  auditShipmentWorksheetMissing,
   collectShipmentWorksheet,
   getShipmentWorksheet,
   getShipmentWorksheetView,
@@ -22,6 +23,7 @@ import {
   asString,
   parseCollectShipmentInput,
   parseInvoiceTargets,
+  parseShipmentWorksheetAuditMissingInput,
   parseShipmentWorksheetBulkResolveRequest,
   parseShipmentWorksheetInvoiceInputApplyRequest,
   parseShipmentWorksheetPatchInput,
@@ -267,6 +269,25 @@ export const applyShipmentWorksheetInvoiceInputHandler: RequestHandler = async (
         error instanceof Error
           ? error.message
           : "Failed to apply Coupang shipment worksheet invoice input.",
+    });
+  }
+};
+
+export const auditShipmentWorksheetMissingHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseShipmentWorksheetAuditMissingInput(req.body);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+
+    sendData(res, await auditShipmentWorksheetMissing(input));
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_WORKSHEET_AUDIT_MISSING_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to audit missing Coupang shipment worksheet rows.",
     });
   }
 };

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   applyShipmentWorksheetInvoiceInputHandler,
+  auditShipmentWorksheetMissingHandler,
   collectShipmentWorksheetHandler,
   getShipmentWorksheetDetailHandler,
   getShipmentWorksheetHandler,
@@ -19,6 +20,7 @@ router.get("/worksheet/detail", getShipmentWorksheetDetailHandler);
 router.post("/collect", collectShipmentWorksheetHandler);
 router.patch("/worksheet", patchShipmentWorksheetHandler);
 router.post("/worksheet/invoice-input/apply", applyShipmentWorksheetInvoiceInputHandler);
+router.post("/worksheet/audit-missing", auditShipmentWorksheetMissingHandler);
 router.post("/worksheet/resolve", resolveShipmentWorksheetBulkRowsHandler);
 router.post("/invoices/upload", uploadInvoiceHandler);
 router.post("/invoices/update", updateInvoiceHandler);

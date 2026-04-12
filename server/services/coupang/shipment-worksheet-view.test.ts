@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import {
   buildShipmentWorksheetViewData,
+  getShipmentWorksheetRowHiddenReason,
   resolveShipmentWorksheetRows,
 } from "./shipment-worksheet-view";
 
@@ -254,5 +255,30 @@ describe("shipment worksheet view", () => {
     expect(resolved.blockedItems.map((row) => row.id)).toEqual(["2"]);
     expect(resolved.matchedCount).toBe(2);
     expect(resolved.resolvedCount).toBe(1);
+  });
+
+  it("classifies whether a worksheet row is out of scope or filtered out", () => {
+    const acceptRow = buildRow({ id: "1", status: "ACCEPT" });
+    const deliveringRow = buildRow({ id: "2", status: "DELIVERING", exportedAt: "2026-04-09T11:00:00.000Z" });
+
+    expect(
+      getShipmentWorksheetRowHiddenReason(acceptRow, {
+        scope: "dispatch_active",
+        query: "Product 1",
+      }),
+    ).toBeNull();
+
+    expect(
+      getShipmentWorksheetRowHiddenReason(acceptRow, {
+        scope: "dispatch_active",
+        query: "no-match",
+      }),
+    ).toBe("filtered_out");
+
+    expect(
+      getShipmentWorksheetRowHiddenReason(deliveringRow, {
+        scope: "dispatch_active",
+      }),
+    ).toBe("out_of_scope");
   });
 });

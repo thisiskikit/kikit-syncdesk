@@ -1,4 +1,5 @@
 import type {
+  AuditCoupangShipmentWorksheetMissingInput,
   ApplyCoupangShipmentWorksheetInvoiceInput,
   CollectCoupangShipmentInput,
   CoupangCancelOrderTarget,
@@ -321,6 +322,26 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
         ? sortField
         : undefined,
     sortDirection: sortDirection === "desc" ? "desc" : "asc",
+  };
+}
+
+export function parseShipmentWorksheetAuditMissingInput(
+  value: unknown,
+): AuditCoupangShipmentWorksheetMissingInput {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const parsedViewQuery = parseShipmentWorksheetViewQuery(item.viewQuery);
+
+  return {
+    storeId: asString(item.storeId),
+    createdAtFrom: asString(item.createdAtFrom),
+    createdAtTo: asString(item.createdAtTo),
+    viewQuery: {
+      scope: parsedViewQuery.scope,
+      query: parsedViewQuery.query,
+      invoiceStatusCard: parsedViewQuery.invoiceStatusCard,
+      orderStatusCard: parsedViewQuery.orderStatusCard,
+      outputStatusCard: parsedViewQuery.outputStatusCard,
+    },
   };
 }
 

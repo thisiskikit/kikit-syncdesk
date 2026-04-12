@@ -1,4 +1,5 @@
-﻿import type {
+import type {
+  AuditCoupangShipmentWorksheetMissingInput,
   ApplyCoupangShipmentWorksheetInvoiceInput,
   CollectCoupangShipmentInput,
   CoupangExchangeDetail,
@@ -8,6 +9,7 @@
   CoupangOrderRow,
   CoupangReturnDetail,
   CoupangReturnRow,
+  CoupangShipmentWorksheetAuditMissingResponse,
   CoupangShipmentWorksheetBulkResolveMode,
   CoupangShipmentWorksheetBulkResolveResponse,
   CoupangShipmentSyncMode,
@@ -41,6 +43,7 @@ import {
 import { recordSystemErrorEvent } from "../logs/service";
 import {
   buildShipmentWorksheetViewData,
+  getShipmentWorksheetRowHiddenReason,
   resolveShipmentWorksheetRows,
 } from "./shipment-worksheet-view";
 
@@ -424,6 +427,9 @@ const ORDER_DETAIL_REFRESH_HOURS = 6;
 const QUICK_COLLECT_REQUIRED_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
 const QUICK_COLLECT_PAGE_SIZE = 50;
 const QUICK_COLLECT_MAX_PAGES = 10;
+const WORKSHEET_AUDIT_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
+const WORKSHEET_AUDIT_MAX_RANGE_DAYS = 7;
+const WORKSHEET_AUDIT_PAGE_SIZE = 50;
 const SHIPMENT_WORKSHEET_STATUSES = new Set([
   "ACCEPT",
   "INSTRUCT",
@@ -484,6 +490,29 @@ function createEmptySyncState(): CoupangShipmentWorksheetSyncState {
 function normalizeStatusFilter(value: string | null | undefined) {
   const trimmed = (value ?? "").trim().toUpperCase();
   return trimmed || null;
+}
+
+function parseDateOnlyTimestamp(value: string) {
+  const parsed = Date.parse(`${value}T00:00:00+09:00`);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function validateShipmentWorksheetAuditRange(createdAtFrom: string, createdAtTo: string) {
+  const fromTimestamp = parseDateOnlyTimestamp(createdAtFrom);
+  const toTimestamp = parseDateOnlyTimestamp(createdAtTo);
+
+  if (!Number.isFinite(fromTimestamp) || !Number.isFinite(toTimestamp)) {
+    throw new Error("검수 기간 날짜 형식이 올바르지 않습니다.");
+  }
+
+  if (fromTimestamp > toTimestamp) {
+    throw new Error("검수 시작일은 종료일보다 늦을 수 없습니다.");
+  }
+
+  const daySpan = Math.floor((toTimestamp - fromTimestamp) / (24 * 60 * 60 * 1000)) + 1;
+  if (daySpan > WORKSHEET_AUDIT_MAX_RANGE_DAYS) {
+    throw new Error(`누락 검수는 최대 ${WORKSHEET_AUDIT_MAX_RANGE_DAYS}일 범위까지만 지원합니다.`);
+  }
 }
 
 function formatSeoulDateOnly(value: Date) {
@@ -1589,6 +1618,117 @@ export async function getShipmentWorksheetView(
   return buildWorksheetViewResponse(store, sheet, query, refreshed.message);
 }
 
+export async function auditShipmentWorksheetMissing(
+  input: AuditCoupangShipmentWorksheetMissingInput,
+): Promise<CoupangShipmentWorksheetAuditMissingResponse> {
+  const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
+  const createdAtTo = normalizeWhitespace(input.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    throw new Error("누락 검수에는 시작일과 종료일이 모두 필요합니다.");
+  }
+
+  validateShipmentWorksheetAuditRange(createdAtFrom, createdAtTo);
+
+  await getStoreOrThrow(input.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const worksheetRows = buildWorksheetRows(currentSheet);
+  const worksheetRowBySourceKey = new Map(worksheetRows.map((row) => [row.sourceKey, row] as const));
+  const liveRowBySourceKey = new Map<string, CoupangOrderRow>();
+  const getStatusPriority = (status: string | null | undefined) =>
+    normalizeStatusFilter(status) === "INSTRUCT" ? 2 : normalizeStatusFilter(status) === "ACCEPT" ? 1 : 0;
+
+  for (const status of WORKSHEET_AUDIT_STATUSES) {
+    const response = await listOrders({
+      storeId: input.storeId,
+      createdAtFrom,
+      createdAtTo,
+      status,
+      maxPerPage: WORKSHEET_AUDIT_PAGE_SIZE,
+      fetchAllPages: true,
+      includeCustomerService: false,
+    });
+
+    if (response.source !== "live") {
+      throw new Error(response.message ?? `${status} 상태 live 주문 조회에 실패했습니다.`);
+    }
+
+    for (const row of response.items) {
+      if (!isShipmentWorksheetCandidate(row)) {
+        continue;
+      }
+
+      const sourceKey = buildSourceKey(input.storeId, row);
+      const existing = liveRowBySourceKey.get(sourceKey);
+      if (!existing || getStatusPriority(row.status) >= getStatusPriority(existing.status)) {
+        liveRowBySourceKey.set(sourceKey, row);
+      }
+    }
+  }
+
+  const missingItems: CoupangShipmentWorksheetAuditMissingResponse["missingItems"] = [];
+  const hiddenItems: CoupangShipmentWorksheetAuditMissingResponse["hiddenItems"] = [];
+  let worksheetMatchedCount = 0;
+
+  for (const [sourceKey, liveRow] of Array.from(liveRowBySourceKey.entries())) {
+    const worksheetRow = worksheetRowBySourceKey.get(sourceKey);
+    if (!worksheetRow) {
+      missingItems.push({
+        sourceKey,
+        shipmentBoxId: liveRow.shipmentBoxId,
+        orderId: liveRow.orderId,
+        vendorItemId: liveRow.vendorItemId ?? null,
+        sellerProductId: liveRow.sellerProductId ?? null,
+        status: normalizeStatusFilter(liveRow.status),
+        productName: liveRow.productName,
+        orderedAt: liveRow.orderedAt ?? liveRow.paidAt ?? null,
+      });
+      continue;
+    }
+
+    worksheetMatchedCount += 1;
+    const hiddenReason = getShipmentWorksheetRowHiddenReason(worksheetRow, {
+      storeId: input.storeId,
+      scope: input.viewQuery?.scope,
+      query: input.viewQuery?.query,
+      invoiceStatusCard: input.viewQuery?.invoiceStatusCard,
+      orderStatusCard: input.viewQuery?.orderStatusCard,
+      outputStatusCard: input.viewQuery?.outputStatusCard,
+    });
+
+    if (hiddenReason) {
+      hiddenItems.push({
+        sourceKey,
+        rowId: worksheetRow.id,
+        status: normalizeStatusFilter(worksheetRow.orderStatus),
+        productName: worksheetRow.exposedProductName || worksheetRow.productName,
+        hiddenReason,
+      });
+    }
+  }
+
+  const liveCount = liveRowBySourceKey.size;
+  const missingCount = missingItems.length;
+  const hiddenCount = hiddenItems.length;
+  const message =
+    liveCount === 0
+      ? "선택한 기간의 상품준비중/주문접수 live 주문이 없습니다."
+      : missingCount === 0 && hiddenCount === 0
+        ? `live 주문 ${liveCount}건이 모두 현재 worksheet와 화면 조건에서 확인됩니다.`
+        : `live ${liveCount}건 / worksheet 매칭 ${worksheetMatchedCount}건 / 누락 ${missingCount}건 / 현재 뷰 숨김 ${hiddenCount}건`;
+
+  return {
+    auditedStatuses: [...WORKSHEET_AUDIT_STATUSES],
+    liveCount,
+    worksheetMatchedCount,
+    missingCount,
+    hiddenCount,
+    missingItems,
+    hiddenItems,
+    message,
+  };
+}
+
 export async function resolveShipmentWorksheetBulkRows(input: {
   storeId: string;
   viewQuery?: Partial<CoupangShipmentWorksheetViewQuery> | null;
@@ -2671,6 +2811,9 @@ export async function applyShipmentWorksheetInvoiceInput(
     ]),
   };
 }
+
+
+
 
 
 
