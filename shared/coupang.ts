@@ -1029,6 +1029,7 @@ export interface CoupangShipmentWorksheetRow {
   buyerPhoneNumber: string | null;
   productNumber: string | null;
   exposedProductName: string;
+  coupangDisplayProductName?: string | null;
   productOptionNumber: string | null;
   sellerProductCode: string | null;
   isOverseas: boolean;
@@ -1198,6 +1199,7 @@ export type CoupangShipmentWorksheetColumnSourceKey =
   | "buyerPhoneNumber"
   | "productNumber"
   | "exposedProductName"
+  | "coupangDisplayProductName"
   | "productOptionNumber"
   | "sellerProductCode";
 

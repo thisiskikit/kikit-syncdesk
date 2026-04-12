@@ -40,6 +40,7 @@ function buildWorksheetRow(): CoupangShipmentWorksheetRow {
     buyerPhoneNumber: "010-9999-9999",
     productNumber: "P-1",
     exposedProductName: "노출 상품명",
+    coupangDisplayProductName: "쿠팡 원본 노출 상품명",
     productOptionNumber: "V-1",
     sellerProductCode: "SKU-1",
     isOverseas: false,
@@ -115,6 +116,7 @@ describe("work-data coupang shipment worksheet row persistence", () => {
       __compact: true,
       storeName: "테스트 스토어",
       productName: "테스트 상품",
+      coupangDisplayProductName: "쿠팡 원본 노출 상품명",
       availableActions: ["markPreparing"],
       customerServiceIssueBreakdown: [{ type: "exchange", count: 1, label: "교환" }],
     });

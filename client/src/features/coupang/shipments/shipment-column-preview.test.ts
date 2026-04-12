@@ -10,6 +10,7 @@ const SAMPLE_ROW = {
   productName: "테스트 상품",
   optionName: "레드 / L",
   exposedProductName: "테스트 상품, 레드 / L",
+  coupangDisplayProductName: "쿠팡 실노출 상품명",
   deliveryRequest: null,
 } as unknown as CoupangShipmentWorksheetRow;
 
@@ -19,6 +20,9 @@ describe("shipment-column-preview helpers", () => {
     expect(formatShipmentColumnPreviewValue(SAMPLE_ROW, "salePrice")).toBe("₩12,000");
     expect(formatShipmentColumnPreviewValue(SAMPLE_ROW, "exposedProductName")).toBe(
       "테스트 상품, 레드 / L",
+    );
+    expect(formatShipmentColumnPreviewValue(SAMPLE_ROW, "coupangDisplayProductName")).toBe(
+      "쿠팡 실노출 상품명",
     );
   });
 

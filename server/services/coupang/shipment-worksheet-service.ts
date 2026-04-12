@@ -1382,9 +1382,21 @@ function resolveWorksheetOptionName(
   );
 }
 
+function resolveWorksheetCoupangDisplayProductName(
+  detail: Awaited<ReturnType<typeof getProductDetail>> | null,
+  currentRow: CoupangShipmentWorksheetRow | undefined,
+) {
+  return (
+    normalizeWhitespace(detail?.item?.displayProductName) ??
+    normalizeWhitespace(currentRow?.coupangDisplayProductName) ??
+    null
+  );
+}
+
 function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmentWorksheetRow {
   const optionName = normalizeWorksheetOptionName(row.optionName, row.productName);
   const exposedProductName = buildExposedProductName(row.productName, optionName);
+  const coupangDisplayProductName = normalizeWhitespace(row.coupangDisplayProductName);
   const customerServiceIssueCount = Number.isFinite(row.customerServiceIssueCount)
     ? Math.max(0, Math.trunc(row.customerServiceIssueCount))
     : 0;
@@ -1439,6 +1451,7 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     ...row,
     optionName,
     exposedProductName,
+    coupangDisplayProductName,
     customerServiceIssueCount,
     customerServiceIssueSummary,
     customerServiceIssueBreakdown,
@@ -2421,6 +2434,10 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       currentRow,
       productName,
     );
+    const coupangDisplayProductName = resolveWorksheetCoupangDisplayProductName(
+      productDetail,
+      currentRow,
+    );
     const receiverBaseName =
       currentRow?.receiverBaseName ??
       detail?.receiver.name ??
@@ -2501,6 +2518,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         null,
       productNumber: row.sellerProductId,
       exposedProductName: buildExposedProductName(productName, optionName),
+      coupangDisplayProductName,
       productOptionNumber: row.vendorItemId,
       sellerProductCode: row.externalVendorSku,
       isOverseas,

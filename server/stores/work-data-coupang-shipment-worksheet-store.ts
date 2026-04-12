@@ -184,6 +184,10 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
         : "unknown",
     customerServiceFetchedAt:
       typeof row.customerServiceFetchedAt === "string" ? row.customerServiceFetchedAt : null,
+    coupangDisplayProductName:
+      typeof row.coupangDisplayProductName === "string" && row.coupangDisplayProductName.trim()
+        ? row.coupangDisplayProductName
+        : null,
     coupangDeliveryCompanyCode: null,
     coupangInvoiceNumber: null,
     coupangInvoiceUploadedAt: null,
@@ -268,6 +272,7 @@ export function restoreWorksheetRowFromDatabaseRow(
     buyerPhoneNumber: null,
     productNumber: null,
     exposedProductName: "",
+    coupangDisplayProductName: null,
     productOptionNumber: null,
     sellerProductCode: null,
     isOverseas: false,

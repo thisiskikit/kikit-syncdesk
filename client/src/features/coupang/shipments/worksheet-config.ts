@@ -83,6 +83,7 @@ export const SHIPMENT_COLUMN_LABELS: Record<ShipmentColumnSourceKey, string> = {
   buyerPhoneNumber: "구매자전화번호",
   productNumber: "상품번호",
   exposedProductName: "노출상품명",
+  coupangDisplayProductName: "쿠팡 원본 노출상품명",
   productOptionNumber: "상품옵션번호",
   sellerProductCode: "판매자상품코드",
 };
@@ -109,6 +110,7 @@ export const SHIPMENT_COLUMN_DEFAULT_WIDTHS: Record<ShipmentColumnSourceKey, num
   buyerPhoneNumber: 130,
   productNumber: 120,
   exposedProductName: 220,
+  coupangDisplayProductName: 220,
   productOptionNumber: 130,
   sellerProductCode: 160,
 };
@@ -126,6 +128,7 @@ export const ORDER_STATUS_OPTIONS = [
 export const SHIPMENT_COLUMN_SOURCE_OPTIONS: ShipmentColumnSourceKey[] = [
   "blank",
   ...DEFAULT_SHIPMENT_COLUMN_ORDER,
+  "coupangDisplayProductName",
 ];
 
 export const ORDER_STATUS_LABEL_BY_VALUE = new Map<string, string>(

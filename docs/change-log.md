@@ -11,25 +11,34 @@ This file records repository changes that are considered complete only when the 
   - `client/src/features/coupang/shipments/shipment-column-preview.ts`
   - `client/src/features/coupang/shipments/shipment-column-preview.test.ts`
   - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `shared/coupang.ts`
   - `docs/current-status.md`
   - `docs/change-log.md`
 - Code change:
-  - added a sample-value preview to shipment column settings so operators can see what each selected worksheet column currently resolves to before matching it to downstream export columns
+  - added a sample-value preview to shipment column settings and stored the live Coupang `displayProductName` on shipment worksheet rows so operators can compare the worksheet-composed name with Coupang's raw exposed product name
 - Change content:
   - used the first selected shipment row, or the first currently visible row when nothing is selected, as the preview source inside the lazy-loaded shipment column settings panel
   - added per-column preview text so the active `sourceKey` immediately shows the value that would currently be exported for that row
-  - added an explicit note that `exposedProductName` still reflects the current worksheet-computed value rather than a separate raw Coupang field
+  - stored live `displayProductName` from the Coupang product-detail response on each worksheet row as `coupangDisplayProductName` without changing the existing DB column layout
+  - added `쿠팡 원본 노출상품명` as a selectable shipment column source while keeping the previous default column order unchanged
+  - updated column settings so `노출상품명` and `쿠팡 원본 노출상품명` can be compared side by side from the same preview row
 - Reason:
-  - operators needed a quick way to verify what shipment worksheet values were actually flowing into configurable columns before lining them up with external templates
+  - operators needed to distinguish between the worksheet-composed exposed name and Coupang's actual raw exposed product name before aligning shipment export columns to external templates
 - Impact scope:
   - COUPANG shipment column-settings UX
   - COUPANG worksheet export-column verification workflow
+  - COUPANG shipment worksheet row payload shape
 - Remaining issues:
-  - this task improves visibility only; it does not yet ingest a separate raw Coupang exposed-product-name field
+  - the raw field now stores product-level `displayProductName`; if we later need option-level raw display text too, that will require a separate field
   - browser-level manual verification for the new column preview was not run in this task
 - Verification:
   - `npm run check`
-  - `npx vitest run client/src/features/coupang/shipments/shipment-column-preview.test.ts`
+  - `npx vitest run client/src/features/coupang/shipments/shipment-column-preview.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
 
 ## 2026-04-12 / COUPANG Shipment Missing Audit
 

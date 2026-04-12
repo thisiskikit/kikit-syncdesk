@@ -568,6 +568,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.items[0]?.productName).toBe("Registered Product");
     expect(result.items[0]?.optionName).toBe("Registered Option");
     expect(result.items[0]?.exposedProductName).toBe("Registered Product, Registered Option");
+    expect(result.items[0]?.coupangDisplayProductName).toBe("Exposed Product");
   });
 
   it("stores the total order price in the worksheet when quantity is greater than one", async () => {

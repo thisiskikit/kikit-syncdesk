@@ -49,8 +49,8 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
               : "배송 시트를 불러오면 여기에서 컬럼별 실제 값을 미리 볼 수 있습니다."}
           </div>
           <div className="muted shipment-grid-note">
-            노출상품명은 현재 별도 쿠팡 원본 필드가 아니라 워크시트의 `상품명 + 옵션명` 조합값을
-            기준으로 표시됩니다.
+            `노출상품명`은 현재 워크시트 조합값이고, `쿠팡 원본 노출상품명`은 상품 상세에서 받은
+            `displayProductName` 기준으로 따로 저장됩니다.
           </div>
         </div>
         <div className="toolbar">
@@ -93,6 +93,17 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
       <div className="column-settings-list">
         {props.columnConfigs.map((config) => {
           const previewValue = formatShipmentColumnPreviewValue(props.previewRow, config.sourceKey);
+          const combinedPreviewValue = formatShipmentColumnPreviewValue(
+            props.previewRow,
+            "exposedProductName",
+          );
+          const rawCoupangPreviewValue = formatShipmentColumnPreviewValue(
+            props.previewRow,
+            "coupangDisplayProductName",
+          );
+          const shouldShowCoupangNameComparison =
+            config.sourceKey === "exposedProductName" ||
+            config.sourceKey === "coupangDisplayProductName";
           return (
             <div
               key={config.id}
@@ -140,9 +151,11 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                 >
                   {previewValue}
                 </div>
-                {config.sourceKey === "exposedProductName" ? (
+                {shouldShowCoupangNameComparison ? (
                   <div className="muted" style={{ fontSize: "0.75rem" }}>
-                    현재 구현: 상품명 + 옵션명 조합값
+                    현재 조합값: {combinedPreviewValue}
+                    <br />
+                    쿠팡 원본값: {rawCoupangPreviewValue}
                   </div>
                 ) : null}
               </div>
