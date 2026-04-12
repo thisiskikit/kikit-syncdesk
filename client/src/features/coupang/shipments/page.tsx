@@ -30,6 +30,8 @@ import {
   type CoupangPrepareTarget,
   type CoupangReturnDetail,
   type CoupangReturnRow,
+  type CoupangShipmentArchiveRow,
+  type CoupangShipmentArchiveViewResponse,
   type CoupangShipmentInvoiceTransmissionStatus,
   type CoupangShipmentWorksheetAuditMissingResponse,
   type CoupangShipmentWorksheetInvoiceInputApplyResponse,
@@ -397,7 +399,24 @@ function buildWorksheetViewUrl(input: {
   return `/api/coupang/shipments/worksheet/view?${params.toString()}`;
 }
 
-function buildShipmentWorksheetDetailUrl(
+function buildShipmentArchiveViewUrl(input: {
+  storeId: string;
+  page: number;
+  pageSize: number;
+  query: string;
+}) {
+  const params = new URLSearchParams({
+    storeId: input.storeId,
+    page: String(input.page),
+    pageSize: String(input.pageSize),
+    query: input.query,
+  });
+
+  return `/api/coupang/shipments/archive/view?${params.toString()}`;
+}
+
+function buildShipmentDetailUrl(
+  path: "/api/coupang/shipments/worksheet/detail" | "/api/coupang/shipments/archive/detail",
   storeId: string,
   row: Pick<
     CoupangShipmentWorksheetRow,
@@ -424,7 +443,7 @@ function buildShipmentWorksheetDetailUrl(
     params.set("orderedAtRaw", row.orderedAtRaw.trim());
   }
 
-  return `/api/coupang/shipments/worksheet/detail?${params.toString()}`;
+  return `${path}?${params.toString()}`;
 }
 
 function makeColumnId() {
@@ -1403,13 +1422,14 @@ export default function CoupangShipmentsPage() {
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
-  const [activeTab, setActiveTab] = useState<"worksheet" | "settings">("worksheet");
+  const [activeTab, setActiveTab] = useState<"worksheet" | "archive" | "settings">("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
     "kikit:coupang-shipments:worksheet-page-size",
     50,
   );
   const [worksheetPage, setWorksheetPage] = useState(1);
+  const [archivePage, setArchivePage] = useState(1);
   const [isInvoiceInputDialogOpen, setIsInvoiceInputDialogOpen] = useState(false);
   const [invoiceInputDialogValue, setInvoiceInputDialogValue] = useState("");
   const [isExcelSortDialogOpen, setIsExcelSortDialogOpen] = useState(false);
@@ -1508,6 +1528,28 @@ export default function CoupangShipmentsPage() {
     refetchOnMount: "always",
     refetchOnWindowFocus: "always",
   });
+  const archiveQuery = useQuery({
+    queryKey: [
+      "/api/coupang/shipments/archive/view",
+      filters.selectedStoreId,
+      archivePage,
+      worksheetPageSize,
+      deferredQuery,
+      activeTab,
+    ],
+    queryFn: () =>
+      getJson<CoupangShipmentArchiveViewResponse>(
+        buildShipmentArchiveViewUrl({
+          storeId: filters.selectedStoreId,
+          page: archivePage,
+          pageSize: worksheetPageSize,
+          query: deferredQuery,
+        }),
+      ),
+    enabled: Boolean(filters.selectedStoreId && activeTab === "archive"),
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
+  });
 
   useEffect(() => {
     if (!worksheetQuery.data) {
@@ -1561,13 +1603,12 @@ export default function CoupangShipmentsPage() {
   }, [filters.selectedStoreId]);
 
   useEffect(() => {
-    if (activeTab !== "worksheet") {
-      setDetailRowSnapshot(null);
-    }
+    setDetailRowSnapshot(null);
   }, [activeTab]);
 
   useEffect(() => {
     setWorksheetPage(1);
+    setArchivePage(1);
     setSelectedCell(null);
   }, [
     filters.selectedStoreId,
@@ -1577,6 +1618,21 @@ export default function CoupangShipmentsPage() {
     filters.orderStatusCard,
     filters.outputStatusCard,
   ]);
+
+  useEffect(() => {
+    if (!archiveQuery.data) {
+      return;
+    }
+
+    setDetailRowSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const matched = archiveQuery.data.items.find((row) => row.id === current.id);
+      return matched ?? current;
+    });
+  }, [archiveQuery.data]);
 
   useEffect(() => {
     setAuditResult(null);
@@ -1605,11 +1661,14 @@ export default function CoupangShipmentsPage() {
   ]);
 
   const activeSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
+  const archiveSheet = archiveQuery.data ?? null;
   const activeInvoiceStatusCard = normalizeInvoiceStatusCardKey(filters.invoiceStatusCard);
   const activeOrderStatusCard = normalizeOrderStatusCardKey(filters.orderStatusCard);
   const activeOutputStatusCard = normalizeOutputStatusCardKey(filters.outputStatusCard);
   const visibleRows = draftRows;
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
+  const archiveRows = archiveSheet?.items ?? [];
+  const archiveTotalPages = archiveSheet?.totalPages ?? 1;
   const scopeCounts = activeSheet?.scopeCounts ?? {
     dispatch_active: 0,
     post_dispatch: 0,
@@ -1662,16 +1721,22 @@ export default function CoupangShipmentsPage() {
       return null;
     }
 
-    return (
-      visibleRows.find((row) => row.id === detailRowSnapshot.id) ??
+    if (activeTab === "archive") {
+      return archiveRows.find((row) => row.id === detailRowSnapshot.id) ?? detailRowSnapshot;
+    }
+
+    return visibleRows.find((row) => row.id === detailRowSnapshot.id) ??
       selectedRowsById[detailRowSnapshot.id] ??
-      detailRowSnapshot
-    );
-  }, [detailRowSnapshot, selectedRowsById, visibleRows]);
+      detailRowSnapshot;
+  }, [activeTab, archiveRows, detailRowSnapshot, selectedRowsById, visibleRows]);
 
   useEffect(() => {
     setWorksheetPage((current) => Math.min(current, worksheetTotalPages));
   }, [worksheetTotalPages]);
+
+  useEffect(() => {
+    setArchivePage((current) => Math.min(current, archiveTotalPages));
+  }, [archiveTotalPages]);
 
   useEffect(() => {
     setSelectedCell(null);
@@ -1679,7 +1744,9 @@ export default function CoupangShipmentsPage() {
 
   const shipmentDetailQuery = useQuery({
     queryKey: [
-      "/api/coupang/shipments/worksheet/detail",
+      activeTab === "archive"
+        ? "/api/coupang/shipments/archive/detail"
+        : "/api/coupang/shipments/worksheet/detail",
       filters.selectedStoreId,
       detailRow?.id ?? null,
       detailRow?.shipmentBoxId ?? null,
@@ -1690,7 +1757,13 @@ export default function CoupangShipmentsPage() {
     ],
     queryFn: () =>
       getJson<CoupangShipmentWorksheetDetailResponse>(
-        buildShipmentWorksheetDetailUrl(filters.selectedStoreId, detailRow!),
+        buildShipmentDetailUrl(
+          activeTab === "archive"
+            ? "/api/coupang/shipments/archive/detail"
+            : "/api/coupang/shipments/worksheet/detail",
+          filters.selectedStoreId,
+          detailRow!,
+        ),
       ),
     enabled: Boolean(filters.selectedStoreId && detailRow && (detailRow.shipmentBoxId || detailRow.orderId)),
   });
@@ -2234,6 +2307,7 @@ export default function CoupangShipmentsPage() {
 
     return items;
   }, [feedback, infoBanner, isFallback, syncBanner]);
+  const isArchiveTab = activeTab === "archive";
   const transmitActionLabel = worksheetMode === "invoice" ? "송장 전송하기" : "선택 송장 전송";
   const transmitActionBusyLabel =
     busyAction === "invoice-transmit" || busyAction === "execute"
@@ -2247,7 +2321,7 @@ export default function CoupangShipmentsPage() {
     busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const refreshActionDisabled =
-    !filters.selectedStoreId || worksheetQuery.isFetching || busyAction !== null;
+    !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
   const openInvoiceInputDisabled = !(activeSheet?.totalRowCount ?? draftRows.length) || busyAction !== null;
   const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
   const openNotExportedExcelExportDisabled =
@@ -3789,16 +3863,40 @@ export default function CoupangShipmentsPage() {
                 tone={activeSheet?.source === "live" ? "live" : "draft"}
                 label={activeSheet?.source === "live" ? "실데이터" : "대체 데이터"}
               />
-              <StatusBadge tone="shared" label="셀픽 워크시트" />
+              <StatusBadge
+                tone="shared"
+                label={activeTab === "archive" ? "보관함" : activeTab === "settings" ? "컬럼 설정" : "셀픽 워크시트"}
+              />
             </div>
             <h1>쿠팡 배송/송장</h1>
             <p>
               배송 시트를 셀픽 헤더 규칙으로 수집하고, 표 안 붙여넣기와 셀픽주문번호 기준 송장
               전송을 한 화면에서 처리합니다.
             </p>
+            <div className="segmented-control" style={{ marginTop: "0.75rem", width: "fit-content" }}>
+              <button
+                className={`segmented-button${activeTab === "worksheet" ? " active" : ""}`}
+                onClick={() => setActiveTab("worksheet")}
+              >
+                워크시트
+              </button>
+              <button
+                className={`segmented-button${activeTab === "archive" ? " active" : ""}`}
+                onClick={() => setActiveTab("archive")}
+              >
+                보관함
+              </button>
+              <button
+                className={`segmented-button${activeTab === "settings" ? " active" : ""}`}
+                onClick={() => setActiveTab("settings")}
+              >
+                컬럼 설정
+              </button>
+            </div>
           </div>
 
           <div className="shipment-page-actions">
+            {activeTab !== "archive" ? (
             <div className="shipment-primary-actions">
               <button
                 className="button"
@@ -3895,11 +3993,18 @@ export default function CoupangShipmentsPage() {
                 </div>
               </details>
             </div>
-            {isFallback ? (
+            ) : (
+              <div className="shipment-primary-actions">
+                <div className="muted">
+                  보관함은 읽기 전용입니다. 상세 확인만 가능하고 수정, 송장 처리, 상품준비중 처리는 숨겨집니다.
+                </div>
+              </div>
+            )}
+            {activeTab !== "archive" && isFallback ? (
               <div className="muted action-disabled-reason">
                 대체 데이터에서는 송장 전송을 실행할 수 없습니다.
               </div>
-            ) : selectedInvoiceBlockedRows.length ? (
+            ) : activeTab !== "archive" && selectedInvoiceBlockedRows.length ? (
               <div className="muted action-disabled-reason">
                 클레임 {selectedInvoiceBlockedRows.length}건은 송장 전송 대상에서 제외됩니다.
               </div>
@@ -3926,26 +4031,30 @@ export default function CoupangShipmentsPage() {
               </option>
             ))}
           </select>
-          <input
-            type="date"
-            value={filters.createdAtFrom}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                createdAtFrom: event.target.value,
-              }))
-            }
-          />
-          <input
-            type="date"
-            value={filters.createdAtTo}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                createdAtTo: event.target.value,
-              }))
-            }
-          />
+          {activeTab !== "archive" ? (
+            <>
+              <input
+                type="date"
+                value={filters.createdAtFrom}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    createdAtFrom: event.target.value,
+                  }))
+                }
+              />
+              <input
+                type="date"
+                value={filters.createdAtTo}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    createdAtTo: event.target.value,
+                  }))
+                }
+              />
+            </>
+          ) : null}
           <input
             value={filters.query}
             onChange={(event) =>
@@ -3959,26 +4068,28 @@ export default function CoupangShipmentsPage() {
         </div>
 
         <div className="shipment-filter-support">
-          <select
-            aria-label="목록 건수"
-            value={filters.maxPerPage}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                maxPerPage: Number(event.target.value),
-              }))
-            }
-          >
-            <option value={10}>10건</option>
-            <option value={20}>20건</option>
-            <option value={50}>50건</option>
-          </select>
+          {activeTab !== "archive" ? (
+            <select
+              aria-label="목록 건수"
+              value={filters.maxPerPage}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  maxPerPage: Number(event.target.value),
+                }))
+              }
+            >
+              <option value={10}>10건</option>
+              <option value={20}>20건</option>
+              <option value={50}>50건</option>
+            </select>
+          ) : null}
           <button
             type="button"
             className="button ghost shipment-icon-button"
-            aria-label="워크시트 새로고침"
-            title="워크시트 새로고침"
-            onClick={() => void worksheetQuery.refetch()}
+            aria-label={activeTab === "archive" ? "보관함 새로고침" : "워크시트 새로고침"}
+            title={activeTab === "archive" ? "보관함 새로고침" : "워크시트 새로고침"}
+            onClick={() => void (activeTab === "archive" ? archiveQuery.refetch() : worksheetQuery.refetch())}
             disabled={refreshActionDisabled}
           >
             <RefreshCcw size={16} aria-hidden="true" />
@@ -3986,6 +4097,8 @@ export default function CoupangShipmentsPage() {
         </div>
       </div>
 
+      {activeTab !== "archive" ? (
+        <>
       <div className="card shipment-status-toolbar">
         <div className="shipment-status-group">
           <div className="shipment-status-group-label">
@@ -4129,6 +4242,29 @@ export default function CoupangShipmentsPage() {
           </div>
         </div>
       </div>
+        </>
+      ) : (
+        <div className="metric-grid">
+          <div className="metric">
+            <div className="metric-label">보관 전체</div>
+            <div className="metric-value">{formatNumber(archiveSheet?.totalRowCount ?? 0)}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">검색 결과</div>
+            <div className="metric-value">{formatNumber(archiveSheet?.filteredRowCount ?? 0)}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">현재 페이지</div>
+            <div className="metric-value">
+              {archivePage} / {archiveTotalPages}
+            </div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">페이지 크기</div>
+            <div className="metric-value">{worksheetPageSize}</div>
+          </div>
+        </div>
+      )}
 
       {recentActivityItems.length ? (
         <details className="card shipment-activity-card">
@@ -4301,6 +4437,118 @@ export default function CoupangShipmentsPage() {
                   }}
                   style={{ height: 640 }}
                 />
+              </div>
+            </>
+          )}
+        </div>
+      ) : activeTab === "archive" ? (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h2 style={{ margin: 0 }}>보관함</h2>
+              <div className="muted shipment-grid-note">
+                출력 완료 후 30일이 지난 배송 이후 일반 주문만 이곳으로 이동합니다. 보관함은 읽기 전용입니다.
+              </div>
+              <div className="muted shipment-grid-note">{detailGuideNotice}</div>
+            </div>
+          </div>
+
+          {archiveQuery.isLoading && !archiveSheet ? (
+            <div className="empty">보관함을 불러오는 중입니다...</div>
+          ) : !(archiveSheet?.totalRowCount ?? 0) ? (
+            <div className="empty">현재 보관함에 저장된 주문이 없습니다.</div>
+          ) : !archiveRows.length ? (
+            <div className="empty">현재 검색 조건에 맞는 보관 주문이 없습니다.</div>
+          ) : (
+            <>
+              <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: "0.75rem" }}>
+                <div className="selection-summary">
+                  전체 {formatNumber(archiveSheet?.filteredRowCount ?? 0)}행 · 현재 페이지 {formatNumber(archiveRows.length)}행
+                  {" · "}
+                  {archivePage} / {archiveTotalPages} 페이지
+                </div>
+                <div className="toolbar" style={{ gap: "0.5rem" }}>
+                  <label style={{ display: "grid", gap: "0.25rem" }}>
+                    <span className="muted">보기 행 수</span>
+                    <select
+                      value={worksheetPageSize}
+                      onChange={(event) => {
+                        setWorksheetPageSize(Number(event.target.value));
+                        setArchivePage(1);
+                      }}
+                    >
+                      {SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size}행
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() => setArchivePage((current) => Math.max(1, current - 1))}
+                    disabled={archivePage <= 1}
+                  >
+                    이전
+                  </button>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() => setArchivePage((current) => Math.min(archiveTotalPages, current + 1))}
+                    disabled={archivePage >= archiveTotalPages}
+                  >
+                    다음
+                  </button>
+                </div>
+              </div>
+
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>보관일시</th>
+                      <th>주문일시</th>
+                      <th>상태</th>
+                      <th>상품명</th>
+                      <th>수령자</th>
+                      <th>송장</th>
+                      <th>출력</th>
+                      <th>상세</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {archiveRows.map((row: CoupangShipmentArchiveRow) => {
+                      const statusPresentation = getWorksheetStatusPresentation(row);
+
+                      return (
+                        <tr key={row.id}>
+                          <td>{formatDateTimeLabel(row.archivedAt)}</td>
+                          <td>{formatDateTimeLabel(row.orderedAtRaw)}</td>
+                          <td>
+                            <span className={`status-pill ${statusPresentation.orderToneClassName}`}>
+                              {statusPresentation.orderLabel}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="table-cell-stack">
+                              <strong>{row.exposedProductName || row.productName || "-"}</strong>
+                              <span className="muted">{row.optionName || row.productOrderNumber || row.orderId}</span>
+                            </div>
+                          </td>
+                          <td>{row.receiverName || "-"}</td>
+                          <td>{formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber])}</td>
+                          <td>{row.exportedAt ? formatDateTimeLabel(row.exportedAt) : "미출력"}</td>
+                          <td className="table-action-cell">
+                            <button className="button ghost" onClick={() => openShipmentDetailDialog(row)}>
+                              상세
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </>
           )}

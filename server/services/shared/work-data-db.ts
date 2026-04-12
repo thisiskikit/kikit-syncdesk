@@ -101,6 +101,42 @@ const createTableStatements = [
     ON coupang_shipment_rows (source_key)
   `,
   `
+    CREATE TABLE IF NOT EXISTS coupang_shipment_archive_rows (
+      id text PRIMARY KEY,
+      store_id text NOT NULL,
+      source_key text NOT NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      selpick_order_number text NOT NULL,
+      order_date_key text NOT NULL,
+      order_status text,
+      ordered_at_raw text,
+      last_order_hydrated_at timestamptz,
+      last_product_hydrated_at timestamptz,
+      shipment_box_id text NOT NULL,
+      order_id text NOT NULL,
+      seller_product_id text,
+      vendor_item_id text,
+      receiver_name text NOT NULL,
+      receiver_base_name text,
+      personal_clearance_code text,
+      delivery_company_code text NOT NULL DEFAULT '',
+      invoice_number text NOT NULL DEFAULT '',
+      invoice_transmission_status text,
+      invoice_transmission_message text,
+      invoice_transmission_at timestamptz,
+      invoice_applied_at timestamptz,
+      exported_at timestamptz,
+      archived_at timestamptz NOT NULL DEFAULT now(),
+      row_data_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS coupang_shipment_archive_rows_source_key_uidx
+    ON coupang_shipment_archive_rows (source_key)
+  `,
+  `
     CREATE TABLE IF NOT EXISTS ui_state_entries (
       key text PRIMARY KEY,
       value_json jsonb NOT NULL DEFAULT '{}'::jsonb,

@@ -4,11 +4,14 @@ import {
   applyShipmentWorksheetInvoiceInput,
   auditShipmentWorksheetMissing,
   collectShipmentWorksheet,
+  getShipmentArchiveDetail,
+  getShipmentArchiveView,
   getShipmentWorksheet,
   getShipmentWorksheetView,
   getShipmentWorksheetDetail,
   patchShipmentWorksheet,
   resolveShipmentWorksheetBulkRows,
+  runShipmentArchive,
 } from "../../../services/coupang/shipment-worksheet-service";
 import {
   updateInvoice,
@@ -23,6 +26,8 @@ import {
   asString,
   parseCollectShipmentInput,
   parseInvoiceTargets,
+  parseRunShipmentArchiveInput,
+  parseShipmentArchiveViewQuery,
   parseShipmentWorksheetAuditMissingInput,
   parseShipmentWorksheetBulkResolveRequest,
   parseShipmentWorksheetInvoiceInputApplyRequest,
@@ -187,6 +192,54 @@ export const getShipmentWorksheetDetailHandler: RequestHandler = async (req, res
         error instanceof Error
           ? error.message
           : "Failed to load Coupang shipment worksheet detail.",
+    });
+  }
+};
+
+export const getShipmentArchiveViewHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseShipmentArchiveViewQuery(req.query);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+
+    sendData(res, await getShipmentArchiveView(input));
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_ARCHIVE_VIEW_FAILED",
+      message:
+        error instanceof Error ? error.message : "Failed to load Coupang shipment archive view.",
+    });
+  }
+};
+
+export const getShipmentArchiveDetailHandler: RequestHandler = async (req, res) => {
+  try {
+    const storeId = typeof req.query.storeId === "string" ? req.query.storeId : "";
+    if (!ensureStoreId(res, storeId)) {
+      return;
+    }
+
+    sendData(
+      res,
+      await getShipmentArchiveDetail({
+        storeId,
+        shipmentBoxId:
+          typeof req.query.shipmentBoxId === "string" ? req.query.shipmentBoxId : undefined,
+        orderId: typeof req.query.orderId === "string" ? req.query.orderId : undefined,
+        vendorItemId:
+          typeof req.query.vendorItemId === "string" ? req.query.vendorItemId : undefined,
+        sellerProductId:
+          typeof req.query.sellerProductId === "string" ? req.query.sellerProductId : undefined,
+        orderedAtRaw:
+          typeof req.query.orderedAtRaw === "string" ? req.query.orderedAtRaw : undefined,
+      }),
+    );
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_ARCHIVE_DETAIL_FAILED",
+      message:
+        error instanceof Error ? error.message : "Failed to load Coupang shipment archive detail.",
     });
   }
 };
@@ -366,6 +419,18 @@ export const updateInvoiceHandler: RequestHandler = async (req, res) => {
     sendError(res, 400, {
       code: "COUPANG_UPDATE_INVOICE_FAILED",
       message: error instanceof Error ? error.message : "Failed to update Coupang invoice.",
+    });
+  }
+};
+
+export const runShipmentArchiveHandler: RequestHandler = async (req, res) => {
+  try {
+    sendData(res, await runShipmentArchive(parseRunShipmentArchiveInput(req.body)));
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_ARCHIVE_RUN_FAILED",
+      message:
+        error instanceof Error ? error.message : "Failed to run Coupang shipment archive.",
     });
   }
 };

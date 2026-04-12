@@ -127,6 +127,15 @@ function hasCustomerServiceIssue(
     Boolean(row.customerServiceIssueBreakdown?.length);
 }
 
+export function hasShipmentWorksheetClaimIssue(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  >,
+) {
+  return hasCustomerServiceIssue(row);
+}
+
 function resolveDisplayOrderStatus(
   row: Pick<
     CoupangShipmentWorksheetRow,
@@ -309,7 +318,7 @@ function getSortValue(
   }
 }
 
-function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
+export function matchesShipmentWorksheetQuery(row: CoupangShipmentWorksheetRow, query: string) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
     return true;
@@ -362,6 +371,10 @@ function matchesScope(row: CoupangShipmentWorksheetRow, scope: CoupangShipmentWo
     default:
       return true;
   }
+}
+
+export function isShipmentWorksheetPostDispatchRow(row: CoupangShipmentWorksheetRow) {
+  return matchesScope(row, "post_dispatch");
 }
 
 function normalizeScope(value: string | null | undefined): CoupangShipmentWorksheetViewScope {
@@ -429,7 +442,7 @@ function resolveFilteredRows(
   query: NormalizedQuery,
 ) {
   const scopedRows = rows.filter((row) => matchesScope(row, query.scope));
-  const searchedRows = scopedRows.filter((row) => matchesQuery(row, query.query));
+  const searchedRows = scopedRows.filter((row) => matchesShipmentWorksheetQuery(row, query.query));
   const filteredRows = searchedRows.filter(
     (row) =>
       matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
@@ -455,7 +468,7 @@ export function getShipmentWorksheetRowHiddenReason(
   }
 
   if (
-    !matchesQuery(row, query.query) ||
+    !matchesShipmentWorksheetQuery(row, query.query) ||
     !matchesInvoiceStatusCard(row, query.invoiceStatusCard) ||
     !matchesOrderStatusCard(row, query.orderStatusCard) ||
     !matchesOutputStatusCard(row, query.outputStatusCard)

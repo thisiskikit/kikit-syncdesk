@@ -8,6 +8,7 @@ import coupangSupportRouter from "./routes/coupang-support";
 import draftsRouter from "./routes/drafts";
 import executionsRouter from "./routes/executions";
 import healthRouter from "./routes/health";
+import internalCoupangShipmentsRouter from "./routes/internal-coupang-shipments";
 import logsRouter from "./routes/logs";
 import naverClaimsRouter from "./routes/naver-claims";
 import naverInquiriesRouter from "./routes/naver-inquiries";
@@ -35,6 +36,7 @@ export function registerRoutes(app: Express) {
   app.use("/api/drafts", draftsRouter);
   app.use("/api/executions", executionsRouter);
   app.use("/api/health", healthRouter);
+  app.use("/api/internal/coupang/shipments", internalCoupangShipmentsRouter);
   app.use("/api/logs", logsRouter);
   app.use("/api/naver", naverClaimsRouter);
   app.use("/api/naver", naverInquiriesRouter);

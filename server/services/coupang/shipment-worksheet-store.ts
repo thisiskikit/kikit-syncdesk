@@ -5,6 +5,8 @@ import {
 } from "../../stores/work-data-coupang-shipment-worksheet-store";
 
 export type {
+  ArchiveCoupangShipmentWorksheetRowsInput,
+  ArchiveCoupangShipmentWorksheetRowsResult,
   CoupangShipmentWorksheetStorePort,
   CoupangShipmentWorksheetStoreSheet,
   CoupangShipmentWorksheetSyncState,

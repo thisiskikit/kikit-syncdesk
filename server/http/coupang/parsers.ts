@@ -15,9 +15,11 @@ import type {
   CoupangShipmentWorksheetBulkResolveRequest,
   CoupangReturnActionTarget,
   CoupangReturnCollectionInvoiceTarget,
+  CoupangShipmentArchiveViewQuery,
   CoupangShipmentWorksheetViewQuery,
   PatchCoupangShipmentWorksheetInput,
   PatchCoupangShipmentWorksheetItemInput,
+  RunCoupangShipmentArchiveInput,
 } from "@shared/coupang";
 
 type JsonRecord = Record<string, unknown>;
@@ -325,6 +327,17 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
   };
 }
 
+export function parseShipmentArchiveViewQuery(value: unknown): CoupangShipmentArchiveViewQuery {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+
+  return {
+    storeId: asString(item.storeId),
+    page: parsePositiveInteger(item.page, 1),
+    pageSize: parsePositiveInteger(item.pageSize, 50),
+    query: asOptionalString(item.query) ?? undefined,
+  };
+}
+
 export function parseShipmentWorksheetAuditMissingInput(
   value: unknown,
 ): AuditCoupangShipmentWorksheetMissingInput {
@@ -376,6 +389,15 @@ export function parseShipmentWorksheetBulkResolveRequest(
           ? "prepare_ready"
           : "not_exported_download",
     viewQuery,
+  };
+}
+
+export function parseRunShipmentArchiveInput(value: unknown): RunCoupangShipmentArchiveInput {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+
+  return {
+    storeId: asOptionalString(item.storeId) ?? undefined,
+    dryRun: item.dryRun === true,
   };
 }
 

@@ -2,6 +2,48 @@
 
 This file records repository changes that are considered complete only when the related code and documentation stay aligned.
 
+## 2026-04-12 / COUPANG Shipment Hot-Archive Split
+
+- Change type:
+  - code and documentation
+- Changed files:
+  - `shared/schema.ts`
+  - `shared/coupang.ts`
+  - `server/interfaces/coupang-shipment-worksheet-store.ts`
+  - `server/services/shared/work-data-db.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/routes/internal-coupang-shipments.ts`
+  - `server/routes.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-archive.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- Code change:
+  - split active Coupang shipment rows from archived rows, added read-only archive APIs/UI, and added an internal archive-run endpoint for scheduler-driven cleanup
+- Change content:
+  - introduced `coupang_shipment_archive_rows` plus store methods for archive read and transactional move
+  - added `GET /api/coupang/shipments/archive/view`, `GET /api/coupang/shipments/archive/detail`, and `POST /api/internal/coupang/shipments/archive/run`
+  - shipment page now exposes a read-only `???` tab with search, pagination, and detail access
+  - archive jobs move exported post-dispatch non-claim rows older than 30 days out of the hot worksheet
+  - collect/recollect now checks archived `sourceKey` values too, so archived rows are not recreated in the hot worksheet
+- Reason:
+  - operators needed the active shipment screen to stay stable even when old delivered/exported rows accumulate for a long time
+- Impact scope:
+  - COUPANG shipment worksheet persistence and read paths
+  - COUPANG shipment page navigation and read-only archive UX
+  - scheduler-facing internal archive execution surface
+- Remaining issues:
+  - browser-level manual verification for the new `???` tab and internal archive run was not performed in this task
+  - Cloud Scheduler wiring itself was not added here; this task added the endpoint the scheduler should call
+- Verification:
+  - `npm run check`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-archive.test.ts`
+
 ## 2026-04-12 / COUPANG Shipment Prepare Missing Guard
 
 - Change type:

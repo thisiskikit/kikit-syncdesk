@@ -16,6 +16,7 @@ const {
   markPreparingMock,
   getProductDetailMock,
   getStoreSheetMock,
+  getArchivedSourceKeysMock,
   setStoreSheetMock,
   recordSystemErrorEventMock,
 } = vi.hoisted(() => ({
@@ -28,6 +29,7 @@ const {
   markPreparingMock: vi.fn(),
   getProductDetailMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
+  getArchivedSourceKeysMock: vi.fn(),
   setStoreSheetMock: vi.fn(),
   recordSystemErrorEventMock: vi.fn(),
 }));
@@ -54,6 +56,7 @@ vi.mock("./product-service", () => ({
 vi.mock("./shipment-worksheet-store", () => ({
   coupangShipmentWorksheetStore: {
     getStoreSheet: getStoreSheetMock,
+    getArchivedSourceKeys: getArchivedSourceKeysMock,
     setStoreSheet: setStoreSheetMock,
   },
 }));
@@ -347,6 +350,7 @@ describe("coupang shipment worksheet collection", () => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
     getStoreSheetMock.mockResolvedValue(buildEmptySheet());
+    getArchivedSourceKeysMock.mockResolvedValue([]);
     listReturnsMock.mockResolvedValue({
       items: [],
       source: "live",
@@ -1640,6 +1644,40 @@ describe("coupang shipment worksheet collection", () => {
         },
       ],
     });
+  });
+
+  it("does not reinsert rows whose sourceKey already exists in archive storage", async () => {
+    getArchivedSourceKeysMock.mockResolvedValue(["store-1:700:V-700"]);
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "700:V-700",
+          shipmentBoxId: "700",
+          orderId: "O-700",
+          vendorItemId: "V-700",
+          status: "INSTRUCT",
+          productName: "Archived Row",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(result.items).toEqual([]);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [],
+      }),
+    );
   });
 });
 

@@ -305,6 +305,45 @@ export const coupangShipmentRows = pgTable(
   }),
 );
 
+export const coupangShipmentArchiveRows = pgTable(
+  "coupang_shipment_archive_rows",
+  {
+    id: text("id").primaryKey(),
+    storeId: text("store_id").notNull(),
+    sourceKey: text("source_key").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    selpickOrderNumber: text("selpick_order_number").notNull(),
+    orderDateKey: text("order_date_key").notNull(),
+    orderStatus: text("order_status"),
+    orderedAtRaw: text("ordered_at_raw"),
+    lastOrderHydratedAt: timestamp("last_order_hydrated_at", { withTimezone: true }),
+    lastProductHydratedAt: timestamp("last_product_hydrated_at", { withTimezone: true }),
+    shipmentBoxId: text("shipment_box_id").notNull(),
+    orderId: text("order_id").notNull(),
+    sellerProductId: text("seller_product_id"),
+    vendorItemId: text("vendor_item_id"),
+    receiverName: text("receiver_name").notNull(),
+    receiverBaseName: text("receiver_base_name"),
+    personalClearanceCode: text("personal_clearance_code"),
+    deliveryCompanyCode: text("delivery_company_code").notNull().default(""),
+    invoiceNumber: text("invoice_number").notNull().default(""),
+    invoiceTransmissionStatus: text("invoice_transmission_status"),
+    invoiceTransmissionMessage: text("invoice_transmission_message"),
+    invoiceTransmissionAt: timestamp("invoice_transmission_at", { withTimezone: true }),
+    invoiceAppliedAt: timestamp("invoice_applied_at", { withTimezone: true }),
+    exportedAt: timestamp("exported_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }).defaultNow().notNull(),
+    rowDataJson: jsonb("row_data_json").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    coupangShipmentArchiveRowSourceUnique: uniqueIndex(
+      "coupang_shipment_archive_rows_source_key_uidx",
+    ).on(table.sourceKey),
+  }),
+);
+
 export const uiStateEntries = pgTable("ui_state_entries", {
   key: text("key").primaryKey(),
   valueJson: jsonb("value_json").notNull().default({}),
@@ -662,6 +701,7 @@ export type InsertChannelStoreSetting = typeof channelStoreSettings.$inferInsert
 export type InsertCoupangStoreSetting = typeof coupangStoreSettings.$inferInsert;
 export type InsertCoupangShipmentSheet = typeof coupangShipmentSheets.$inferInsert;
 export type InsertCoupangShipmentRow = typeof coupangShipmentRows.$inferInsert;
+export type InsertCoupangShipmentArchiveRow = typeof coupangShipmentArchiveRows.$inferInsert;
 export type InsertNaverBulkPriceSourcePreset = typeof naverBulkPriceSourcePresets.$inferInsert;
 export type InsertNaverBulkPriceRulePreset = typeof naverBulkPriceRulePresets.$inferInsert;
 export type InsertNaverBulkPriceRun = typeof naverBulkPriceRuns.$inferInsert;
@@ -701,6 +741,7 @@ export type ChannelStoreSettingRow = typeof channelStoreSettings.$inferSelect;
 export type CoupangStoreSettingRow = typeof coupangStoreSettings.$inferSelect;
 export type CoupangShipmentSheetRow = typeof coupangShipmentSheets.$inferSelect;
 export type CoupangShipmentRowRow = typeof coupangShipmentRows.$inferSelect;
+export type CoupangShipmentArchiveRowRow = typeof coupangShipmentArchiveRows.$inferSelect;
 export type NaverBulkPriceSourcePresetRow = typeof naverBulkPriceSourcePresets.$inferSelect;
 export type NaverBulkPriceRulePresetRow = typeof naverBulkPriceRulePresets.$inferSelect;
 export type NaverBulkPriceRunRow = typeof naverBulkPriceRuns.$inferSelect;

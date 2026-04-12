@@ -1,18 +1,21 @@
 import { randomUUID } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import {
   COUPANG_INVOICE_ALREADY_PROCESSED_MESSAGE,
   isCoupangInvoiceAlreadyProcessedResult,
+  type CoupangShipmentArchiveRow,
   type CoupangDataSource,
   type CoupangShipmentWorksheetRow,
   type CoupangShipmentWorksheetSyncSummary,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
 import {
+  coupangShipmentArchiveRows,
   coupangShipmentRows,
   coupangShipmentSheets,
+  type CoupangShipmentArchiveRowRow,
   type CoupangShipmentRowRow,
 } from "@shared/schema";
 import {
@@ -24,6 +27,8 @@ import {
   toIsoString,
 } from "../services/shared/work-data-db";
 import type {
+  ArchiveCoupangShipmentWorksheetRowsInput,
+  ArchiveCoupangShipmentWorksheetRowsResult,
   CoupangShipmentWorksheetStorePort,
   CoupangShipmentWorksheetSyncState,
 } from "../interfaces/coupang-shipment-worksheet-store";
@@ -41,13 +46,15 @@ type PersistedWorksheetStoreEntry = {
 };
 
 type PersistedWorksheetStore = {
-  version: 1;
+  version: 2;
   stores: Record<string, PersistedWorksheetStoreEntry>;
+  archives: Record<string, CoupangShipmentArchiveRow[]>;
 };
 
 const defaultData: PersistedWorksheetStore = {
-  version: 1,
+  version: 2,
   stores: {},
+  archives: {},
 };
 
 const STALE_INVOICE_PENDING_THRESHOLD_MS = 5 * 60_000;
@@ -201,6 +208,14 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
   } satisfies CoupangShipmentWorksheetRow;
 }
 
+function normalizeArchiveRow(value: CoupangShipmentArchiveRow): CoupangShipmentArchiveRow {
+  const row = normalizeWorksheetRow(value);
+  return {
+    ...row,
+    archivedAt: typeof value.archivedAt === "string" ? value.archivedAt : new Date().toISOString(),
+  };
+}
+
 export function buildCompactWorksheetRowData(
   value: CoupangShipmentWorksheetRow,
 ): CompactWorksheetRowPayload {
@@ -342,6 +357,18 @@ export function restoreWorksheetRowFromDatabaseRow(
   } satisfies CoupangShipmentWorksheetRow);
 }
 
+export function restoreArchiveRowFromDatabaseRow(
+  row: CoupangShipmentArchiveRowRow,
+): CoupangShipmentArchiveRow {
+  return {
+    ...restoreWorksheetRowFromDatabaseRow({
+      ...row,
+      sheetId: "archive",
+    }),
+    archivedAt: toIsoString(row.archivedAt) ?? new Date().toISOString(),
+  };
+}
+
 function normalizeSyncState(
   value: Partial<CoupangShipmentWorksheetSyncState> | null | undefined,
 ): CoupangShipmentWorksheetSyncState {
@@ -399,7 +426,7 @@ function normalizeStoreEntry(value: Partial<PersistedWorksheetStoreEntry> | null
 
 function normalizePersistedStore(value: Partial<PersistedWorksheetStore> | null) {
   return {
-    version: 1 as const,
+    version: 2 as const,
     stores:
       value?.stores && typeof value.stores === "object" && !Array.isArray(value.stores)
         ? Object.fromEntries(
@@ -409,6 +436,93 @@ function normalizePersistedStore(value: Partial<PersistedWorksheetStore> | null)
             ]),
           )
         : {},
+    archives:
+      value?.archives && typeof value.archives === "object" && !Array.isArray(value.archives)
+        ? Object.fromEntries(
+            Object.entries(value.archives).map(([storeId, rows]) => [
+              storeId,
+              Array.isArray(rows)
+                ? rows
+                    .filter((row): row is CoupangShipmentArchiveRow => Boolean(row))
+                    .map((row) => normalizeArchiveRow(row))
+                : [],
+            ]),
+          )
+        : {},
+  };
+}
+
+function buildWorksheetDatabaseRowValue(
+  item: CoupangShipmentWorksheetRow,
+  index: number,
+  input: { sheetId: string; storeId: string },
+) {
+  return {
+    id: item.id,
+    sheetId: input.sheetId,
+    storeId: input.storeId,
+    sourceKey: item.sourceKey,
+    sortOrder: index,
+    selpickOrderNumber: item.selpickOrderNumber,
+    orderDateKey: item.orderDateKey,
+    orderStatus: item.orderStatus,
+    orderedAtRaw: item.orderedAtRaw,
+    lastOrderHydratedAt: toDateOrNull(item.lastOrderHydratedAt),
+    lastProductHydratedAt: toDateOrNull(item.lastProductHydratedAt),
+    shipmentBoxId: item.shipmentBoxId,
+    orderId: item.orderId,
+    sellerProductId: item.sellerProductId,
+    vendorItemId: item.vendorItemId,
+    receiverName: item.receiverName,
+    receiverBaseName: item.receiverBaseName,
+    personalClearanceCode: item.personalClearanceCode,
+    deliveryCompanyCode: item.deliveryCompanyCode,
+    invoiceNumber: item.invoiceNumber,
+    invoiceTransmissionStatus: item.invoiceTransmissionStatus,
+    invoiceTransmissionMessage: item.invoiceTransmissionMessage,
+    invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
+    invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
+    exportedAt: toDateOrNull(item.exportedAt),
+    rowDataJson: buildCompactWorksheetRowData(item),
+    createdAt: toDateOrNull(item.createdAt) ?? new Date(),
+    updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
+  };
+}
+
+function buildArchiveDatabaseRowValue(
+  item: CoupangShipmentArchiveRow,
+  index: number,
+  storeId: string,
+) {
+  return {
+    id: item.id,
+    storeId,
+    sourceKey: item.sourceKey,
+    sortOrder: index,
+    selpickOrderNumber: item.selpickOrderNumber,
+    orderDateKey: item.orderDateKey,
+    orderStatus: item.orderStatus,
+    orderedAtRaw: item.orderedAtRaw,
+    lastOrderHydratedAt: toDateOrNull(item.lastOrderHydratedAt),
+    lastProductHydratedAt: toDateOrNull(item.lastProductHydratedAt),
+    shipmentBoxId: item.shipmentBoxId,
+    orderId: item.orderId,
+    sellerProductId: item.sellerProductId,
+    vendorItemId: item.vendorItemId,
+    receiverName: item.receiverName,
+    receiverBaseName: item.receiverBaseName,
+    personalClearanceCode: item.personalClearanceCode,
+    deliveryCompanyCode: item.deliveryCompanyCode,
+    invoiceNumber: item.invoiceNumber,
+    invoiceTransmissionStatus: item.invoiceTransmissionStatus,
+    invoiceTransmissionMessage: item.invoiceTransmissionMessage,
+    invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
+    invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
+    exportedAt: toDateOrNull(item.exportedAt),
+    archivedAt: toDateOrNull(item.archivedAt) ?? new Date(),
+    rowDataJson: buildCompactWorksheetRowData(item),
+    createdAt: toDateOrNull(item.createdAt) ?? new Date(),
+    updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
   };
 }
 
@@ -515,36 +629,9 @@ export class CoupangShipmentWorksheetStore {
 
               if (entry.items.length) {
                 await database.insert(coupangShipmentRows).values(
-                  entry.items.map((item, index) => ({
-                    id: item.id,
-                    sheetId,
-                    storeId,
-                    sourceKey: item.sourceKey,
-                    sortOrder: index,
-                    selpickOrderNumber: item.selpickOrderNumber,
-                    orderDateKey: item.orderDateKey,
-                    orderStatus: item.orderStatus,
-                    orderedAtRaw: item.orderedAtRaw,
-                    lastOrderHydratedAt: toDateOrNull(item.lastOrderHydratedAt),
-                    lastProductHydratedAt: toDateOrNull(item.lastProductHydratedAt),
-                    shipmentBoxId: item.shipmentBoxId,
-                    orderId: item.orderId,
-                    sellerProductId: item.sellerProductId,
-                    vendorItemId: item.vendorItemId,
-                    receiverName: item.receiverName,
-                    receiverBaseName: item.receiverBaseName,
-                    personalClearanceCode: item.personalClearanceCode,
-                    deliveryCompanyCode: item.deliveryCompanyCode,
-                    invoiceNumber: item.invoiceNumber,
-                    invoiceTransmissionStatus: item.invoiceTransmissionStatus,
-                    invoiceTransmissionMessage: item.invoiceTransmissionMessage,
-                    invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
-                    invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
-                    exportedAt: toDateOrNull(item.exportedAt),
-                    rowDataJson: buildCompactWorksheetRowData(item),
-                    createdAt: toDateOrNull(item.createdAt) ?? new Date(),
-                    updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
-                  })),
+                  entry.items.map((item, index) =>
+                    buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId }),
+                  ),
                 );
               }
 
@@ -627,11 +714,12 @@ export class CoupangShipmentWorksheetStore {
     if (this.legacyMode) {
       const data = await this.loadLegacy();
       await this.persistLegacy({
-        version: 1,
+        version: 2,
         stores: {
           ...data.stores,
           [input.storeId]: nextEntry,
         },
+        archives: data.archives,
       });
 
       return normalizeStoreEntry(nextEntry);
@@ -672,36 +760,9 @@ export class CoupangShipmentWorksheetStore {
 
     if (nextEntry.items.length) {
       await database.insert(coupangShipmentRows).values(
-        nextEntry.items.map((item, index) => ({
-          id: item.id,
-          sheetId,
-          storeId: input.storeId,
-          sourceKey: item.sourceKey,
-          sortOrder: index,
-          selpickOrderNumber: item.selpickOrderNumber,
-          orderDateKey: item.orderDateKey,
-          orderStatus: item.orderStatus,
-          orderedAtRaw: item.orderedAtRaw,
-          lastOrderHydratedAt: toDateOrNull(item.lastOrderHydratedAt),
-          lastProductHydratedAt: toDateOrNull(item.lastProductHydratedAt),
-          shipmentBoxId: item.shipmentBoxId,
-          orderId: item.orderId,
-          sellerProductId: item.sellerProductId,
-          vendorItemId: item.vendorItemId,
-          receiverName: item.receiverName,
-          receiverBaseName: item.receiverBaseName,
-          personalClearanceCode: item.personalClearanceCode,
-          deliveryCompanyCode: item.deliveryCompanyCode,
-          invoiceNumber: item.invoiceNumber,
-          invoiceTransmissionStatus: item.invoiceTransmissionStatus,
-          invoiceTransmissionMessage: item.invoiceTransmissionMessage,
-          invoiceTransmissionAt: toDateOrNull(item.invoiceTransmissionAt),
-          invoiceAppliedAt: toDateOrNull(item.invoiceAppliedAt),
-          exportedAt: toDateOrNull(item.exportedAt),
-          rowDataJson: buildCompactWorksheetRowData(item),
-          createdAt: toDateOrNull(item.createdAt) ?? new Date(),
-          updatedAt: toDateOrNull(item.updatedAt) ?? new Date(),
-        })),
+        nextEntry.items.map((item, index) =>
+          buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId: input.storeId }),
+        ),
       );
     }
 
@@ -709,6 +770,149 @@ export class CoupangShipmentWorksheetStore {
       ...nextEntry,
       updatedAt: nextEntry.updatedAt,
     });
+  }
+
+  async getArchivedRows(storeId: string) {
+    if (this.legacyMode) {
+      const data = await this.loadLegacy();
+      return (data.archives[storeId] ?? []).map(normalizeArchiveRow);
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const rows = await database
+      .select()
+      .from(coupangShipmentArchiveRows)
+      .where(eq(coupangShipmentArchiveRows.storeId, storeId))
+      .orderBy(desc(coupangShipmentArchiveRows.archivedAt), asc(coupangShipmentArchiveRows.sortOrder));
+
+    return rows.map((row) => restoreArchiveRowFromDatabaseRow(row));
+  }
+
+  async getArchivedSourceKeys(storeId: string) {
+    if (this.legacyMode) {
+      const data = await this.loadLegacy();
+      return Array.from(new Set((data.archives[storeId] ?? []).map((row) => row.sourceKey)));
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const rows = await database
+      .select({ sourceKey: coupangShipmentArchiveRows.sourceKey })
+      .from(coupangShipmentArchiveRows)
+      .where(eq(coupangShipmentArchiveRows.storeId, storeId));
+
+    return Array.from(new Set(rows.map((row) => row.sourceKey)));
+  }
+
+  async archiveRows(input: ArchiveCoupangShipmentWorksheetRowsInput): Promise<ArchiveCoupangShipmentWorksheetRowsResult> {
+    const dryRun = input.dryRun === true;
+    const uniqueItems = Array.from(
+      new Map(
+        input.items
+          .map(normalizeWorksheetRow)
+          .map((item) => [item.sourceKey, item] as const),
+      ).values(),
+    );
+    const archivedAt = input.archivedAt || new Date().toISOString();
+
+    if (this.legacyMode) {
+      const data = await this.loadLegacy();
+      const currentArchives = data.archives[input.storeId] ?? [];
+      const existingSourceKeys = new Set(currentArchives.map((row) => row.sourceKey));
+      const itemsToArchive = uniqueItems
+        .filter((item) => !existingSourceKeys.has(item.sourceKey))
+        .map((item) => normalizeArchiveRow({ ...item, archivedAt }));
+      const archivedSourceKeys = itemsToArchive.map((item) => item.sourceKey);
+      const skippedCount = input.items.length - itemsToArchive.length;
+
+      if (!dryRun && archivedSourceKeys.length) {
+        const currentStore = normalizeStoreEntry(data.stores[input.storeId]);
+        const remainingItems = currentStore.items.filter(
+          (item) => !archivedSourceKeys.includes(item.sourceKey),
+        );
+        await this.persistLegacy({
+          version: 2,
+          stores: {
+            ...data.stores,
+            [input.storeId]: {
+              ...currentStore,
+              items: remainingItems,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          archives: {
+            ...data.archives,
+            [input.storeId]: [...itemsToArchive, ...currentArchives].sort((left, right) =>
+              right.archivedAt.localeCompare(left.archivedAt),
+            ),
+          },
+        });
+      }
+
+      return {
+        archivedCount: itemsToArchive.length,
+        skippedCount,
+        archivedSourceKeys,
+        dryRun,
+      };
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const sourceKeys = uniqueItems.map((item) => item.sourceKey);
+    if (!sourceKeys.length) {
+      return {
+        archivedCount: 0,
+        skippedCount: 0,
+        archivedSourceKeys: [],
+        dryRun,
+      };
+    }
+
+    const existingArchivedRows = await database
+      .select({ sourceKey: coupangShipmentArchiveRows.sourceKey })
+      .from(coupangShipmentArchiveRows)
+      .where(
+        and(
+          eq(coupangShipmentArchiveRows.storeId, input.storeId),
+          inArray(coupangShipmentArchiveRows.sourceKey, sourceKeys),
+        ),
+      );
+    const existingArchivedKeySet = new Set(existingArchivedRows.map((row) => row.sourceKey));
+    const itemsToArchive = uniqueItems
+      .filter((item) => !existingArchivedKeySet.has(item.sourceKey))
+      .map((item) => normalizeArchiveRow({ ...item, archivedAt }));
+    const archivedSourceKeys = itemsToArchive.map((item) => item.sourceKey);
+    const skippedCount = input.items.length - itemsToArchive.length;
+
+    if (!dryRun) {
+      await database.transaction(async (tx) => {
+        if (itemsToArchive.length) {
+          await tx.insert(coupangShipmentArchiveRows).values(
+            itemsToArchive.map((item, index) =>
+              buildArchiveDatabaseRowValue(item, index, input.storeId),
+            ),
+          );
+        }
+
+        await tx
+          .delete(coupangShipmentRows)
+          .where(
+            and(
+              eq(coupangShipmentRows.storeId, input.storeId),
+              inArray(coupangShipmentRows.sourceKey, sourceKeys),
+            ),
+          );
+      });
+    }
+
+    return {
+      archivedCount: itemsToArchive.length,
+      skippedCount,
+      archivedSourceKeys,
+      dryRun,
+    };
   }
 
   async patchRows(input: { storeId: string; items: PatchCoupangShipmentWorksheetItemInput[] }) {

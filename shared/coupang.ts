@@ -1246,6 +1246,29 @@ export interface CoupangShipmentWorksheetViewResponse {
   outputCounts: Record<CoupangShipmentWorksheetOutputStatusCard, number>;
 }
 
+export interface CoupangShipmentArchiveRow extends CoupangShipmentWorksheetRow {
+  archivedAt: string;
+}
+
+export interface CoupangShipmentArchiveViewQuery {
+  storeId: string;
+  page?: number;
+  pageSize?: number;
+  query?: string;
+}
+
+export interface CoupangShipmentArchiveViewResponse {
+  store: CoupangStoreRef;
+  items: CoupangShipmentArchiveRow[];
+  fetchedAt: string;
+  message: string | null;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalRowCount: number;
+  filteredRowCount: number;
+}
+
 export type CoupangShipmentWorksheetAuditStatus = "INSTRUCT" | "ACCEPT";
 export type CoupangShipmentWorksheetAuditHiddenReason = "out_of_scope" | "filtered_out";
 
@@ -1381,6 +1404,30 @@ export interface CoupangShipmentWorksheetInvoiceInputApplyResponse {
   ignoredCount: number;
   issues: string[];
   touchedRowIds: string[];
+  message: string | null;
+}
+
+export interface RunCoupangShipmentArchiveInput {
+  storeId?: string;
+  dryRun?: boolean;
+}
+
+export interface RunCoupangShipmentArchiveStoreResult {
+  storeId: string;
+  storeName: string;
+  eligibleRowCount: number;
+  archivedRowCount: number;
+  skippedRowCount: number;
+  dryRun: boolean;
+  message: string | null;
+}
+
+export interface RunCoupangShipmentArchiveResponse {
+  processedStoreCount: number;
+  archivedRowCount: number;
+  skippedRowCount: number;
+  dryRun: boolean;
+  stores: RunCoupangShipmentArchiveStoreResult[];
   message: string | null;
 }
 
