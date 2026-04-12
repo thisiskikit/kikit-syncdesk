@@ -7,6 +7,8 @@ import {
   isInvoiceInputSourceKey,
 } from "./worksheet-config";
 import {
+  renderFulfillmentDecisionReasonCell,
+  renderFulfillmentDecisionStatusCell,
   renderExportStatusCell,
   renderInvoiceTransmissionStatusCell,
   renderOrderStatusCell,
@@ -77,6 +79,30 @@ export function buildShipmentGridColumns(input: {
 
   return [
     SelectColumn,
+    {
+      key: "__fulfillmentDecisionStatus",
+      name: "출고 판단",
+      width: 128,
+      minWidth: 116,
+      editable: false,
+      resizable: true,
+      sortable: true,
+      draggable: false,
+      renderCell: ({ row }: { row: CoupangShipmentWorksheetRow }) =>
+        renderFulfillmentDecisionStatusCell(row),
+    },
+    {
+      key: "__fulfillmentDecisionReason",
+      name: "사유",
+      width: 124,
+      minWidth: 112,
+      editable: false,
+      resizable: true,
+      sortable: true,
+      draggable: false,
+      renderCell: ({ row }: { row: CoupangShipmentWorksheetRow }) =>
+        renderFulfillmentDecisionReasonCell(row),
+    },
     {
       key: "__exportStatus",
       name: "출력상태",

@@ -8,19 +8,19 @@ import {
 } from "@/lib/coupang-navigation";
 
 describe("coupang navigation config", () => {
-  it("promotes the shipment-first primary menu order", () => {
-    expect(COUPANG_DEFAULT_WORKSPACE_HREF).toBe("/coupang/shipments");
+  it("keeps the visible channel menu focused on product and connection screens", () => {
+    expect(COUPANG_DEFAULT_WORKSPACE_HREF).toBe("/coupang/products");
     expect(COUPANG_PRIMARY_NAV_ITEMS.map((item) => item.href)).toEqual([
-      "/coupang/shipments",
       "/coupang/products",
       "/coupang/control",
       "/coupang/connection",
     ]);
   });
 
-  it("keeps secondary work grouped separately and hides temporary modules from nav", () => {
-    expect(COUPANG_SECONDARY_NAV_TITLE).toBe("\uAE30\uD0C0 \uC5C5\uBB34");
+  it("keeps raw channel work grouped separately and hides shipment plus temporary modules from nav", () => {
+    expect(COUPANG_SECONDARY_NAV_TITLE).toBe("원본 업무");
     expect(COUPANG_SECONDARY_NAV_ITEMS.map((item) => item.href)).toEqual([
+      "/coupang/orders",
       "/coupang/logistics",
       "/coupang/cancel-refunds",
       "/coupang/returns",
@@ -28,6 +28,7 @@ describe("coupang navigation config", () => {
       "/coupang/inquiries",
     ]);
     expect(COUPANG_HIDDEN_NAV_ITEMS).toEqual([
+      "/coupang/shipments",
       "/coupang/product-edit",
       "/coupang/library",
       "/coupang/coupons",

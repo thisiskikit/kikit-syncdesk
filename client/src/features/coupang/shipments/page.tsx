@@ -121,6 +121,26 @@ import {
   summarizeShipmentPrepareAuditBlock,
   summarizeShipmentWorksheetAuditResult,
 } from "./shipment-audit-missing";
+import {
+  buildFulfillmentDecisionCounts,
+  getFulfillmentDecision,
+  getFulfillmentDecisionReasonLabel,
+  getFulfillmentDecisionStatusLabel,
+  matchesFulfillmentDecisionFilter,
+} from "./fulfillment-decision";
+import {
+  buildShipmentFilterSummaryTokens,
+  countActiveShipmentDetailFilters,
+} from "./fulfillment-filter-summary";
+import ShipmentBaseFilters from "./shipment-base-filters";
+import ShipmentArchivePanel from "./shipment-archive-panel";
+import ShipmentSelectionActionBar from "./shipment-selection-action-bar";
+import {
+  buildShipmentBlockedDecisionDetails,
+  summarizeShipmentBlockedDecisionRows,
+} from "./shipment-selection-summary";
+import ShipmentWorksheetPanel from "./shipment-worksheet-panel";
+import ShipmentWorksheetOverview from "./shipment-worksheet-overview";
 import type {
   ShipmentDetailClaimCardView,
   ShipmentDetailInfoRow,
@@ -144,6 +164,7 @@ type InvoiceTransmissionMode = "upload" | "update";
 const SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
 const LazyShipmentAuditMissingDialog = lazy(() => import("./shipment-audit-missing-dialog"));
+const LazyShipmentDecisionDrawer = lazy(() => import("./shipment-decision-drawer"));
 const LazyShipmentDetailDialog = lazy(() => import("./shipment-detail-dialog"));
 const LazyShipmentExcelSortDialog = lazy(() => import("./shipment-excel-sort-dialog"));
 const LazyShipmentInvoiceInputDialog = lazy(() => import("./shipment-invoice-input-dialog"));
@@ -254,10 +275,18 @@ const WORKSHEET_SCOPE_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { value: "dispatch_active", label: "출고업무", description: "미출력 주문 포함" },
+  { value: "dispatch_active", label: "작업 대상", description: "출고 판단과 송장 작업이 필요한 주문 중심" },
   { value: "post_dispatch", label: "배송 이후", description: "출력 완료된 배송 이후 주문" },
-  { value: "claims", label: "클레임·제외", description: "출고중지·취소·반품·교환" },
+  { value: "claims", label: "예외·클레임", description: "취소·반품·교환·출고중지 등 예외 주문" },
   { value: "all", label: "전체", description: "전체 워크시트" },
+] as const;
+const FULFILLMENT_DECISION_OPTIONS = [
+  { value: "all", label: "전체", description: "현재 화면의 주문 전체를 보여줍니다." },
+  { value: "ready", label: "출고 가능", description: "즉시 출고 관련 작업을 진행할 수 있는 주문입니다." },
+  { value: "invoice_waiting", label: "송장 대기", description: "송장 입력 또는 전송이 먼저 필요한 주문입니다." },
+  { value: "hold", label: "보류", description: "CS 영향이나 예외 사유로 운영 확인이 먼저 필요한 주문입니다." },
+  { value: "blocked", label: "차단", description: "취소·반품·교환·출고중지로 출고를 막아야 하는 주문입니다." },
+  { value: "recheck", label: "재확인 필요", description: "송장 실패나 데이터 누락으로 재확인이 필요한 주문입니다." },
 ] as const;
 const INVOICE_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<InvoiceStatusCardKey>[] = [
   { value: "all", label: "전체", toneClassName: "neutral" },
@@ -331,6 +360,7 @@ function createDefaultFilters(): FilterState {
     query: "",
     maxPerPage: 20,
     scope: "dispatch_active",
+    decisionStatus: "all",
     invoiceStatusCard: "all",
     orderStatusCard: "all",
     outputStatusCard: "all",
@@ -348,6 +378,7 @@ function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
     createdAtFrom: normalizedFrom,
     createdAtTo: normalizedTo,
     scope: current.scope ?? "dispatch_active",
+    decisionStatus: current.decisionStatus ?? "all",
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
     outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
@@ -362,6 +393,7 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
     left.scope === right.scope &&
+    left.decisionStatus === right.decisionStatus &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard
@@ -1422,11 +1454,16 @@ export default function CoupangShipmentsPage() {
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
+  const [isFullDetailDialogOpen, setIsFullDetailDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"worksheet" | "archive" | "settings">("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
     "kikit:coupang-shipments:worksheet-page-size",
     50,
+  );
+  const [detailFiltersOpen, setDetailFiltersOpen] = usePersistentState<boolean>(
+    "kikit:coupang-shipments:detail-filters-open",
+    false,
   );
   const [worksheetPage, setWorksheetPage] = useState(1);
   const [archivePage, setArchivePage] = useState(1);
@@ -1599,11 +1636,13 @@ export default function CoupangShipmentsPage() {
       setDirtyRowsBySourceKey({});
       setSelectedCell(null);
       setDetailRowSnapshot(null);
+      setIsFullDetailDialogOpen(false);
     }
   }, [filters.selectedStoreId]);
 
   useEffect(() => {
     setDetailRowSnapshot(null);
+    setIsFullDetailDialogOpen(false);
   }, [activeTab]);
 
   useEffect(() => {
@@ -1613,6 +1652,7 @@ export default function CoupangShipmentsPage() {
   }, [
     filters.selectedStoreId,
     filters.scope,
+    filters.decisionStatus,
     deferredQuery,
     filters.invoiceStatusCard,
     filters.orderStatusCard,
@@ -1654,6 +1694,7 @@ export default function CoupangShipmentsPage() {
   }, [
     filters.selectedStoreId,
     filters.scope,
+    filters.decisionStatus,
     deferredQuery,
     filters.invoiceStatusCard,
     filters.orderStatusCard,
@@ -1662,10 +1703,17 @@ export default function CoupangShipmentsPage() {
 
   const activeSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
   const archiveSheet = archiveQuery.data ?? null;
+  const selectedStoreName =
+    stores.find((store) => store.id === filters.selectedStoreId)?.storeName ?? null;
   const activeInvoiceStatusCard = normalizeInvoiceStatusCardKey(filters.invoiceStatusCard);
   const activeOrderStatusCard = normalizeOrderStatusCardKey(filters.orderStatusCard);
   const activeOutputStatusCard = normalizeOutputStatusCardKey(filters.outputStatusCard);
-  const visibleRows = draftRows;
+  const activeDecisionStatus = filters.decisionStatus ?? "all";
+  const decisionCounts = useMemo(() => buildFulfillmentDecisionCounts(draftRows), [draftRows]);
+  const visibleRows = useMemo(
+    () => draftRows.filter((row) => matchesFulfillmentDecisionFilter(row, activeDecisionStatus)),
+    [activeDecisionStatus, draftRows],
+  );
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
   const archiveRows = archiveSheet?.items ?? [];
   const archiveTotalPages = archiveSheet?.totalPages ?? 1;
@@ -1675,6 +1723,47 @@ export default function CoupangShipmentsPage() {
     claims: 0,
     all: 0,
   };
+  const activeDetailFilterCount = useMemo(
+    () =>
+      countActiveShipmentDetailFilters({
+        invoiceStatusCard: activeInvoiceStatusCard,
+        orderStatusCard: activeOrderStatusCard,
+        outputStatusCard: activeOutputStatusCard,
+      }),
+    [activeInvoiceStatusCard, activeOrderStatusCard, activeOutputStatusCard],
+  );
+  const activeFilterSummaryTokens = useMemo(
+    () =>
+      buildShipmentFilterSummaryTokens({
+        storeName: selectedStoreName,
+        filters: {
+          createdAtFrom: filters.createdAtFrom,
+          createdAtTo: filters.createdAtTo,
+          query: deferredQuery,
+          scope: filters.scope,
+          decisionStatus: activeDecisionStatus,
+          invoiceStatusCard: activeInvoiceStatusCard,
+          orderStatusCard: activeOrderStatusCard,
+          outputStatusCard: activeOutputStatusCard,
+        },
+      }),
+    [
+      activeDecisionStatus,
+      activeInvoiceStatusCard,
+      activeOrderStatusCard,
+      activeOutputStatusCard,
+      deferredQuery,
+      filters.createdAtFrom,
+      filters.createdAtTo,
+      filters.scope,
+      selectedStoreName,
+    ],
+  );
+  const hasCustomWorksheetFilters =
+    Boolean(deferredQuery) ||
+    filters.scope !== "dispatch_active" ||
+    activeDecisionStatus !== "all" ||
+    activeDetailFilterCount > 0;
   const pageRowIdSet = useMemo(() => new Set(visibleRows.map((row) => row.id)), [visibleRows]);
   const pageSelectedRowIds = useMemo(
     () => new Set(visibleRows.filter((row) => selectedRowIds.has(row.id)).map((row) => row.id)),
@@ -1710,8 +1799,34 @@ export default function CoupangShipmentsPage() {
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
   );
+  const selectedDecisionBlockedRows = useMemo(
+    () => selectedRows.filter((row) => getFulfillmentDecision(row).shouldBlockBatchActions),
+    [selectedRows],
+  );
+  const selectedReadyRows = useMemo(
+    () => selectedRows.filter((row) => !getFulfillmentDecision(row).shouldBlockBatchActions),
+    [selectedRows],
+  );
+  const selectedBlockedDecisionSummary = useMemo(
+    () => summarizeShipmentBlockedDecisionRows(selectedDecisionBlockedRows),
+    [selectedDecisionBlockedRows],
+  );
+  const selectedBlockedDecisionDetails = useMemo(
+    () => buildShipmentBlockedDecisionDetails(selectedDecisionBlockedRows),
+    [selectedDecisionBlockedRows],
+  );
   const dirtyCount = dirtySourceKeys.size;
   const dirtySet = useMemo(() => new Set(dirtySourceKeys), [dirtySourceKeys]);
+  const detailFilterToggleLabel =
+    activeDetailFilterCount > 0 ? `세부 필터 ${formatNumber(activeDetailFilterCount)}개 적용` : "세부 필터";
+  const filterSummarySupportText = [
+    dirtyCount > 0 ? `미저장 변경 ${formatNumber(dirtyCount)}건` : null,
+    (activeSheet?.invoiceReadyCount ?? 0) > 0
+      ? `송장 전송 대상 ${formatNumber(activeSheet?.invoiceReadyCount ?? 0)}건`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const invoiceReadyRows = useMemo(
     () => visibleRows.filter((row) => canSendInvoiceRow(row) && row.invoiceTransmissionStatus !== "pending"),
     [visibleRows],
@@ -1861,6 +1976,7 @@ export default function CoupangShipmentsPage() {
     ? resolveWorksheetOrderStatus(detailStatusCarrier)
     : null;
   const detailClaimCount = detailReturnRows.length + detailExchangeRows.length;
+  const detailDecisionPresentation = detailRow ? getFulfillmentDecision(detailRow) : null;
   const detailClaimLookupRange =
     detailItem?.claimLookupCreatedAtFrom && detailItem?.claimLookupCreatedAtTo
       ? `${detailItem.claimLookupCreatedAtFrom} ~ ${detailItem.claimLookupCreatedAtTo}`
@@ -2072,6 +2188,18 @@ export default function CoupangShipmentsPage() {
     : [];
   const detailStatusRows = detailRow
     ? [
+        {
+          label: "출고 판단",
+          value: detailDecisionPresentation
+            ? getFulfillmentDecisionStatusLabel(detailDecisionPresentation.status)
+            : "-",
+        },
+        {
+          label: "판단 사유",
+          value: detailDecisionPresentation
+            ? getFulfillmentDecisionReasonLabel(detailDecisionPresentation.reason)
+            : "-",
+        },
         { label: "워크시트 상태", value: detailWorksheetStatusValue },
         { label: "쿠팡 주문상태", value: detailCoupangStatusValue },
         { label: "송장 상태", value: detailInvoiceStatusValue },
@@ -3248,9 +3376,13 @@ export default function CoupangShipmentsPage() {
 
     const resolvedRows =
       scope === "selected" ? null : await resolveWorksheetBulkRows("invoice_ready");
-    const sourceRows = scope === "selected" ? selectedRows : resolvedRows?.items ?? [];
+    const blockedDecisionRows = scope === "selected" ? selectedDecisionBlockedRows : [];
+    const blockedDecisionDetails = scope === "selected" ? selectedBlockedDecisionDetails : [];
+    const sourceRows = scope === "selected" ? selectedReadyRows : resolvedRows?.items ?? [];
     const blockedClaimRows =
-      scope === "selected" ? sourceRows.filter((row) => hasShipmentClaimIssue(row)) : resolvedRows?.blockedItems ?? [];
+      scope === "selected"
+        ? sourceRows.filter((row) => hasShipmentClaimIssue(row))
+        : resolvedRows?.blockedItems ?? [];
     const blockedClaimDetails = buildInvoiceClaimBlockedDetails(blockedClaimRows);
     if (!sourceRows.length) {
       setFeedback({
@@ -3258,11 +3390,13 @@ export default function CoupangShipmentsPage() {
         title: scope === "selected" ? "선택 송장 전송" : "송장 전송하기",
         message:
           scope === "selected"
-            ? "선택된 행이 없습니다."
+            ? blockedDecisionRows.length > 0
+              ? "선택한 주문이 모두 확인 후 처리 대상이라 송장 전송을 실행하지 않았습니다."
+              : "선택된 행이 없습니다."
             : resolvedRows?.matchedCount
               ? "클레임 또는 현재 상태 때문에 전송 가능한 송장 행이 없습니다."
               : "전송할 신규/실패 송장 행이 없습니다. 이미 완료된 행은 값을 수정하면 다시 전송할 수 있습니다.",
-        details: blockedClaimDetails,
+        details: [...blockedDecisionDetails, ...blockedClaimDetails],
       });
       return;
     }
@@ -3370,7 +3504,7 @@ export default function CoupangShipmentsPage() {
         type: "error",
         title: "송장 전송 전 검증 실패",
         message: "전송 가능한 행이 없어 송장 전송을 실행하지 않았습니다.",
-        details: [...blockedClaimDetails, ...validationErrors],
+        details: [...blockedDecisionDetails, ...blockedClaimDetails, ...validationErrors],
       });
       return;
     }
@@ -3538,12 +3672,13 @@ export default function CoupangShipmentsPage() {
           ? `${buildResultSummary(combined)} / 합배송 ${mergedShipmentRowCount}행 묶음 처리`
           : buildResultSummary(combined);
       const summary =
-        skippedRowCount > 0
-          ? `${summaryBase} / 오류 ${skippedRowCount}행 건너뜀`
+        skippedRowCount > 0 || blockedDecisionRows.length > 0
+          ? `${summaryBase}${skippedRowCount > 0 ? ` / 오류 ${skippedRowCount}행 건너뜀` : ""}${blockedDecisionRows.length > 0 ? ` / 확인 필요 ${blockedDecisionRows.length}행 자동 제외` : ""}`
           : summaryBase;
       const detailLines = [...buildFailureDetails(combined), ...validationErrors].slice(0, 8);
       setFeedback({
         type:
+          blockedDecisionRows.length > 0 ||
           blockedClaimDetails.length > 0 ||
           validationErrors.length > 0 ||
           combined.summary.failedCount > 0 ||
@@ -3553,10 +3688,11 @@ export default function CoupangShipmentsPage() {
             : "success",
         title: scope === "selected" ? "송장 전송 결과" : "송장 전송 결과",
         message: summary,
-        details: [...detailLines, ...blockedClaimDetails].slice(0, 8),
+        details: [...blockedDecisionDetails, ...detailLines, ...blockedClaimDetails].slice(0, 8),
       });
       finishLocalOperation(localToastId, {
         status:
+          blockedDecisionRows.length > 0 ||
           validationErrors.length > 0 ||
           combined.summary.failedCount > 0 ||
           combined.summary.warningCount > 0 ||
@@ -3620,10 +3756,24 @@ export default function CoupangShipmentsPage() {
 
   function openShipmentDetailDialog(row: CoupangShipmentWorksheetRow) {
     setDetailRowSnapshot(row);
+    setIsFullDetailDialogOpen(false);
   }
 
   function closeShipmentDetailDialog() {
+    setIsFullDetailDialogOpen(false);
     setDetailRowSnapshot(null);
+  }
+
+  function openShipmentFullDetailDialog() {
+    if (!detailRowSnapshot) {
+      return;
+    }
+
+    setIsFullDetailDialogOpen(true);
+  }
+
+  function closeShipmentFullDetailDialog() {
+    setIsFullDetailDialogOpen(false);
   }
 
   function openExcelSortDialog(scope: ShipmentExcelExportScope) {
@@ -3861,24 +4011,23 @@ export default function CoupangShipmentsPage() {
             <div className="hero-badges">
               <StatusBadge
                 tone={activeSheet?.source === "live" ? "live" : "draft"}
-                label={activeSheet?.source === "live" ? "실데이터" : "대체 데이터"}
+                label={activeSheet?.source === "live" ? "실시간 동기화" : "대체 데이터"}
               />
               <StatusBadge
                 tone="shared"
-                label={activeTab === "archive" ? "보관함" : activeTab === "settings" ? "컬럼 설정" : "셀픽 워크시트"}
+                label={activeTab === "archive" ? "보관함" : activeTab === "settings" ? "화면 설정" : "출고 운영"}
               />
             </div>
-            <h1>쿠팡 배송/송장</h1>
+            <h1>{activeTab === "archive" ? "출고 보관함" : activeTab === "settings" ? "출고 화면 설정" : "출고"}</h1>
             <p>
-              배송 시트를 셀픽 헤더 규칙으로 수집하고, 표 안 붙여넣기와 셀픽주문번호 기준 송장
-              전송을 한 화면에서 처리합니다.
+              오늘 처리할 출고 판단, 송장 입력과 전송, 누락 검수, 예외 확인을 한 화면에서 이어서 처리합니다.
             </p>
             <div className="segmented-control" style={{ marginTop: "0.75rem", width: "fit-content" }}>
               <button
                 className={`segmented-button${activeTab === "worksheet" ? " active" : ""}`}
                 onClick={() => setActiveTab("worksheet")}
               >
-                워크시트
+                작업 화면
               </button>
               <button
                 className={`segmented-button${activeTab === "archive" ? " active" : ""}`}
@@ -3890,7 +4039,7 @@ export default function CoupangShipmentsPage() {
                 className={`segmented-button${activeTab === "settings" ? " active" : ""}`}
                 onClick={() => setActiveTab("settings")}
               >
-                컬럼 설정
+                화면 설정
               </button>
             </div>
           </div>
@@ -3915,7 +4064,7 @@ export default function CoupangShipmentsPage() {
                   (activeSheet?.orderCounts.ACCEPT ?? 0) === 0
                 }
               >
-                {busyAction === "prepare-orders" ? "발송준비중 처리 중..." : "결제완료 -> 발송준비중"}
+                {busyAction === "prepare-orders" ? "상품준비중 처리 중..." : "결제완료 -> 상품준비중"}
               </button>
               <button
                 className="button secondary"
@@ -4013,236 +4162,62 @@ export default function CoupangShipmentsPage() {
         </div>
       </div>
 
-      <div className="card shipment-filter-bar">
-        <div className="shipment-filter-fields">
-          <select
-            value={filters.selectedStoreId}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                selectedStoreId: event.target.value,
-              }))
-            }
-          >
-            <option value="">스토어 선택</option>
-            {stores.map((store) => (
-              <option key={store.id} value={store.id}>
-                {store.storeName}
-              </option>
-            ))}
-          </select>
-          {activeTab !== "archive" ? (
-            <>
-              <input
-                type="date"
-                value={filters.createdAtFrom}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    createdAtFrom: event.target.value,
-                  }))
-                }
-              />
-              <input
-                type="date"
-                value={filters.createdAtTo}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    createdAtTo: event.target.value,
-                  }))
-                }
-              />
-            </>
-          ) : null}
-          <input
-            value={filters.query}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                query: event.target.value,
-              }))
-            }
-            placeholder="셀픽주문번호, 상품명, 수령자명, 송장번호 검색"
-          />
-        </div>
+      <ShipmentBaseFilters
+        activeTab={activeTab}
+        filters={filters}
+        stores={stores}
+        scopeCounts={scopeCounts}
+        scopeOptions={WORKSHEET_SCOPE_OPTIONS}
+        refreshDisabled={refreshActionDisabled}
+        onPatchFilters={(patch) =>
+          setFilters((current) => ({
+            ...current,
+            ...patch,
+          }))
+        }
+        onRefresh={() => void (activeTab === "archive" ? archiveQuery.refetch() : worksheetQuery.refetch())}
+      />
 
-        <div className="shipment-filter-support">
-          {activeTab !== "archive" ? (
-            <select
-              aria-label="목록 건수"
-              value={filters.maxPerPage}
-              onChange={(event) =>
-                setFilters((current) => ({
-                  ...current,
-                  maxPerPage: Number(event.target.value),
-                }))
-              }
-            >
-              <option value={10}>10건</option>
-              <option value={20}>20건</option>
-              <option value={50}>50건</option>
-            </select>
-          ) : null}
-          <button
-            type="button"
-            className="button ghost shipment-icon-button"
-            aria-label={activeTab === "archive" ? "보관함 새로고침" : "워크시트 새로고침"}
-            title={activeTab === "archive" ? "보관함 새로고침" : "워크시트 새로고침"}
-            onClick={() => void (activeTab === "archive" ? archiveQuery.refetch() : worksheetQuery.refetch())}
-            disabled={refreshActionDisabled}
-          >
-            <RefreshCcw size={16} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-
-      {activeTab !== "archive" ? (
-        <>
-      <div className="card shipment-status-toolbar">
-        <div className="shipment-status-group">
-          <div className="shipment-status-group-label">
-            보기 범위
-            <span className="muted">{formatNumber(scopeCounts.all)}건</span>
-          </div>
-          <div className="shipment-status-pill-list">
-            {WORKSHEET_SCOPE_OPTIONS.map((option) => {
-              const active = filters.scope === option.value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`shipment-filter-pill neutral${active ? " active" : ""}`}
-                  aria-pressed={active}
-                  title={option.description}
-                  onClick={() =>
-                    setFilters((current) => ({
-                      ...current,
-                      scope: option.value,
-                    }))
-                  }
-                >
-                  <span>{option.label}</span>
-                  <strong>{formatNumber(scopeCounts[option.value])}</strong>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div className="metric-grid">
-        <div className="metric">
-          <div className="metric-label">전체</div>
-          <div className="metric-value">{formatNumber(activeSheet?.totalRowCount ?? 0)}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">현재 목록</div>
-          <div className="metric-value">{formatNumber(activeSheet?.filteredRowCount ?? 0)}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">전송 대상</div>
-          <div className="metric-value">{formatNumber(activeSheet?.invoiceReadyCount ?? 0)}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">미저장 변경</div>
-          <div className="metric-value">{dirtyCount}</div>
-        </div>
-      </div>
-
-      <div className="card shipment-status-toolbar">
-        <div className="shipment-status-group">
-          <div className="shipment-status-group-label">
-            전송
-            <span className="muted">{formatNumber(activeSheet?.invoiceCounts.all ?? 0)}건</span>
-          </div>
-          <div className="shipment-status-pill-list">
-            {INVOICE_STATUS_CARD_OPTIONS.map((option) => {
-              const active = activeInvoiceStatusCard === option.value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
-                  aria-pressed={active}
-                  onClick={() =>
-                    setFilters((current) => ({
-                      ...current,
-                      invoiceStatusCard: option.value,
-                    }))
-                  }
-                >
-                  <span>{option.label}</span>
-                  <strong>{formatNumber(activeSheet?.invoiceCounts[option.value] ?? 0)}</strong>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="shipment-status-group">
-          <div className="shipment-status-group-label">
-            출력
-            <span className="muted">{formatNumber(activeSheet?.outputCounts.all ?? 0)}건</span>
-          </div>
-          <div className="shipment-status-pill-list">
-            {OUTPUT_STATUS_CARD_OPTIONS.map((option) => {
-              const active = activeOutputStatusCard === option.value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
-                  aria-pressed={active}
-                  onClick={() =>
-                    setFilters((current) => ({
-                      ...current,
-                      outputStatusCard: option.value,
-                    }))
-                  }
-                >
-                  <span>{option.label}</span>
-                  <strong>{formatNumber(activeSheet?.outputCounts[option.value] ?? 0)}</strong>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="shipment-status-group">
-          <div className="shipment-status-group-label">
-            주문
-            <span className="muted">{formatNumber(activeSheet?.orderCounts.all ?? 0)}건</span>
-          </div>
-          <div className="shipment-status-pill-list">
-            {ORDER_STATUS_CARD_OPTIONS.map((option) => {
-              const active = activeOrderStatusCard === option.value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
-                  aria-pressed={active}
-                  onClick={() =>
-                    setFilters((current) => ({
-                      ...current,
-                      orderStatusCard: option.value,
-                    }))
-                  }
-                >
-                  <span>{option.label}</span>
-                  <strong>{formatNumber(activeSheet?.orderCounts[option.value] ?? 0)}</strong>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-        </>
+      {activeTab === "worksheet" ? (
+        <ShipmentWorksheetOverview
+          activeDecisionStatus={activeDecisionStatus}
+          decisionCounts={decisionCounts}
+          decisionOptions={FULFILLMENT_DECISION_OPTIONS}
+          detailFilterToggleLabel={detailFilterToggleLabel}
+          detailFiltersOpen={detailFiltersOpen}
+          activeDetailFilterCount={activeDetailFilterCount}
+          activeFilterSummaryTokens={activeFilterSummaryTokens}
+          filterSummarySupportText={filterSummarySupportText}
+          hasCustomWorksheetFilters={hasCustomWorksheetFilters}
+          pageRowCount={draftRows.length}
+          visibleRowsCount={visibleRows.length}
+          filters={filters}
+          activeSheet={activeSheet}
+          activeInvoiceStatusCard={activeInvoiceStatusCard}
+          activeOrderStatusCard={activeOrderStatusCard}
+          activeOutputStatusCard={activeOutputStatusCard}
+          invoiceStatusOptions={INVOICE_STATUS_CARD_OPTIONS}
+          outputStatusOptions={OUTPUT_STATUS_CARD_OPTIONS}
+          orderStatusOptions={ORDER_STATUS_CARD_OPTIONS}
+          onPatchFilters={(patch) =>
+            setFilters((current) => ({
+              ...current,
+              ...patch,
+            }))
+          }
+          onResetFilters={() =>
+            setFilters((current) => ({
+              ...current,
+              query: "",
+              scope: "dispatch_active",
+              decisionStatus: "all",
+              invoiceStatusCard: "all",
+              orderStatusCard: "all",
+              outputStatusCard: "all",
+            }))
+          }
+          onToggleDetailFilters={() => setDetailFiltersOpen((current) => !current)}
+        />
       ) : (
         <div className="metric-grid">
           <div className="metric">
@@ -4315,244 +4290,112 @@ export default function CoupangShipmentsPage() {
         </div>
       ) : null}
 
+      {activeTab === "worksheet" && selectedRows.length ? (
+        <ShipmentSelectionActionBar
+          selectedRowsCount={selectedRows.length}
+          selectedReadyRowsCount={selectedReadyRows.length}
+          selectedDecisionBlockedRowsCount={selectedDecisionBlockedRows.length}
+          blockedDecisionSummary={selectedBlockedDecisionSummary}
+          transmitDisabled={!selectedReadyRows.length || transmitActionDisabled}
+          downloadDisabled={openExcelExportDisabled}
+          onTransmit={() => void executeSelectedInvoices()}
+          onDownload={() => openExcelSortDialog("selected")}
+          onClear={() => {
+            setSelectedRowIds(new Set());
+            setSelectedRowsById({});
+          }}
+        />
+      ) : null}
+
       {activeTab === "worksheet" ? (
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 style={{ margin: 0 }}>셀픽 워크시트</h2>
-              <div className="muted shipment-grid-note">{invoiceModeNotice}</div>
-              <div className="muted shipment-grid-note">{detailGuideNotice}</div>
-            </div>
-            <div className="toolbar shipment-worksheet-toolbar">
-              <div className="segmented-control">
-                <button
-                  className={`segmented-button${worksheetMode === "default" ? " active" : ""}`}
-                  onClick={() => setWorksheetMode("default")}
-                >
-                  기본 보기
-                </button>
-                <button
-                  className={`segmented-button${worksheetMode === "invoice" ? " active" : ""}`}
-                  onClick={() => setWorksheetMode("invoice")}
-                >
-                  송장 입력하기
-                </button>
-              </div>
-              <button className="button ghost" onClick={() => setActiveTab("settings")}>
-                컬럼 설정
-              </button>
-            </div>
+        <ShipmentWorksheetPanel
+          invoiceModeNotice={invoiceModeNotice}
+          detailGuideNotice={detailGuideNotice}
+          worksheetMode={worksheetMode}
+          isLoading={worksheetQuery.isLoading && !activeSheet}
+          hasSheetRows={Boolean(activeSheet?.totalRowCount ?? 0)}
+          hasRowsForCurrentFilters={Boolean(draftRows.length)}
+          filteredRowCount={activeSheet?.filteredRowCount ?? 0}
+          visibleRowsCount={visibleRows.length}
+          worksheetPage={worksheetPage}
+          worksheetTotalPages={worksheetTotalPages}
+          worksheetPageSize={worksheetPageSize}
+          pageSizeOptions={SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS}
+          onWorksheetModeChange={setWorksheetMode}
+          onOpenSettings={() => setActiveTab("settings")}
+          onPageSizeChange={(pageSize) => {
+            setWorksheetPageSize(pageSize);
+            setWorksheetPage(1);
+          }}
+          onPrevPage={() => setWorksheetPage((current) => Math.max(1, current - 1))}
+          onNextPage={() => setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1))}
+        >
+          <div className="grid-shell shipment-grid-shell" onPasteCapture={handleGridPaste}>
+            <DataGrid
+              className={`rdg-light shipment-grid${worksheetMode === "invoice" ? " invoice-input-mode" : ""}`}
+              columns={columns}
+              defaultColumnOptions={{ resizable: true }}
+              rows={visibleRows}
+              rowKeyGetter={(row: CoupangShipmentWorksheetRow) => row.id}
+              selectedRows={pageSelectedRowIds}
+              sortColumns={sortColumns}
+              onSortColumnsChange={(nextSortColumns) => setSortColumns(nextSortColumns.slice(-1))}
+              onSelectedRowsChange={handlePageSelectedRowsChange}
+              onRowsChange={handleVisibleRowsChange}
+              onFill={handleGridFill}
+              onCellClick={handleGridCellClick}
+              onSelectedCellChange={(args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>
+                setSelectedCell({
+                  rowIdx: args.rowIdx,
+                  columnId: String(args.column.key),
+                })
+              }
+              onColumnResize={(column, width) =>
+                setColumnWidths((current) => ({
+                  ...current,
+                  [String(column.key)]: width,
+                }))
+              }
+              onColumnsReorder={handleGridColumnsReorder}
+              rowClass={(row) => {
+                const classNames = [];
+                if (dirtySet.has(row.sourceKey)) {
+                  classNames.push("shipment-row-dirty");
+                }
+                if (row.invoiceTransmissionStatus === "failed") {
+                  classNames.push("shipment-row-failed");
+                }
+                if (row.invoiceTransmissionStatus === "pending") {
+                  classNames.push("shipment-row-pending");
+                }
+                return classNames.length ? classNames.join(" ") : undefined;
+              }}
+              style={{ height: 640 }}
+            />
           </div>
-
-          {worksheetQuery.isLoading && !activeSheet ? (
-            <div className="empty">배송 시트를 불러오는 중입니다...</div>
-          ) : !(activeSheet?.totalRowCount ?? 0) ? (
-            <div className="empty">수집 버튼을 눌러 셀픽 형식 배송 시트를 생성해 주세요.</div>
-          ) : !draftRows.length ? (
-            <div className="empty">현재 조건에 맞는 배송 시트가 없습니다.</div>
-          ) : (
-            <>
-              <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: "0.75rem" }}>
-                <div className="selection-summary">
-                  전체 {formatNumber(activeSheet?.filteredRowCount ?? 0)}행 · 현재 페이지 {formatNumber(visibleRows.length)}행
-                  {" · "}
-                  {worksheetPage} / {worksheetTotalPages} 페이지
-                </div>
-                <div className="toolbar" style={{ gap: "0.5rem" }}>
-                  <label style={{ display: "grid", gap: "0.25rem" }}>
-                    <span className="muted">보기 행 수</span>
-                    <select
-                      value={worksheetPageSize}
-                      onChange={(event) => {
-                        setWorksheetPageSize(Number(event.target.value));
-                        setWorksheetPage(1);
-                      }}
-                    >
-                      {SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS.map((size) => (
-                        <option key={size} value={size}>
-                          {size}행
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() => setWorksheetPage((current) => Math.max(1, current - 1))}
-                    disabled={worksheetPage <= 1}
-                  >
-                    이전
-                  </button>
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() =>
-                      setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1))
-                    }
-                    disabled={worksheetPage >= worksheetTotalPages}
-                  >
-                    다음
-                  </button>
-                </div>
-              </div>
-              <div className="grid-shell shipment-grid-shell" onPasteCapture={handleGridPaste}>
-                <DataGrid
-                  className={`rdg-light shipment-grid${worksheetMode === "invoice" ? " invoice-input-mode" : ""}`}
-                  columns={columns}
-                  defaultColumnOptions={{ resizable: true }}
-                  rows={visibleRows}
-                  rowKeyGetter={(row: CoupangShipmentWorksheetRow) => row.id}
-                  selectedRows={pageSelectedRowIds}
-                  sortColumns={sortColumns}
-                  onSortColumnsChange={(nextSortColumns) => setSortColumns(nextSortColumns.slice(-1))}
-                  onSelectedRowsChange={handlePageSelectedRowsChange}
-                  onRowsChange={handleVisibleRowsChange}
-                  onFill={handleGridFill}
-                  onCellClick={handleGridCellClick}
-                  onSelectedCellChange={(args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>
-                    setSelectedCell({
-                      rowIdx: args.rowIdx,
-                      columnId: String(args.column.key),
-                    })
-                  }
-                  onColumnResize={(column, width) =>
-                    setColumnWidths((current) => ({
-                      ...current,
-                      [String(column.key)]: width,
-                    }))
-                  }
-                  onColumnsReorder={handleGridColumnsReorder}
-                  rowClass={(row) => {
-                    const classNames = [];
-                    if (dirtySet.has(row.sourceKey)) {
-                      classNames.push("shipment-row-dirty");
-                    }
-                    if (row.invoiceTransmissionStatus === "failed") {
-                      classNames.push("shipment-row-failed");
-                    }
-                    if (row.invoiceTransmissionStatus === "pending") {
-                      classNames.push("shipment-row-pending");
-                    }
-                    return classNames.length ? classNames.join(" ") : undefined;
-                  }}
-                  style={{ height: 640 }}
-                />
-              </div>
-            </>
-          )}
-        </div>
+        </ShipmentWorksheetPanel>
       ) : activeTab === "archive" ? (
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 style={{ margin: 0 }}>보관함</h2>
-              <div className="muted shipment-grid-note">
-                출력 완료 후 30일이 지난 배송 이후 일반 주문만 이곳으로 이동합니다. 보관함은 읽기 전용입니다.
-              </div>
-              <div className="muted shipment-grid-note">{detailGuideNotice}</div>
-            </div>
-          </div>
-
-          {archiveQuery.isLoading && !archiveSheet ? (
-            <div className="empty">보관함을 불러오는 중입니다...</div>
-          ) : !(archiveSheet?.totalRowCount ?? 0) ? (
-            <div className="empty">현재 보관함에 저장된 주문이 없습니다.</div>
-          ) : !archiveRows.length ? (
-            <div className="empty">현재 검색 조건에 맞는 보관 주문이 없습니다.</div>
-          ) : (
-            <>
-              <div className="toolbar" style={{ justifyContent: "space-between", marginBottom: "0.75rem" }}>
-                <div className="selection-summary">
-                  전체 {formatNumber(archiveSheet?.filteredRowCount ?? 0)}행 · 현재 페이지 {formatNumber(archiveRows.length)}행
-                  {" · "}
-                  {archivePage} / {archiveTotalPages} 페이지
-                </div>
-                <div className="toolbar" style={{ gap: "0.5rem" }}>
-                  <label style={{ display: "grid", gap: "0.25rem" }}>
-                    <span className="muted">보기 행 수</span>
-                    <select
-                      value={worksheetPageSize}
-                      onChange={(event) => {
-                        setWorksheetPageSize(Number(event.target.value));
-                        setArchivePage(1);
-                      }}
-                    >
-                      {SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS.map((size) => (
-                        <option key={size} value={size}>
-                          {size}행
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() => setArchivePage((current) => Math.max(1, current - 1))}
-                    disabled={archivePage <= 1}
-                  >
-                    이전
-                  </button>
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() => setArchivePage((current) => Math.min(archiveTotalPages, current + 1))}
-                    disabled={archivePage >= archiveTotalPages}
-                  >
-                    다음
-                  </button>
-                </div>
-              </div>
-
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>보관일시</th>
-                      <th>주문일시</th>
-                      <th>상태</th>
-                      <th>상품명</th>
-                      <th>수령자</th>
-                      <th>송장</th>
-                      <th>출력</th>
-                      <th>상세</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {archiveRows.map((row: CoupangShipmentArchiveRow) => {
-                      const statusPresentation = getWorksheetStatusPresentation(row);
-
-                      return (
-                        <tr key={row.id}>
-                          <td>{formatDateTimeLabel(row.archivedAt)}</td>
-                          <td>{formatDateTimeLabel(row.orderedAtRaw)}</td>
-                          <td>
-                            <span className={`status-pill ${statusPresentation.orderToneClassName}`}>
-                              {statusPresentation.orderLabel}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="table-cell-stack">
-                              <strong>{row.exposedProductName || row.productName || "-"}</strong>
-                              <span className="muted">{row.optionName || row.productOrderNumber || row.orderId}</span>
-                            </div>
-                          </td>
-                          <td>{row.receiverName || "-"}</td>
-                          <td>{formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber])}</td>
-                          <td>{row.exportedAt ? formatDateTimeLabel(row.exportedAt) : "미출력"}</td>
-                          <td className="table-action-cell">
-                            <button className="button ghost" onClick={() => openShipmentDetailDialog(row)}>
-                              상세
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
+        <ShipmentArchivePanel
+          detailGuideNotice={detailGuideNotice}
+          isLoading={archiveQuery.isLoading && !archiveSheet}
+          totalRowCount={archiveSheet?.totalRowCount ?? 0}
+          filteredRowCount={archiveSheet?.filteredRowCount ?? 0}
+          rows={archiveRows}
+          archivePage={archivePage}
+          archiveTotalPages={archiveTotalPages}
+          worksheetPageSize={worksheetPageSize}
+          pageSizeOptions={SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS}
+          onPageSizeChange={(pageSize) => {
+            setWorksheetPageSize(pageSize);
+            setArchivePage(1);
+          }}
+          onPrevPage={() => setArchivePage((current) => Math.max(1, current - 1))}
+          onNextPage={() => setArchivePage((current) => Math.min(archiveTotalPages, current + 1))}
+          getStatusPresentation={getWorksheetStatusPresentation}
+          formatDateTimeLabel={formatDateTimeLabel}
+          formatInvoiceText={(row) => formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber])}
+          onOpenDetail={openShipmentDetailDialog}
+        />
       ) : (
         <Suspense
           fallback={
@@ -4597,9 +4440,29 @@ export default function CoupangShipmentsPage() {
         />
       </Suspense>
 
+      <Suspense fallback={null}>
+        <LazyShipmentDecisionDrawer
+          isOpen={Boolean(detailRow && !isFullDetailDialogOpen)}
+          rowTitle={detailRow?.exposedProductName || detailRow?.productName || ""}
+          heroMeta={detailHeroMeta}
+          decision={detailDecisionPresentation}
+          worksheetStatusValue={detailWorksheetStatusValue}
+          invoiceStatusValue={detailInvoiceStatusValue}
+          claimStatusValue={detailClaimStatusValue}
+          worksheetRows={detailWorksheetRows}
+          deliveryRows={detailDeliveryRows}
+          statusRows={detailStatusRows}
+          activityRows={detailRealtimeOrderRows}
+          isLoading={shipmentDetailQuery.isLoading}
+          errorMessage={shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null}
+          onClose={closeShipmentDetailDialog}
+          onOpenFullDetail={openShipmentFullDetailDialog}
+        />
+      </Suspense>
+
       <Suspense
         fallback={
-          detailRow ? (
+          detailRow && isFullDetailDialogOpen ? (
             <div className="csv-overlay">
               <div className="csv-dialog detail-dialog shipment-detail-dialog">
                 <div className="empty">상세 화면을 불러오는 중입니다...</div>
@@ -4609,7 +4472,7 @@ export default function CoupangShipmentsPage() {
         }
       >
         <LazyShipmentDetailDialog
-          isOpen={Boolean(detailRow)}
+          isOpen={Boolean(detailRow && isFullDetailDialogOpen)}
           rowTitle={detailRow?.exposedProductName || detailRow?.productName || ""}
           heroMeta={detailHeroMeta}
           worksheetStatusValue={detailWorksheetStatusValue}
@@ -4628,7 +4491,7 @@ export default function CoupangShipmentsPage() {
           returnClaims={detailReturnClaimCards}
           exchangeSummaryText={`총 ${formatNumber(detailExchangeRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`}
           exchangeClaims={detailExchangeClaimCards}
-          onClose={closeShipmentDetailDialog}
+          onClose={closeShipmentFullDetailDialog}
         />
       </Suspense>
 

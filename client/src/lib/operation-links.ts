@@ -10,5 +10,5 @@ export function getOperationLogsHref(channel: OperationChannel, operationId?: st
     params.set("logId", operationId);
   }
 
-  return `/operations?${params.toString()}`;
+  return `/work-center?${params.toString()}`;
 }

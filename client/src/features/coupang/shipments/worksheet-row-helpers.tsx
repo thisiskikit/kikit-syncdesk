@@ -22,6 +22,10 @@ import {
   resolveCoupangDisplayOrderStatus,
 } from "@/lib/coupang-order-status";
 import { formatNumber } from "@/lib/utils";
+import {
+  getFulfillmentDecision,
+  getFulfillmentDecisionReasonLabel,
+} from "./fulfillment-decision";
 import { SHIPMENT_COLUMN_DEFAULT_WIDTHS } from "./worksheet-config";
 import type {
   EditableColumnKey,
@@ -215,6 +219,22 @@ function getShipmentSortValue(
   columnKey: string,
   columnConfigs: readonly ShipmentColumnConfig[],
 ) {
+  if (columnKey === "__fulfillmentDecisionStatus") {
+    const decision = getFulfillmentDecision(row);
+    const priorityMap = {
+      blocked: 0,
+      recheck: 1,
+      hold: 2,
+      invoice_waiting: 3,
+      ready: 4,
+    } satisfies Record<ReturnType<typeof getFulfillmentDecision>["status"], number>;
+    return `${priorityMap[decision.status]}:${decision.statusLabel}`;
+  }
+
+  if (columnKey === "__fulfillmentDecisionReason") {
+    return getFulfillmentDecisionReasonLabel(getFulfillmentDecision(row).reason);
+  }
+
   if (columnKey === "__exportStatus") {
     return row.exportedAt ? 1 : 0;
   }
@@ -437,6 +457,24 @@ export function renderExportStatusCell(row: CoupangShipmentWorksheetRow) {
   );
 }
 
+export function renderFulfillmentDecisionStatusCell(row: CoupangShipmentWorksheetRow) {
+  const decision = getFulfillmentDecision(row);
+  return (
+    <div className="shipment-cell" title={decision.description}>
+      <span className={decision.toneClassName}>{decision.statusLabel}</span>
+    </div>
+  );
+}
+
+export function renderFulfillmentDecisionReasonCell(row: CoupangShipmentWorksheetRow) {
+  const decision = getFulfillmentDecision(row);
+  return (
+    <div className="shipment-cell" title={decision.description}>
+      <span className="shipment-decision-reason-pill">{decision.reasonLabel}</span>
+    </div>
+  );
+}
+
 export function getShipmentExcelSortLabel(sortKey: ShipmentExcelSortKey) {
   return sortKey === "productName" ? "상품명순" : "날짜순";
 }
@@ -655,6 +693,8 @@ export function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
   return [
     row.orderDateText,
     row.orderStatus,
+    getFulfillmentDecision(row).statusLabel,
+    getFulfillmentDecision(row).reasonLabel,
     resolveWorksheetOrderStatus(row),
     formatOrderStatusLabel(resolveWorksheetOrderStatus(row)),
     invoiceStatusLabel,

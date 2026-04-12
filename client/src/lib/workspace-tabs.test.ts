@@ -85,15 +85,15 @@ describe("workspace tab state helpers", () => {
 
   it("restores persisted tabs and falls back to the first tab when the active id is stale", () => {
     const tabs = [
-      createWorkspaceTabRecord({ pathname: "/naver/products", search: "" }, { id: "naver", now: "2026-03-28T12:00:00.000Z" }),
-      createWorkspaceTabRecord({ pathname: "/operations", search: "tab=operations" }, { id: "ops", now: "2026-03-28T12:01:00.000Z" }),
+      createWorkspaceTabRecord({ pathname: "/fulfillment", search: "" }, { id: "fulfillment", now: "2026-03-28T12:00:00.000Z" }),
+      createWorkspaceTabRecord({ pathname: "/work-center", search: "tab=operations" }, { id: "ops", now: "2026-03-28T12:01:00.000Z" }),
     ];
 
     const snapshot = createPersistedWorkspaceTabs(tabs, "missing");
 
     expect(restoreWorkspaceTabs(snapshot, DASHBOARD_ROUTE)).toEqual({
       tabs,
-      activeTabId: "naver",
+      activeTabId: "fulfillment",
     });
   });
 });
@@ -101,20 +101,25 @@ describe("workspace tab state helpers", () => {
 describe("workspace route metadata", () => {
   it("resolves draft titles from dynamic routes", () => {
     expect(resolveWorkspaceRouteMeta("/engine/drafts/draft_1234567890", "")).toEqual({
-      title: "Draft draft_12",
-      topLevelHref: "/engine/catalog",
+      title: "초안 draft_12",
+      topLevelHref: "/settings",
     });
   });
 
   it("pins all coupang routes to the shipments workspace entry", () => {
     expect(resolveWorkspaceRouteMeta("/coupang/products", "")).toEqual({
       title: "COUPANG Products",
-      topLevelHref: "/coupang/shipments",
+      topLevelHref: "/channels",
     });
 
     expect(resolveWorkspaceRouteMeta("/coupang/returns", "storeId=1")).toEqual({
-      title: "COUPANG Returns",
-      topLevelHref: "/coupang/shipments",
+      title: "CS Returns",
+      topLevelHref: "/cs",
+    });
+
+    expect(resolveWorkspaceRouteMeta("/coupang/shipments", "")).toEqual({
+      title: "출고",
+      topLevelHref: "/fulfillment",
     });
   });
 
@@ -122,13 +127,13 @@ describe("workspace route metadata", () => {
     const tabs = [
       createWorkspaceTabRecord({ pathname: "/naver/products", search: "" }, { id: "naver-1", now: "2026-03-28T12:00:00.000Z" }),
       createWorkspaceTabRecord({ pathname: "/naver/products", search: "storeId=2" }, { id: "naver-2", now: "2026-03-28T12:01:00.000Z" }),
-      createWorkspaceTabRecord({ pathname: "/operations", search: "" }, { id: "ops", now: "2026-03-28T12:02:00.000Z" }),
+      createWorkspaceTabRecord({ pathname: "/work-center", search: "" }, { id: "ops", now: "2026-03-28T12:02:00.000Z" }),
     ];
 
     expect(getWorkspaceTabDisplayTitles(tabs)).toEqual([
       { ...tabs[0], displayTitle: "NAVER Products" },
       { ...tabs[1], displayTitle: "NAVER Products 2" },
-      { ...tabs[2], displayTitle: "Operation Center" },
+      { ...tabs[2], displayTitle: "작업센터" },
     ]);
   });
 });

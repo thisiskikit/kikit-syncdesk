@@ -74,29 +74,50 @@ export function parseWorkspaceHref(href: string) {
 export function resolveWorkspaceRouteMeta(pathname: string, search = ""): WorkspaceRouteMeta {
   if (pathname === "/" || pathname === "/dashboard") {
     return {
-      title: "Dashboard",
+      title: "대시보드",
       topLevelHref: "/dashboard",
+    };
+  }
+
+  if (pathname === "/fulfillment") {
+    return {
+      title: "출고",
+      topLevelHref: "/fulfillment",
+    };
+  }
+
+  if (pathname === "/cs") {
+    return {
+      title: "CS",
+      topLevelHref: "/cs",
+    };
+  }
+
+  if (pathname === "/channels") {
+    return {
+      title: "채널",
+      topLevelHref: "/channels",
+    };
+  }
+
+  if (pathname === "/work-center" || pathname === "/operations") {
+    return {
+      title: "작업센터",
+      topLevelHref: "/work-center",
     };
   }
 
   if (pathname === "/settings") {
     return {
-      title: "Settings",
+      title: "설정",
       topLevelHref: "/settings",
-    };
-  }
-
-  if (pathname === "/operations") {
-    return {
-      title: "Operation Center",
-      topLevelHref: "/operations",
     };
   }
 
   if (pathname === "/catalog" || pathname === "/engine/catalog") {
     return {
-      title: "Catalog",
-      topLevelHref: "/engine/catalog",
+      title: "초안 카탈로그",
+      topLevelHref: "/settings",
     };
   }
 
@@ -104,8 +125,8 @@ export function resolveWorkspaceRouteMeta(pathname: string, search = ""): Worksp
     const params = new URLSearchParams(normalizeWorkspaceSearch(search));
     const runId = params.get("runId");
     return {
-      title: runId ? `Runs ${runId.slice(0, 8)}` : "Runs",
-      topLevelHref: "/engine/catalog",
+      title: runId ? `실행 ${runId.slice(0, 8)}` : "실행 이력",
+      topLevelHref: "/settings",
     };
   }
 
@@ -113,8 +134,39 @@ export function resolveWorkspaceRouteMeta(pathname: string, search = ""): Worksp
     const segments = pathname.split("/").filter(Boolean);
     const draftId = segments[segments.length - 1] ?? "";
     return {
-      title: draftId ? `Draft ${draftId.slice(0, 8)}` : "Draft",
-      topLevelHref: "/engine/catalog",
+      title: draftId ? `초안 ${draftId.slice(0, 8)}` : "초안",
+      topLevelHref: "/settings",
+    };
+  }
+
+  if (
+    pathname.startsWith("/coupang/shipments") ||
+    pathname.startsWith("/fulfillment")
+  ) {
+    return {
+      title: "출고",
+      topLevelHref: "/fulfillment",
+    };
+  }
+
+  if (
+    pathname.startsWith("/coupang/inquiries") ||
+    pathname.startsWith("/coupang/returns") ||
+    pathname.startsWith("/coupang/exchanges") ||
+    pathname.startsWith("/naver/inquiries") ||
+    pathname.startsWith("/naver/returns") ||
+    pathname.startsWith("/naver/claims") ||
+    pathname.startsWith("/cs")
+  ) {
+    const segment = pathname.split("/").filter(Boolean)[1] ?? "";
+    return {
+      title:
+        pathname === "/cs"
+          ? "CS"
+          : segment
+            ? `CS ${humanizePathSegment(segment)}`
+            : "CS",
+      topLevelHref: "/cs",
     };
   }
 
@@ -122,7 +174,7 @@ export function resolveWorkspaceRouteMeta(pathname: string, search = ""): Worksp
     const segment = pathname.split("/").filter(Boolean)[1] ?? "";
     return {
       title: segment ? `NAVER ${humanizePathSegment(segment)}` : "NAVER",
-      topLevelHref: "/naver/products",
+      topLevelHref: "/channels",
     };
   }
 
@@ -130,15 +182,15 @@ export function resolveWorkspaceRouteMeta(pathname: string, search = ""): Worksp
     const segment = pathname.split("/").filter(Boolean)[1] ?? "";
     return {
       title: segment ? `COUPANG ${humanizePathSegment(segment)}` : "COUPANG",
-      topLevelHref: "/coupang/shipments",
+      topLevelHref: "/channels",
     };
   }
 
   if (pathname.startsWith("/engine")) {
     const segment = pathname.split("/").filter(Boolean)[1] ?? "";
     return {
-      title: segment ? `ENGINE ${humanizePathSegment(segment)}` : "ENGINE",
-      topLevelHref: "/engine/catalog",
+      title: segment ? `고급 ${humanizePathSegment(segment)}` : "고급",
+      topLevelHref: "/settings",
     };
   }
 

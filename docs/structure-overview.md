@@ -1,20 +1,13 @@
 # Structure Overview
 
-- Snapshot date: 2026-04-08
+- Snapshot date: 2026-04-12
 - Reason for this document:
-  - establish a current, code-backed overview of structure, data flow, API surface, DB usage, and UI routing
+  - record the current structure after KIKIT SyncDesk UI 개편 1차
+  - explain how the app now presents itself as an operations desk instead of a channel-first admin console
 - Verification scope:
-  - code inspection only
-- Verified sources:
-  - `client/src/App.tsx`
-  - `client/src/components/operation-toaster.tsx`
-  - `client/src/features/coupang/products/page.tsx`
-  - `server/index.ts`
-  - `server/routes.ts`
-  - `server/routes/coupang/products.ts`
-  - `server/storage.ts`
-  - `server/services/shared/work-data-db.ts`
-  - `shared/schema.ts`
+  - code inspection
+  - route inspection
+  - targeted TypeScript and unit-test validation
 
 ## 1. Top-Level Layout
 
@@ -37,186 +30,246 @@ server/
 
 shared/
   schema.ts
+  coupang.ts
   ...shared API/data contracts
 
-script/
-  build and utility scripts
-
 docs/
-  architecture/
   current-status.md
   change-log.md
   structure-overview.md
+  decisions/
+  handoffs/
 ```
 
-## 2. Frontend Structure
+## 2. Frontend App Shell
 
-- App entry:
+- Entry point:
   - `client/src/App.tsx`
-  - wraps the app with `QueryClientProvider`, `OperationProvider`, `AppErrorBoundary`, and `WorkspaceTabsProvider`
-- Main UI layout:
-  - top navigation: Dashboard, NAVER, COUPANG, Draft / Runs, Settings, Work Center
-  - workspace tabs: multiple route tabs managed in-app
-  - operation toaster: shows queued/running work status for generic operations only
-- Route groups:
-  - `/dashboard`
-  - `/naver/*`
-  - `/coupang/*`
-  - `/engine/*`
-  - `/settings`
-  - `/operations`
-- Current UI behavior:
-  - NAVER and COUPANG each render their own section layout and local navigation
-  - shared engine routes handle catalog, drafts, runs, and field sync
-  - some NAVER routes still intentionally render placeholders instead of completed feature pages
-  - `/naver/bulk-price`, `/naver/product-edit`, `/coupang/bulk-price`, and `/coupang/product-edit` are currently disabled and redirect back to the main product pages
+- Providers:
+  - React Query
+  - operation provider
+  - app error boundary
+  - workspace tabs provider
+- Main shell responsibilities:
+  - brand and top navigation
+  - multi-tab workspace strip
+  - top-level route switching
+  - operation toaster
 
-## 3. Backend Structure
+### Current top navigation
 
-- Server bootstrap:
-  - `server/index.ts`
-  - loads env, applies JSON and URL-encoded body parsing, enables CORS, logs API request timing, mounts routes, normalizes errors, and starts HTTP server
-- Startup recovery:
-  - `resumeQueuedRuns()`
-- API mount registry:
-  - `server/routes.ts`
-  - central mount point for all Express routers
+- `대시보드`
+- `출고`
+- `CS`
+- `채널`
+- `작업센터`
+- `설정`
 
-### Mounted API Areas
+This is the main identity shift in the UI. NAVER and COUPANG are no longer top-level sections in the primary shell.
 
-| Prefix | Mounted routers |
-| --- | --- |
-| `/api/catalog` | `catalog`, `sync` |
-| `/api/coupang` | `coupang`, `coupang-promotions`, `coupang-support` |
-| `/api/drafts` | `drafts` |
-| `/api/executions` | `executions` |
-| `/api/health` | `health` |
-| `/api/logs` | `logs` |
-| `/api/naver` | `naver-claims`, `naver-inquiries`, `naver-products`, `naver-orders`, `naver-seller`, `naver-settlements`, `naver-stats` |
-| `/api/operations` | `operations` |
-| `/api/field-sync` | `platform-field-sync` |
-| `/api/product-library` | `product-library` |
-| `/api/settings` | `settings` |
-| `/api/ui-state` | `ui-state` |
+## 3. Route Ownership
 
-### Current Layering
+| Top-level route | Purpose | Main implementation |
+| --- | --- | --- |
+| `/dashboard` | 오늘의 운영 시작점 | `client/src/pages/dashboard.tsx` |
+| `/fulfillment` | 출고 판단 + 실행 + 예외 확인 | `client/src/pages/fulfillment.tsx` -> `client/src/features/coupang/shipments/page.tsx` |
+| `/cs` | CS 허브 / deep-link launcher | `client/src/pages/cs-hub.tsx` |
+| `/channels` | 채널 연결 / 원본 화면 허브 | `client/src/pages/channels-hub.tsx` |
+| `/work-center` | 실패 작업 복구 / 로그 상세 | `client/src/pages/operation-center.tsx` |
+| `/settings` | 연결 설정 + 고급 도구 허브 | `client/src/pages/settings-hub.tsx` |
 
-- Verified:
-  - route mounting is centralized in `server/routes.ts`
-  - the repository contains both `server/application/*` and `server/services/*`
-  - some implementation areas such as bulk-price still exist on disk even when their runtime routes are disabled
-- Note:
-  - the codebase is in a hybrid state where some domains are being moved from legacy service-centered structure toward clearer application/domain boundaries
+### Redirect / wrapper rules
 
-## 4. Data and Persistence Structure
+- `/operations` redirects to `/work-center`
+- `/coupang/shipments` redirects to `/fulfillment`
+- `/naver` redirects to `/channels`
+- `/coupang` redirects to `/channels`
+- `/runs` redirects to `/engine/runs`
+- `/drafts/:id` redirects to `/engine/drafts/:id`
 
-- Shared schema source:
-  - `shared/schema.ts`
-- Optional PostgreSQL connection:
-  - `server/storage.ts` creates `db` only when `DATABASE_URL` exists
-- Shared engine runtime storage:
-  - `server/storage.ts` exports `storage` as `new IndexedMemoryStorage()`
-  - this currently backs catalog, draft, and execution flows in memory
-- Persistent work-data bootstrap:
-  - `server/services/shared/work-data-db.ts`
-  - creates required tables with SQL and supports one-time legacy imports
+## 4. Fulfillment Screen Structure
 
-### Persistent Table Groups Present in `shared/schema.ts`
+The primary fulfillment implementation still lives in the Coupang shipment feature, but its presentation layer has been reframed.
 
-- Channel control:
-  - `channel_products`
-  - `channel_options`
-  - `sku_channel_mappings`
-  - `catalog_sync_runs`
-  - `control_drafts`
-  - `control_draft_items`
-  - `execution_runs`
-  - `execution_items`
-- Product library:
-  - `product_library_records`
-  - `product_library_attachments`
-- Store settings:
-  - `channel_store_settings`
-  - `coupang_store_settings`
-- COUPANG shipment:
-  - `coupang_shipment_sheets`
-  - `coupang_shipment_rows`
-- UI/cache:
-  - `ui_state_entries`
-  - `coupang_product_explorer_cache_entries`
-  - `coupang_product_detail_cache_entries`
-  - `naver_product_cache_entries`
-  - `naver_product_seller_barcode_cache_entries`
-  - `naver_product_memo_entries`
-- Bulk price:
-  - NAVER preset, run, run item, latest record tables
-  - COUPANG preset, run, run item, latest record tables
-- Logs and orchestration:
-  - `operation_logs`
-  - `event_logs`
-  - `platform_field_sync_rules`
-  - `platform_field_sync_runs`
-  - `storage_imports`
+### Main structure in use
 
-## 5. Key Data Flows
+- page hero
+- primary actions
+  - 빠른 수집
+  - 결제완료 -> 상품준비중
+  - 송장 입력
+  - 송장 전송
+- secondary actions
+  - 누락 검수
+  - 보관함
+  - 화면 설정
+- base filters
+  - store
+  - date range
+  - search
+  - secondary `보기 범위`
+- decision tabs
+  - 전체
+  - 출고 가능
+  - 송장 대기
+  - 보류
+  - 차단
+  - 재확인 필요
+- result summary metrics
+- current filter summary row
+- collapsed detail filters
+  - 송장 상태
+  - 출력 상태
+  - 주문 상태
+- main worksheet table
+- selection action bar
+  - separates `즉시 실행` rows from `제외 또는 확인 필요` rows
+  - selected invoice transmission automatically skips blocked decision groups and reports what was excluded
+- right-side decision drawer
+- deeper full-detail dialog
 
-### Request and UI Flow
+### Fulfillment filter layering
 
-1. React pages issue queries and mutations through React Query.
-2. Requests hit Express routers mounted in `server/routes.ts`.
-3. Route modules delegate to service/application logic.
-4. Logic reads or writes one or more of:
-   - external channel APIs
-   - PostgreSQL work-data tables
-   - in-memory shared engine storage
-   - file-based legacy imports or caches
-   - `/api/ui-state` backed page state for persisted filters and section state
-5. Responses return to the page and update the workspace view.
+- Main axis:
+  - `출고 판단`
+- Secondary scope:
+  - `작업 대상`
+  - `배송 이후`
+  - `예외·클레임`
+  - `전체`
+- Detail drill-down:
+  - `송장 상태`
+  - `출력 상태`
+  - `주문 상태`
 
-### Startup and Recovery Flow
+This layering is intentionally used so operators first answer "what should I act on now?" before narrowing by raw status details.
 
-1. The server boots through `server/index.ts`.
-2. Recovery routines resume queued or interrupted shared-engine work before serving traffic.
-3. Development mode attaches Vite middleware.
-4. Production mode serves built static assets unless disabled.
+### Supporting modules
 
-### Shared Draft / Runs Flow
+- `client/src/features/coupang/shipments/fulfillment-decision.ts`
+  - maps worksheet rows into fulfillment decision states and reasons
+- `client/src/features/coupang/shipments/shipment-base-filters.tsx`
+  - owns the store / date / search / secondary scope controls
+- `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - owns the decision tabs, decision summary metrics, current filter summary, and collapsed detail-filter section
+- `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
+  - owns the worksheet card shell, worksheet empty states, and worksheet pagination controls
+- `client/src/features/coupang/shipments/shipment-archive-panel.tsx`
+  - owns the archive card shell, archive empty states, archive pagination controls, and archive table markup
+- `client/src/features/coupang/shipments/shipment-selection-action-bar.tsx`
+  - owns the mixed-selection summary and decision-aware batch action CTA area
+- `client/src/features/coupang/shipments/shipment-decision-drawer.tsx`
+  - thin detail surface for operator-first review
+- `client/src/features/coupang/shipments/worksheet-grid-config.tsx`
+  - exposes decision status and decision reason columns
+- `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
+  - renders decision cells and keeps them searchable/sortable
 
-1. Catalog data is prepared through shared catalog endpoints.
-2. Drafts and draft items are created and validated.
-3. Execution runs are queued and resumed on startup if needed.
-4. Because runtime storage is still in memory, these shared flows are not yet fully durable across process restarts.
+## 5. CS / Channel / Work-Center Framing
 
-## 6. Operational Constraints
+### CS
 
-- `DATABASE_URL` is required for persistent work-data features.
-- Request body limit defaults to `5mb` unless overridden.
-- API request timing and startup events are logged from the server bootstrap path.
-- Legacy bulk-price tables and services still exist in the repository, but the live runtime does not currently mount their routes.
+- `client/src/pages/cs-hub.tsx`
+- Purpose:
+  - send operators into channel-native inquiry / claim screens
+  - keep CS visible as a fulfillment-impact layer
+- Current implementation approach:
+  - card hub
+  - deep-links to existing NAVER and COUPANG screens
+  - fulfillment-impact counts pulled from shipment view data
 
-## 7. Change Summary
+### Channels
 
-- Change content:
-  - updated the structure snapshot to reflect disabled bulk-price runtime routes and disabled dedicated COUPANG product-edit runtime paths
-- Reason:
-  - the latest code change removed these features from the active runtime surface while leaving source files available for later extraction
-- Impact scope:
-  - documentation only in this file
-  - describes the runtime structure that is actually mounted today
+- `client/src/pages/channels-hub.tsx`
+- Purpose:
+  - connection settings and raw channel work entry
+  - keep channel tools below the main operations path
+- Notes:
+  - raw channel workflows still exist under `/naver/*` and `/coupang/*`
+  - legacy product-oriented tools are disclosed under advanced / legacy sections
 
-## 8. Remaining Issues
+### Work Center
 
-- Shared engine persistence does not yet match the PostgreSQL-oriented schema footprint.
-- Work-data table creation is runtime-driven instead of migration-driven only.
-- Some UI modules are still placeholders, so route presence does not always mean feature completeness.
-- Bulk-price and dedicated product-edit implementation files are still present on disk even though the app runtime does not expose them.
+- `client/src/pages/operation-center.tsx`
+- Purpose:
+  - recovery-first log console
+- Current behavior:
+  - prioritizes warning / error / retryable / running / slow entries
+  - exposes retry in the main list
+  - pushes raw JSON into expandable detail sections
 
-## 9. Next Work
+## 6. Legacy Exposure Policy
 
-- Update this file whenever one of the following changes:
-  - folder/module responsibilities
-  - request/data flow
-  - API mount points or endpoint ownership
-  - database table usage
-  - UI route behavior
-- When a structural decision is made, add a matching record under `docs/decisions/`.
+The following areas are intentionally removed from the main top-level navigation and operator-first landing flow:
+
+- bulk-price
+- product-edit
+- grouped products
+- draft / runs as a main nav axis
+- channel-first shell sections
+
+Current policy:
+
+- keep direct URL access where needed
+- keep source files and wrappers unless removal is clearly safe
+- surface advanced entry points through `채널` or `설정`
+
+## 7. Backend Relationship
+
+This UI 개편 1차 is mainly a frontend and information-architecture change.
+
+- No new dashboard-only backend service was introduced.
+- The new dashboard and hubs reuse existing APIs such as:
+  - `/api/settings/stores`
+  - `/api/coupang/stores`
+  - `/api/ui-state`
+  - `/api/coupang/shipments/worksheet/view`
+  - `/api/logs`
+- Existing shipment, operation, and channel APIs continue to own business logic.
+
+## 8. Data Flow Summary
+
+### Dashboard flow
+
+1. Load connected NAVER / COUPANG stores.
+2. Resolve the preferred Coupang shipment store from UI state.
+3. Load the current shipment worksheet view for that store.
+4. Convert worksheet rows into fulfillment decision counts.
+5. Combine decision counts with operation provider state to build the dashboard cards.
+
+### Fulfillment flow
+
+1. The page loads worksheet view data from the existing shipment API.
+2. Rows are decorated with fulfillment decision status and reason in the UI layer.
+3. Decision tabs filter the currently visible rows.
+4. The main table remains thin.
+5. Selecting a row opens the right-side decision drawer.
+6. Deep detail remains available in the full detail dialog.
+7. The top filter, overview, worksheet card, and archive card areas are now composed from focused presentation components instead of a single large JSX block in the page file.
+
+### Work-center flow
+
+1. Load operation or event logs from `/api/logs`.
+2. Sort entries by recovery priority.
+3. Show retry and summary information in the list.
+4. Reveal raw payloads and detail JSON only in foldout sections.
+
+## 9. Validation Snapshot
+
+- Passed:
+  - `npm run check`
+  - `npm run build`
+  - `npx vitest run client/src/lib/workspace-tabs.test.ts client/src/lib/coupang-navigation.test.ts client/src/features/coupang/shipments/fulfillment-decision.test.ts`
+  - `Invoke-WebRequest` returned `200` for `/dashboard`, `/fulfillment`, `/cs`, `/channels`, and `/work-center` on the local dev server
+- Not yet verified:
+  - browser-level end-to-end walkthrough of the new dashboard -> fulfillment -> drawer flow
+  - browser-level walkthrough of CS hub, channels hub, and work-center reframing
+  - note: headless Chrome / Edge verification against the local dev server was attempted during this task but both browsers returned `ERR_CONNECTION_REFUSED`, while plain HTTP requests still returned `200`
+
+## 10. Remaining Structural Gaps
+
+- The fulfillment page still carries a large amount of orchestration logic in one file.
+- The top filter, worksheet, archive, and selection areas are now modularized, but the main grid wiring and action orchestration still live in the same page coordinator.
+- The CS top-level page is a hub, not a unified workflow engine.
+- Legacy channel and engine routes still exist, which is intentional for compatibility, but they are not yet fully wrapped behind dedicated adapters.
+- The main IA has changed, but some deep screens still keep older wording or layout patterns.

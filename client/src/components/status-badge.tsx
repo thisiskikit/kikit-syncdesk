@@ -3,7 +3,7 @@ import clsx from "clsx";
 type StatusBadgeTone = "live" | "draft" | "coming" | "shared";
 
 const labelMap: Record<StatusBadgeTone, string> = {
-  live: "실연동",
+  live: "운영중",
   draft: "초안",
   coming: "준비중",
   shared: "공통",

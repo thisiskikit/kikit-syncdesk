@@ -21,6 +21,7 @@ export type FilterState = {
   query: string;
   maxPerPage: number;
   scope: CoupangShipmentWorksheetViewScope;
+  decisionStatus: FulfillmentDecisionFilterValue;
   invoiceStatusCard: InvoiceStatusCardKey;
   orderStatusCard: OrderStatusCardKey;
   outputStatusCard: OutputStatusCardKey;
@@ -65,3 +66,46 @@ export type SelectedCellState = {
 export type WorksheetMode = "default" | "invoice";
 export type ShipmentExcelSortKey = "productName" | "date";
 export type ShipmentExcelExportScope = "selected" | "notExported";
+
+export type FulfillmentDecisionStatus =
+  | "ready"
+  | "invoice_waiting"
+  | "hold"
+  | "blocked"
+  | "recheck";
+
+export type FulfillmentDecisionReason =
+  | "cancel_request"
+  | "return_exchange"
+  | "shipment_stop"
+  | "customer_service_effect"
+  | "invoice_failure"
+  | "sync_failure"
+  | "status_conflict"
+  | "missing_data"
+  | "inquiry_check"
+  | "order_info_check"
+  | "exception_order"
+  | "invoice_required"
+  | "invoice_transmitting"
+  | "ready_now";
+
+export type FulfillmentDecisionAllowedAction =
+  | "prepare"
+  | "invoice"
+  | "invoice_input"
+  | "details"
+  | "cs";
+
+export type FulfillmentDecisionPresentation = {
+  status: FulfillmentDecisionStatus;
+  statusLabel: string;
+  reason: FulfillmentDecisionReason;
+  reasonLabel: string;
+  description: string;
+  toneClassName: string;
+  allowedActions: FulfillmentDecisionAllowedAction[];
+  shouldBlockBatchActions: boolean;
+};
+
+export type FulfillmentDecisionFilterValue = "all" | FulfillmentDecisionStatus;

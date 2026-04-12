@@ -591,6 +591,12 @@ textarea {
   align-items: center;
 }
 
+.shipment-filter-scope-row {
+  width: 100%;
+  padding-top: 0.35rem;
+  border-top: 1px solid #edf2f7;
+}
+
 .shipment-icon-button {
   width: 44px;
   height: 44px;
@@ -621,6 +627,58 @@ textarea {
 .shipment-status-toolbar {
   display: grid;
   gap: 0.9rem;
+}
+
+.shipment-filter-summary-card,
+.shipment-detail-filter-card {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.shipment-filter-summary-header,
+.shipment-detail-filter-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.shipment-filter-summary-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #344155;
+}
+
+.shipment-filter-summary-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.shipment-filter-token {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.78rem;
+  border-radius: 999px;
+  border: 1px solid #dbe5ef;
+  background: #f8fbfe;
+  color: #213047;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.shipment-filter-summary-note,
+.shipment-filter-summary-meta {
+  margin-top: 0.45rem;
+}
+
+.shipment-filter-summary-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .shipment-status-group {
@@ -847,6 +905,354 @@ textarea {
   min-height: 560px;
 }
 
+.dashboard-ops-page,
+.work-center-page {
+  gap: 1.25rem;
+}
+
+.dashboard-ops-hero,
+.work-center-hero {
+  padding: 1.1rem 0 0.2rem;
+}
+
+.dashboard-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.dashboard-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.dashboard-section-header h2 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.dashboard-section-header p {
+  margin: 0.35rem 0 0;
+  color: #5c6a7d;
+  line-height: 1.55;
+}
+
+.dashboard-channel-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.dashboard-channel-strip-item {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  background: #f8fbfe;
+  border: 1px solid #e2eaf2;
+}
+
+.dashboard-channel-strip-item strong {
+  font-size: 1.15rem;
+  color: #152033;
+}
+
+.dashboard-action-grid,
+.dashboard-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem;
+}
+
+.dashboard-ops-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.95fr);
+  gap: 1rem;
+}
+
+.dashboard-priority-list,
+.dashboard-issue-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dashboard-priority-item,
+.dashboard-issue-item {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid #dce5ef;
+  background: #fbfdff;
+}
+
+.dashboard-priority-item strong,
+.dashboard-issue-item strong {
+  color: #152033;
+}
+
+.dashboard-issue-item-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.dashboard-legacy-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.dashboard-legacy-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.dashboard-legacy-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.work-center-guide-card {
+  padding: 1rem 1.05rem;
+}
+
+.work-center-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.8rem;
+}
+
+.work-center-guide-item {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  border: 1px solid #e1e8f0;
+  background: #fbfdff;
+}
+
+.work-center-guide-item strong {
+  color: #152033;
+}
+
+.work-center-guide-item p {
+  margin: 0;
+}
+
+.work-center-detail-sections {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.work-center-detail-foldout {
+  border: 1px solid #dde6ef;
+  border-radius: 16px;
+  background: #fbfdff;
+  padding: 0.85rem 1rem;
+}
+
+.work-center-detail-foldout summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #152033;
+}
+
+.work-center-detail-foldout .detail-box,
+.work-center-detail-foldout .detail-columns {
+  margin-top: 0.8rem;
+}
+
+.shipment-decision-toolbar,
+.shipment-decision-summary-grid {
+  margin-bottom: 0;
+}
+
+.shipment-decision-badge,
+.shipment-decision-reason-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.38rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.shipment-decision-badge.ready {
+  background: #eaf8ef;
+  color: #17653d;
+}
+
+.shipment-decision-badge.invoice {
+  background: #fff4dd;
+  color: #8c5d00;
+}
+
+.shipment-decision-badge.hold {
+  background: #f3f5f8;
+  color: #526274;
+}
+
+.shipment-decision-badge.blocked {
+  background: #fff1ef;
+  color: #b42318;
+}
+
+.shipment-decision-badge.recheck {
+  background: #eef5ff;
+  color: #1f57a5;
+}
+
+.shipment-decision-reason-pill {
+  background: #f4f7fb;
+  color: #526274;
+  border: 1px solid #dbe4ee;
+}
+
+.shipment-selection-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shipment-selection-note {
+  margin-top: 0.35rem;
+}
+
+.shipment-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
+.shipment-decision-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(12, 20, 33, 0.28);
+}
+
+.shipment-decision-drawer {
+  width: min(560px, 100vw);
+}
+
+.shipment-decision-drawer-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #edf1f5;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.shipment-decision-drawer-header-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.shipment-decision-drawer-header-main h2 {
+  margin: 0;
+}
+
+.shipment-decision-drawer-header-main p {
+  margin: 0.4rem 0 0;
+  color: #5c6a7d;
+  line-height: 1.55;
+}
+
+.shipment-decision-drawer-summary {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  background: #f8fbfe;
+  border: 1px solid #e0e8f1;
+}
+
+.shipment-decision-drawer-meta-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.shipment-decision-drawer-meta-row > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.shipment-decision-drawer-body {
+  overflow-y: auto;
+  padding: 1rem 1.25rem 1.25rem;
+  display: grid;
+  gap: 0.95rem;
+}
+
+.shipment-decision-drawer-section {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.shipment-decision-drawer-section-title {
+  font-weight: 700;
+  color: #152033;
+}
+
+.shipment-decision-drawer-info-grid {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.shipment-decision-drawer-info-row {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid #e2e9f1;
+  background: #fbfdff;
+}
+
+.shipment-decision-drawer-info-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #5c6a7d;
+}
+
+.shipment-decision-drawer-info-value {
+  color: #152033;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shipment-decision-drawer-foldout {
+  border: 1px solid #dde6ef;
+  border-radius: 16px;
+  background: #fbfdff;
+  padding: 0.85rem 1rem;
+}
+
+.shipment-decision-drawer-foldout summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #152033;
+}
+
+.shipment-decision-drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
 @media (max-width: 720px) {
   .shipment-page-actions {
     width: 100%;
@@ -882,6 +1288,26 @@ textarea {
 
   .shipment-quick-filter-summary {
     white-space: normal;
+  }
+
+  .shipment-selection-bar,
+  .shipment-decision-drawer-header-main,
+  .shipment-filter-summary-header,
+  .shipment-detail-filter-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .shipment-decision-drawer-meta-row {
+    grid-template-columns: 1fr;
+  }
+
+  .shipment-filter-summary-actions {
+    justify-content: stretch;
+  }
+
+  .shipment-filter-summary-actions > * {
+    width: 100%;
   }
 }
 
@@ -3136,6 +3562,10 @@ textarea {
   }
 
   .bulk-price-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-ops-layout {
     grid-template-columns: 1fr;
   }
 

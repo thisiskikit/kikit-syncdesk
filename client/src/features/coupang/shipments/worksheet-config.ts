@@ -230,6 +230,7 @@ export function createDefaultFilters(): FilterState {
     query: "",
     maxPerPage: 20,
     scope: "dispatch_active",
+    decisionStatus: "all",
     invoiceStatusCard: "all",
     orderStatusCard: "all",
     outputStatusCard: "all",
@@ -246,6 +247,7 @@ export function normalizeFiltersToSeoulToday(current: FilterState): FilterState 
     createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
     createdAtTo: today,
     scope: current.scope ?? "dispatch_active",
+    decisionStatus: current.decisionStatus ?? "all",
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
     outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
@@ -260,6 +262,7 @@ export function areFiltersEqual(left: FilterState, right: FilterState) {
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
     left.scope === right.scope &&
+    left.decisionStatus === right.decisionStatus &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard

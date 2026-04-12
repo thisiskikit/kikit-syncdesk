@@ -104,7 +104,7 @@ function buildLogsUrl(filters: FilterState) {
   return `/api/logs?${search.toString()}`;
 }
 
-function buildLogCenterHref(filters: FilterState, logId?: string | null) {
+function buildWorkCenterHref(filters: FilterState, logId?: string | null) {
   const search = new URLSearchParams({
     tab: filters.tab,
     channel: filters.channel,
@@ -114,11 +114,34 @@ function buildLogCenterHref(filters: FilterState, logId?: string | null) {
     search.set("logId", logId);
   }
 
-  return `/operations?${search.toString()}`;
+  return `/work-center?${search.toString()}`;
 }
 
 function isLogCenterTab(value: string | null): value is LogCenterTab {
   return value === "operations" || value === "events";
+}
+
+function getEntryPriority(entry: LogEntry) {
+  const statusScore =
+    entry.status === "error"
+      ? 50
+      : entry.status === "warning"
+        ? 40
+        : entry.status === "running"
+          ? 30
+          : entry.status === "queued"
+            ? 20
+            : 10;
+
+  const levelScore =
+    entry.level === "error" ? 20 : entry.level === "warning" ? 10 : 0;
+
+  const retryScore =
+    entry.kind === "operation" && entry.operation.retryable ? 15 : 0;
+
+  const slowScore = entry.meta?.slow ? 5 : 0;
+
+  return statusScore + levelScore + retryScore + slowScore;
 }
 
 export default function OperationCenterPage() {
@@ -181,12 +204,14 @@ export default function OperationCenterPage() {
     queryFn: () => getJson<LogDetailResponse>(`/api/logs/${encodeURIComponent(selectedLogId ?? "")}`),
     ...queryPresets.detail,
   });
+
   const refreshLogs = () =>
     refreshQueryData({
       queryKey: logsQueryKey,
       queryFn: () => getJson<LogListResponse>(buildLogsUrl(filters)),
       gcTime: queryPresets.listSnapshot.gcTime,
     });
+
   const refreshSelectedLog = () =>
     selectedLogId
       ? refreshQueryData({
@@ -206,13 +231,32 @@ export default function OperationCenterPage() {
       return;
     }
 
-    navigate(buildLogCenterHref(filters), { replace: true });
+    navigate(buildWorkCenterHref(filters), { replace: true });
   }, [filters, navigate, selectedLogId, selectedLogQuery.data, selectedLogQuery.isSuccess]);
 
   const items = logsQuery.data?.items ?? [];
+  const prioritizedItems = useMemo(
+    () =>
+      [...items].sort((left, right) => {
+        const priorityGap = getEntryPriority(right) - getEntryPriority(left);
+        if (priorityGap !== 0) {
+          return priorityGap;
+        }
+
+        return new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime();
+      }),
+    [items],
+  );
+
   const warningCount = items.filter((item) => item.level === "warning").length;
   const errorCount = items.filter((item) => item.level === "error").length;
   const slowCount = items.filter((item) => item.meta?.slow).length;
+  const retryableCount = items.filter(
+    (item) => item.kind === "operation" && item.operation.retryable,
+  ).length;
+  const activeCount = items.filter(
+    (item) => item.status === "queued" || item.status === "running",
+  ).length;
 
   const handleRetry = async (entry: LogEntry) => {
     if (entry.kind !== "operation" || !entry.operation.retryable) {
@@ -245,14 +289,61 @@ export default function OperationCenterPage() {
   };
 
   return (
-    <div className="page">
-      <div className="hero">
+    <div className="page work-center-page">
+      <div className="hero work-center-hero">
         <div className="hero-badges">
-          <StatusBadge tone="shared" label="로그 센터" />
-          <StatusBadge tone="live" label="로컬 보존" />
+          <StatusBadge tone="shared" label="작업센터" />
+          <StatusBadge tone="live" label="실패 작업 복구" />
         </div>
-        <h1>로그 센터</h1>
-        <p>사용자 작업 로그와 시스템/성능 로그를 한곳에서 조회하고, 필요한 경우 바로 상세 확인과 재시도를 진행합니다.</p>
+        <h1>작업센터</h1>
+        <p>
+          warning, error, retryable 작업을 먼저 보고 복구합니다. 원본 payload와 기술 로그는 상세 패널로 내려 두고,
+          메인 목록에서는 판단과 재시도에 필요한 정보만 우선 노출합니다.
+        </p>
+      </div>
+
+      <div className="metric-grid">
+        <div className="metric">
+          <div className="metric-label">조회 로그</div>
+          <div className="metric-value">{items.length}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">재시도 가능</div>
+          <div className="metric-value">{retryableCount}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">경고</div>
+          <div className="metric-value">{warningCount}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">오류</div>
+          <div className="metric-value">{errorCount}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">진행 중</div>
+          <div className="metric-value">{activeCount}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">느린 요청</div>
+          <div className="metric-value">{slowCount}</div>
+        </div>
+      </div>
+
+      <div className="card work-center-guide-card">
+        <div className="work-center-guide-grid">
+          <div className="work-center-guide-item">
+            <strong>재시도 가능 작업</strong>
+            <p className="muted">warning 또는 error 중 재시도 가능한 작업부터 먼저 복구합니다.</p>
+          </div>
+          <div className="work-center-guide-item">
+            <strong>최근 실패</strong>
+            <p className="muted">error, warning, 느린 요청을 우선 순서로 정렬해 보여줍니다.</p>
+          </div>
+          <div className="work-center-guide-item">
+            <strong>시스템 / 성능</strong>
+            <p className="muted">이벤트 탭에서 시스템, 성능, 연결 상태 로그를 분리해서 볼 수 있습니다.</p>
+          </div>
+        </div>
       </div>
 
       <div className="card">
@@ -278,7 +369,7 @@ export default function OperationCenterPage() {
                 }))
               }
             >
-              시스템/성능
+              시스템 / 성능
             </button>
           </div>
 
@@ -360,35 +451,16 @@ export default function OperationCenterPage() {
         </div>
       </div>
 
-      <div className="metric-grid">
-        <div className="metric">
-          <div className="metric-label">조회 로그</div>
-          <div className="metric-value">{items.length}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">경고</div>
-          <div className="metric-value">{warningCount}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">오류</div>
-          <div className="metric-value">{errorCount}</div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">느린 요청</div>
-          <div className="metric-value">{slowCount}</div>
-        </div>
-      </div>
-
       <div className="card">
         {logsQuery.isLoading ? (
-          <div className="empty">로그를 불러오는 중입니다.</div>
+          <div className="empty">작업 로그를 불러오는 중입니다.</div>
         ) : logsQuery.isError ? (
           <div className="empty">
             {logsQuery.error instanceof Error
               ? logsQuery.error.message
-              : "로그를 불러오지 못했습니다."}
+              : "작업 로그를 불러오지 못했습니다."}
           </div>
-        ) : items.length ? (
+        ) : prioritizedItems.length ? (
           <div className="table-wrap">
             <table className="table">
               <thead>
@@ -405,11 +477,11 @@ export default function OperationCenterPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((entry) => (
+                {prioritizedItems.map((entry) => (
                   <tr
                     key={entry.id}
                     className={selectedLogId === entry.id ? "table-row-selected" : ""}
-                    onClick={() => navigate(buildLogCenterHref(filters, entry.id))}
+                    onClick={() => navigate(buildWorkCenterHref(filters, entry.id))}
                   >
                     <td>
                       <div className="table-cell-stack">
@@ -447,7 +519,7 @@ export default function OperationCenterPage() {
                           className="button ghost"
                           onClick={(event) => {
                             event.stopPropagation();
-                            navigate(buildLogCenterHref(filters, entry.id));
+                            navigate(buildWorkCenterHref(filters, entry.id));
                           }}
                         >
                           상세
@@ -477,7 +549,7 @@ export default function OperationCenterPage() {
       </div>
 
       {selectedLog ? (
-        <div className="csv-overlay" onClick={() => navigate(buildLogCenterHref(filters))}>
+        <div className="csv-overlay" onClick={() => navigate(buildWorkCenterHref(filters))}>
           <div className="csv-dialog detail-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="detail-box-header">
               <div>
@@ -490,7 +562,7 @@ export default function OperationCenterPage() {
               </div>
               <div className="table-inline-actions">
                 <span className={`status-pill ${selectedLog.status}`}>{selectedLog.status}</span>
-                <button className="button ghost" onClick={() => navigate(buildLogCenterHref(filters))}>
+                <button className="button ghost" onClick={() => navigate(buildWorkCenterHref(filters))}>
                   닫기
                 </button>
               </div>
@@ -506,66 +578,78 @@ export default function OperationCenterPage() {
                 <p>시간: {formatTimeRange(selectedLog.startedAt, selectedLog.finishedAt)}</p>
                 <p>소요: {formatDuration(selectedLog.durationMs)}</p>
               </div>
+
               <div className="detail-card">
-                <strong>요약</strong>
-                <p>{selectedLog.message ?? "-"}</p>
+                <strong>복구 판단</strong>
                 {selectedLog.kind === "operation" ? (
                   <>
+                    <p>재시도 가능: {selectedLog.operation.retryable ? "예" : "아니오"}</p>
                     <p>대상: {selectedLog.operation.targetType}</p>
                     <p>건수: {selectedLog.operation.targetCount}</p>
-                    <p>재시도 가능: {selectedLog.operation.retryable ? "예" : "아니오"}</p>
+                    <p>
+                      요약:{" "}
+                      {getOperationErrorSummary(selectedLog.operation) ??
+                        getOperationResultSummaryText(selectedLog.operation.resultSummary) ??
+                        "요약 정보 없음"}
+                    </p>
                   </>
                 ) : (
-                  <p>이벤트: {getLogEventTypeLabel(selectedLog.eventType)}</p>
+                  <p>{selectedLog.message ?? "이벤트 메시지가 없습니다."}</p>
                 )}
               </div>
             </div>
 
             {selectedLog.kind === "operation" ? (
-              <>
-                <div className="detail-columns">
+              <div className="work-center-detail-sections">
+                <details className="work-center-detail-foldout" open>
+                  <summary>요청 / 결과 요약</summary>
+                  <div className="detail-columns">
+                    <div className="detail-box">
+                      <strong>Result Summary</strong>
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {formatJson(selectedLog.operation.resultSummary)}
+                      </pre>
+                    </div>
+                    <div className="detail-box">
+                      <strong>Error</strong>
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {formatJson({
+                          errorCode: selectedLog.operation.errorCode,
+                          errorMessage: selectedLog.operation.errorMessage,
+                          payloadPreview: getOperationPayloadPreview(selectedLog.operation),
+                        })}
+                      </pre>
+                    </div>
+                  </div>
+                </details>
+
+                <details className="work-center-detail-foldout">
+                  <summary>원본 요청 payload</summary>
                   <div className="detail-box">
-                    <strong>Request Payload</strong>
                     <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                       {formatJson(selectedLog.operation.requestPayload)}
                     </pre>
                   </div>
+                </details>
+
+                <details className="work-center-detail-foldout">
+                  <summary>정규화 payload</summary>
                   <div className="detail-box">
-                    <strong>Normalized Payload</strong>
                     <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                       {formatJson(selectedLog.operation.normalizedPayload)}
                     </pre>
                   </div>
-                </div>
-
-                <div className="detail-columns">
-                  <div className="detail-box">
-                    <strong>Result Summary</strong>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                      {formatJson(selectedLog.operation.resultSummary)}
-                    </pre>
-                  </div>
-                  <div className="detail-box">
-                    <strong>Error</strong>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                      {formatJson({
-                        errorCode: selectedLog.operation.errorCode,
-                        errorMessage: selectedLog.operation.errorMessage,
-                        payloadPreview: getOperationPayloadPreview(selectedLog.operation),
-                      })}
-                    </pre>
-                  </div>
-                </div>
-              </>
+                </details>
+              </div>
             ) : (
-              <div className="detail-columns">
+              <details className="work-center-detail-foldout" open>
+                <summary>이벤트 메타</summary>
                 <div className="detail-box">
-                  <strong>Meta</strong>
                   <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                     {formatJson(selectedLog.meta)}
                   </pre>
                 </div>
-              </div>
+              </details>
             )}
           </div>
         </div>

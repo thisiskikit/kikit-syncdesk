@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+﻿import { type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Redirect, Route, Switch, useLocation, useSearch } from "wouter";
 import { AppErrorBoundary } from "./components/app-error-boundary";
@@ -11,14 +11,11 @@ import {
   useWorkspaceTabs,
 } from "./components/workspace-tabs";
 import { SectionLayout, type SectionNavItem } from "./components/section-layout";
-import {
-  COUPANG_DEFAULT_WORKSPACE_HREF,
-  COUPANG_PRIMARY_NAV_ITEMS,
-  COUPANG_SECONDARY_NAV_ITEMS,
-} from "./lib/coupang-navigation";
 import { queryClient } from "./lib/queryClient";
 import { resolveWorkspaceRouteMeta } from "./lib/workspace-tabs";
 import CatalogPage from "./pages/catalog";
+import ChannelsHubPage from "./pages/channels-hub";
+import CsHubPage from "./pages/cs-hub";
 import CoupangCancelRefundsPage from "./pages/coupang-cancel-refunds";
 import CoupangConnectionPage from "./pages/coupang-connection";
 import CoupangControlPage from "./pages/coupang-control";
@@ -35,6 +32,7 @@ import CoupangShipmentsPage from "./pages/coupang-shipments";
 import DashboardPage from "./pages/dashboard";
 import DraftPage from "./pages/draft";
 import FieldSyncPage from "./pages/field-sync";
+import FulfillmentPage from "./pages/fulfillment";
 import NaverClaimsPage from "./pages/naver-claims";
 import NaverGuidePage from "./pages/naver-guide";
 import NaverInquiriesPage from "./pages/naver-inquiries";
@@ -52,13 +50,7 @@ import SettingsPage from "./pages/settings";
 
 function isTopNavActive(pathname: string, href: string) {
   return (
-    pathname === href ||
-    (href === "/dashboard" && pathname.startsWith("/dashboard")) ||
-    (href === "/naver/products" && pathname.startsWith("/naver")) ||
-    (href === COUPANG_DEFAULT_WORKSPACE_HREF && pathname.startsWith("/coupang")) ||
-    (href === "/engine/catalog" && pathname.startsWith("/engine")) ||
-    (href === "/settings" && pathname.startsWith("/settings")) ||
-    (href === "/operations" && pathname.startsWith("/operations"))
+    resolveWorkspaceRouteMeta(pathname).topLevelHref === resolveWorkspaceRouteMeta(href).topLevelHref
   );
 }
 
@@ -117,7 +109,7 @@ function WorkspaceTabStrip() {
               <button
                 type="button"
                 className="workspace-tab-close"
-                aria-label={`Close ${tab.displayTitle}`}
+                aria-label={`${tab.displayTitle} 닫기`}
                 onClick={(event) => {
                   event.stopPropagation();
                   closeTab(tab.id);
@@ -135,7 +127,7 @@ function WorkspaceTabStrip() {
           className="workspace-tabstrip-action"
           onClick={() => closeOtherTabs(activeTabId)}
           disabled={tabs.length <= 1}
-          title="현재 탭만 남기기 (Ctrl+Alt+Shift+W)"
+          title="다른 탭 닫기"
         >
           다른 탭 닫기
         </button>
@@ -143,7 +135,7 @@ function WorkspaceTabStrip() {
           type="button"
           className="workspace-tabstrip-action"
           onClick={closeAllTabs}
-          title="모든 탭 닫기 (Ctrl+Alt+W)"
+          title="모두 닫기"
         >
           모두 닫기
         </button>
@@ -167,15 +159,15 @@ function renderPlaceholder(input: {
       rows={[
         {
           id: "001",
-          subject: "Data grid and result table preparation complete",
-          status: "Ready",
-          updatedAt: "Waiting for channel wiring",
+          subject: "운영 테이블과 기본 동선은 준비되어 있습니다.",
+          status: "준비",
+          updatedAt: "채널 연동 대기",
         },
         {
           id: "002",
-          subject: "Channel-specific action flow will connect here next",
-          status: "Draft",
-          updatedAt: "Implementation scheduled",
+          subject: "채널별 세부 실행 흐름은 이 화면에 순차 연결됩니다.",
+          status: "초안",
+          updatedAt: "다음 차수 예정",
         },
       ]}
     />
@@ -194,7 +186,7 @@ function buildLogCenterRedirect(channel: "naver" | "coupang", currentSearchValue
     nextSearch.set("logId", logId);
   }
 
-  return `/operations?${nextSearch.toString()}`;
+  return `/work-center?${nextSearch.toString()}`;
 }
 
 function LogCenterRedirect(props: { channel: "naver" | "coupang" }) {
@@ -207,22 +199,22 @@ function LegacyRunsRedirect() {
   return <Redirect to={`/engine/runs${search ? `?${search}` : ""}`} />;
 }
 
+function WorkCenterRedirect() {
+  const search = useSearch();
+  return <Redirect to={`/work-center${search ? `?${search}` : ""}`} />;
+}
+
 function NaverSection() {
   const [location] = useLocation();
   const navItems: SectionNavItem[] = [
-    { href: "/naver/connection", label: "Connection", badge: "live" },
-    { href: "/naver/products", label: "Products", badge: "live" },
-    { href: "/naver/control", label: "Price / Stock / Sale", badge: "live" },
-    { href: "/naver/library", label: "Library", badge: "shared" },
-    { href: "/naver/groups", label: "Grouped Products", badge: "coming" },
-    { href: "/naver/orders", label: "Orders", badge: "live" },
-    { href: "/naver/shipment", label: "Shipment", badge: "live" },
-    { href: "/naver/returns", label: "Returns / Exchanges", badge: "live" },
-    { href: "/naver/inquiries", label: "Inquiries", badge: "live" },
-    { href: "/naver/settlements", label: "Settlements", badge: "live" },
-    { href: "/naver/stats", label: "Stats", badge: "live" },
-    { href: "/naver/seller-info", label: "Seller Info", badge: "live" },
-    { href: "/naver/logs", label: "Logs", badge: "shared" },
+    { href: "/naver/connection", label: "연결 설정", badge: "live" },
+    { href: "/naver/orders", label: "주문", badge: "live" },
+    { href: "/naver/shipment", label: "출고", badge: "live" },
+    { href: "/naver/returns", label: "반품 / 교환", badge: "live" },
+    { href: "/naver/inquiries", label: "문의", badge: "live" },
+    { href: "/naver/settlements", label: "정산", badge: "live" },
+    { href: "/naver/seller-info", label: "판매자 정보", badge: "live" },
+    { href: "/naver/logs", label: "로그", badge: "shared" },
   ];
 
   let content = <NaverProductsPage />;
@@ -239,8 +231,8 @@ function NaverSection() {
     content = <Redirect to="/naver/products" />;
   } else if (location.startsWith("/naver/groups")) {
     content = renderPlaceholder({
-      title: "NAVER Grouped Products",
-      description: "Review grouped product composition and option relationships here.",
+      title: "NAVER 묶음 상품",
+      description: "묶음 상품 구성과 옵션 관계를 확인하는 레거시 화면입니다.",
     });
   } else if (location.startsWith("/naver/orders")) {
     content = <NaverOrdersPage />;
@@ -265,8 +257,8 @@ function NaverSection() {
   return (
     <SectionLayout
       section="NAVER"
-      title="NAVER Workspace"
-      description="Manage NAVER products, orders, fulfillment, claims, settlements, and seller-facing operations."
+      title="NAVER 세부 화면"
+      description="메인 운영 데스크에서 내려둔 NAVER 원본 업무 화면입니다. 주문, 출고, 문의, 클레임을 채널 흐름 그대로 확인합니다."
       navItems={navItems}
     >
       {content}
@@ -276,8 +268,19 @@ function NaverSection() {
 
 function CoupangSection() {
   const [location] = useLocation();
-  const navItems: SectionNavItem[] = [...COUPANG_PRIMARY_NAV_ITEMS];
-  const secondaryNavItems: SectionNavItem[] = [...COUPANG_SECONDARY_NAV_ITEMS];
+  const search = useSearch();
+  const navItems: SectionNavItem[] = [
+    { href: "/coupang/products", label: "상품", badge: "live" },
+    { href: "/coupang/control", label: "상품 제어", badge: "live" },
+    { href: "/coupang/connection", label: "연결 설정", badge: "live" },
+  ];
+  const secondaryNavItems: SectionNavItem[] = [
+    { href: "/coupang/logistics", label: "물류", badge: "live" },
+    { href: "/coupang/cancel-refunds", label: "취소 / 환불", badge: "live" },
+    { href: "/coupang/returns", label: "반품", badge: "live" },
+    { href: "/coupang/exchanges", label: "교환", badge: "live" },
+    { href: "/coupang/inquiries", label: "문의", badge: "live" },
+  ];
 
   let content = <CoupangShipmentsPage />;
 
@@ -298,7 +301,7 @@ function CoupangSection() {
   } else if (location.startsWith("/coupang/orders")) {
     content = <CoupangOrdersPage />;
   } else if (location.startsWith("/coupang/shipments")) {
-    content = <CoupangShipmentsPage />;
+    content = <Redirect to={`/fulfillment${search ? `?${search}` : ""}`} />;
   } else if (location.startsWith("/coupang/cancel-refunds")) {
     content = <CoupangCancelRefundsPage />;
   } else if (location.startsWith("/coupang/returns")) {
@@ -320,8 +323,8 @@ function CoupangSection() {
   return (
     <SectionLayout
       section="COUPANG"
-      title="COUPANG Workspace"
-      description="Run connection, product, pricing, order, shipping, claims, and settlement workflows for COUPANG."
+      title="COUPANG 세부 화면"
+      description="메인 운영 데스크에서 내려둔 COUPANG 원본 업무 화면입니다. 출고, 문의, 반품, 교환, 상품 제어를 채널 흐름 그대로 확인합니다."
       navItems={navItems}
       secondaryNavItems={secondaryNavItems}
       secondaryNavTitle="보조 메뉴"
@@ -334,34 +337,34 @@ function CoupangSection() {
 function EngineSection() {
   const [location] = useLocation();
   const navItems: SectionNavItem[] = [
-    { href: "/engine/overview", label: "Overview", badge: "shared" },
+    { href: "/engine/overview", label: "개요", badge: "shared" },
     {
       href: "/engine/catalog",
-      label: "Catalog / Draft",
+      label: "초안 카탈로그",
       badge: "shared",
       matchPrefixes: ["/engine/drafts"],
     },
-    { href: "/engine/field-sync", label: "Field Sync / Update", badge: "shared" },
-    { href: "/engine/runs", label: "Runs", badge: "shared" },
+    { href: "/engine/field-sync", label: "필드 동기화", badge: "shared" },
+    { href: "/engine/runs", label: "실행 이력", badge: "shared" },
   ];
 
   let content = (
     <ModulePlaceholderPage
-      title="Shared Draft / Execution Engine"
-      description="Bridge NAVER and COUPANG workflows through a shared Draft -> validate -> run pipeline."
+      title="고급 / 레거시 운영 엔진"
+      description="채널별 운영 화면 아래로 내린 draft, run, field sync 도구입니다. 메인 동선에서는 숨기고 필요할 때만 직접 엽니다."
       badge="shared"
       rows={[
         {
           id: "001",
-          subject: "Drafts can be created from the shared catalog",
-          status: "Shared",
-          updatedAt: "Available",
+          subject: "초안은 공통 카탈로그에서 생성할 수 있습니다.",
+          status: "공통",
+          updatedAt: "사용 가능",
         },
         {
           id: "002",
-          subject: "Run logs and retries are available from one place",
-          status: "Shared",
-          updatedAt: "Available",
+          subject: "실행 이력과 재시도는 한 화면에서 다시 확인할 수 있습니다.",
+          status: "공통",
+          updatedAt: "사용 가능",
         },
       ]}
     />
@@ -382,8 +385,8 @@ function EngineSection() {
   return (
     <SectionLayout
       section="ENGINE"
-      title="Draft / Runs"
-      description="Use shared draft validation and execution flows that sit above the channel-specific workspaces."
+      title="고급 / 레거시"
+      description="초안, 실행 이력, 필드 동기화 같은 상위 도구를 유지하되 메인 운영 동선에서는 한 단계 내립니다."
       navItems={navItems}
     >
       {content}
@@ -399,6 +402,10 @@ function WorkspaceRouteContent() {
       </Route>
 
       <Route path="/dashboard" component={DashboardPage} />
+      <Route path="/fulfillment" component={FulfillmentPage} />
+      <Route path="/cs" component={CsHubPage} />
+      <Route path="/channels" component={ChannelsHubPage} />
+      <Route path="/work-center" component={OperationCenterPage} />
 
       <Route path="/products">
         <Redirect to="/naver/products" />
@@ -416,15 +423,19 @@ function WorkspaceRouteContent() {
         {(params: { id: string }) => <Redirect to={`/engine/drafts/${params.id}`} />}
       </Route>
 
+      <Route path="/operations">
+        <WorkCenterRedirect />
+      </Route>
+
       <Route path="/naver">
-        <Redirect to="/naver/products" />
+        <Redirect to="/channels" />
       </Route>
       <Route path="/naver/:rest*">
         <NaverSection />
       </Route>
 
       <Route path="/coupang">
-        <Redirect to={COUPANG_DEFAULT_WORKSPACE_HREF} />
+        <Redirect to="/channels" />
       </Route>
       <Route path="/coupang/:rest*">
         <CoupangSection />
@@ -447,11 +458,9 @@ function WorkspaceRouteContent() {
         <Redirect to="/coupang/connection" />
       </Route>
 
-      <Route path="/operations" component={OperationCenterPage} />
-
       <Route>
         <div className="page">
-          <div className="empty">The page could not be found.</div>
+          <div className="empty">요청한 화면을 찾지 못했습니다.</div>
         </div>
       </Route>
     </Switch>
@@ -471,19 +480,19 @@ function AppShell() {
       <header className="topbar">
         <div className="topbar-main">
           <div className="brand">
-            <div className="brand-title">KIKIT Channel Control v1</div>
-            <div className="brand-subtitle">Operations console / shared draft engine / work center</div>
+            <div className="brand-title">KIKIT SyncDesk</div>
+            <div className="brand-subtitle">출고 · CS · 실패 작업 복구 중심 운영 데스크</div>
           </div>
 
           <nav className="nav" aria-label="Workspace menu">
-            <TopNavButton href="/dashboard">Dashboard</TopNavButton>
-            <TopNavButton href="/naver/products">NAVER</TopNavButton>
-            <TopNavButton href={COUPANG_DEFAULT_WORKSPACE_HREF}>COUPANG</TopNavButton>
-            <TopNavButton href="/engine/catalog">Draft / Runs</TopNavButton>
-            <TopNavButton href="/settings">Settings</TopNavButton>
-            <TopNavButton href="/operations">
-              Work Center{activeOperations ? ` (${activeOperations})` : ""}
+            <TopNavButton href="/dashboard">대시보드</TopNavButton>
+            <TopNavButton href="/fulfillment">출고</TopNavButton>
+            <TopNavButton href="/cs">CS</TopNavButton>
+            <TopNavButton href="/channels">채널</TopNavButton>
+            <TopNavButton href="/work-center">
+              작업센터{activeOperations ? ` (${activeOperations})` : ""}
             </TopNavButton>
+            <TopNavButton href="/settings">설정</TopNavButton>
           </nav>
         </div>
 
