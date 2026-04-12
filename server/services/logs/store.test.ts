@@ -94,6 +94,75 @@ describe("LogStore", () => {
     expect(raw.trim().split(/\r?\n/)).toHaveLength(2);
   });
 
+  it("keeps list responses lightweight while preserving full detail records", async () => {
+    const store = new LogStore({
+      logDir: tempDir,
+      retentionDays: 30,
+      maxTotalBytes: 1024 * 1024,
+      legacyDbImportLimit: 0,
+      legacyOperationLogFile: path.join(tempDir, "missing.json"),
+    });
+
+    const created = await store.createOperation({
+      channel: "coupang",
+      menuKey: "coupang.shipments",
+      actionKey: "upload-invoice",
+      status: "warning",
+      mode: "foreground",
+      targetType: "selection",
+      targetCount: 12,
+      targetIds: Array.from({ length: 12 }, (_, index) => `target-${index}`),
+      requestPayload: {
+        storeId: "store-1",
+        items: Array.from({ length: 12 }, (_, index) => ({ shipmentBoxId: `box-${index}` })),
+      },
+      normalizedPayload: {
+        items: Array.from({ length: 12 }, (_, index) => ({ shipmentBoxId: `box-${index}` })),
+      },
+      resultSummary: {
+        headline: "성공 0건 / 실패 12건",
+        detail: "송장 업로드 12건",
+        stats: { failedCount: 12, ticketDetails: [{ targetId: "target-0" }] },
+        preview: "실패 12건",
+      },
+      retryable: true,
+    });
+
+    const listed = await store.listRecentLogs({
+      kind: "operation",
+      limit: 10,
+    });
+
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]?.kind).toBe("operation");
+    if (listed.items[0]?.kind !== "operation") {
+      throw new Error("Expected an operation entry.");
+    }
+
+    expect(listed.items[0].operation.targetIds).toHaveLength(10);
+    expect(listed.items[0].operation.requestPayload).toBeNull();
+    expect(listed.items[0].operation.normalizedPayload).toBeNull();
+    expect(listed.items[0].operation.resultSummary?.stats).toBeNull();
+
+    const detail = await store.getLogById(created.id);
+    expect(detail?.kind).toBe("operation");
+    if (detail?.kind !== "operation") {
+      throw new Error("Expected an operation detail entry.");
+    }
+
+    expect(detail.operation.targetIds).toHaveLength(12);
+    expect(detail.operation.requestPayload).toEqual(
+      expect.objectContaining({
+        storeId: "store-1",
+      }),
+    );
+    expect(detail.operation.resultSummary?.stats).toEqual(
+      expect.objectContaining({
+        failedCount: 12,
+      }),
+    );
+  });
+
   it("prunes old files by age and removes the oldest files when size exceeds the cap", async () => {
     const today = new Date();
     const todayKey = today.toISOString().slice(0, 10);

@@ -35,6 +35,7 @@ import {
   toDateOrNull,
   toIsoString,
 } from "../services/shared/work-data-db";
+import { compactLogEntry } from "../services/operations/presentation";
 import { normalizeOperationEntry } from "./file-log-store";
 
 type CreateOperationInput = Parameters<LogStorePort["createOperation"]>[0];
@@ -709,7 +710,9 @@ export class WorkDataLogStore implements LogStorePort {
       .sort(sortLogsDescending)
       .filter((entry) => (cursor ? isAfterCursor(entry, cursor) : true));
 
-    const items = entries.slice(0, limit).map((entry) => structuredClone(entry));
+    const items = entries
+      .slice(0, limit)
+      .map((entry) => compactLogEntry(structuredClone(entry)));
     const hasMore = entries.length > items.length;
     const nextCursor =
       hasMore && items.length

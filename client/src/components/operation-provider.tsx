@@ -89,6 +89,40 @@ function upsertOperationList(items: OperationLogEntry[], next: OperationLogEntry
   return sortOperations([next, ...filtered]);
 }
 
+function compactOperationResultSummary(
+  summary: OperationLogEntry["resultSummary"],
+): OperationLogEntry["resultSummary"] {
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    headline: compactOperationText(summary.headline),
+    detail: compactOperationText(summary.detail),
+    preview: compactOperationText(summary.preview),
+    stats: null,
+  };
+}
+
+function compactOperationText(value: string | null | undefined, maxLength = 320) {
+  if (!value) {
+    return null;
+  }
+
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+}
+
+function compactOperationEntry(operation: OperationLogEntry): OperationLogEntry {
+  return {
+    ...operation,
+    targetIds: operation.targetIds.slice(0, 10),
+    requestPayload: null,
+    normalizedPayload: null,
+    resultSummary: compactOperationResultSummary(operation.resultSummary),
+    errorMessage: compactOperationText(operation.errorMessage),
+  };
+}
+
 function mapOperationToToast(operation: OperationLogEntry): OperationToast {
   return {
     toastId: `server:${operation.id}`,
@@ -346,9 +380,10 @@ export function OperationProvider(props: { children: ReactNode }) {
   });
 
   const publishOperation = useEffectEvent((operation: OperationLogEntry) => {
-    setOperations((current) => upsertOperationList(current, operation));
+    const compacted = compactOperationEntry(operation);
+    setOperations((current) => upsertOperationList(current, compacted));
 
-    const toast = mapOperationToToast(operation);
+    const toast = mapOperationToToast(compacted);
     if (shouldSkipDismissedServerToast(toast)) {
       return;
     }
@@ -361,8 +396,9 @@ export function OperationProvider(props: { children: ReactNode }) {
   });
 
   const hydrateSnapshot = useEffectEvent((items: OperationLogEntry[]) => {
-    setOperations(sortOperations(items));
-    const hydratedToasts = items
+    const compactedItems = items.map(compactOperationEntry);
+    setOperations(sortOperations(compactedItems));
+    const hydratedToasts = compactedItems
       .filter(shouldHydrateToast)
       .map(mapOperationToToast)
       .filter((toast) => !shouldSkipDismissedServerToast(toast));

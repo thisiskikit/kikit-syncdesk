@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
+import { type LogDetailResponse } from "@shared/logs";
 import {
   getOperationActionLabel,
   getOperationErrorSummary,
@@ -12,6 +14,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { useOperations } from "@/components/operation-provider";
 import { getOperationLogsHref } from "@/lib/operation-links";
+import { getJson, queryPresets } from "@/lib/queryClient";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 
 type FilterState = {
@@ -114,20 +117,45 @@ export default function CoupangLogsPage() {
     });
   }, [coupangOperations, filters]);
 
-  const selectedOperation = useMemo(
+  const selectedOperationPreview = useMemo(
     () =>
       coupangOperations.find((operation) => operation.id === selectedOperationId) ??
       null,
     [coupangOperations, selectedOperationId],
   );
 
+  const selectedOperationDetailQuery = useQuery({
+    enabled: Boolean(selectedOperationId),
+    queryKey: ["/api/logs/detail", selectedOperationId],
+    queryFn: () =>
+      getJson<LogDetailResponse>(`/api/logs/${encodeURIComponent(selectedOperationId ?? "")}`),
+    ...queryPresets.detail,
+  });
+
+  const selectedOperationDetail =
+    selectedOperationDetailQuery.data?.item?.kind === "operation"
+      ? selectedOperationDetailQuery.data.item.operation
+      : null;
+  const selectedOperation = selectedOperationDetail ?? selectedOperationPreview;
+
   useEffect(() => {
-    if (!selectedOperationId || selectedOperation || !coupangOperations.length) {
+    if (
+      !selectedOperationId ||
+      selectedOperationDetailQuery.isLoading ||
+      selectedOperation ||
+      !coupangOperations.length
+    ) {
       return;
     }
 
     navigate("/coupang/logs", { replace: true });
-  }, [coupangOperations.length, navigate, selectedOperation, selectedOperationId]);
+  }, [
+    coupangOperations.length,
+    navigate,
+    selectedOperationDetailQuery.isLoading,
+    selectedOperationId,
+    selectedOperation,
+  ]);
 
   return (
     <div className="page">

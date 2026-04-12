@@ -26,6 +26,7 @@ import { db } from "../storage";
 import { operationLogs } from "@shared/schema";
 import { toIsoString } from "../services/shared/work-data-db";
 import type { LogStorePort } from "../interfaces/log-store";
+import { compactLogEntry } from "../services/operations/presentation";
 
 type PersistedOperations = {
   version: 2;
@@ -858,7 +859,9 @@ export class LogStore {
       .sort(sortLogsDescending)
       .filter((entry) => (cursor ? isAfterCursor(entry, cursor) : true));
 
-    const items = filtered.slice(0, limit).map((entry) => structuredClone(entry));
+    const items = filtered
+      .slice(0, limit)
+      .map((entry) => compactLogEntry(structuredClone(entry)));
     const hasMore = filtered.length > items.length;
     const nextCursor =
       hasMore && items.length

@@ -14,6 +14,7 @@ import {
   summarizeResult,
   updateManualOperation,
 } from "../services/operations/service";
+import { compactOperationEntry } from "../services/operations/presentation";
 import {
   sendCreated,
   sendData,
@@ -82,7 +83,7 @@ function writeEvent<T>(res: Response, event: string, data: T) {
 
 router.get("/", async (req, res) => {
   const limit = Number(req.query.limit ?? 50);
-  const items = await listRecentOperations(limit);
+  const items = (await listRecentOperations(limit)).map(compactOperationEntry);
   sendData(res, { items });
 });
 
@@ -94,14 +95,14 @@ router.get("/stream", async (_req, res) => {
   });
 
   const writeSnapshot = async () => {
-    const items = await listRecentOperations(40);
+    const items = (await listRecentOperations(40)).map(compactOperationEntry);
     writeEvent(res, "snapshot", { items });
   };
 
   await writeSnapshot();
 
   const unsubscribe = subscribeToOperationUpdates((entry) => {
-    writeEvent(res, "operation", entry);
+    writeEvent(res, "operation", compactOperationEntry(entry));
   });
 
   const heartbeat = setInterval(() => {
