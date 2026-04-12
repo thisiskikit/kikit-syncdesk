@@ -1,0 +1,60 @@
+name: Deploy Kikit Price Change Dev
+
+on:
+  push:
+    branches:
+      - codex/dev
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/835286545835/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: gha-kikit-price-change@python-350012.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: python-350012
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          no-cache: true
+          push: true
+          tags: asia-northeast3-docker.pkg.dev/python-350012/cloud-run-source-deploy/kikit-syncdesk/kikit-price-change-dev:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        run: >
+          gcloud run deploy kikit-price-change-dev
+          --image=asia-northeast3-docker.pkg.dev/python-350012/cloud-run-source-deploy/kikit-syncdesk/kikit-price-change-dev:${{ github.sha }}
+          --region=asia-northeast3
+          --project=python-350012
+          --allow-unauthenticated
+          --memory=1Gi
+          --cpu=1
+          --timeout=300
+          --max-instances=1
+          --service-account=835286545835-compute@developer.gserviceaccount.com
+          --add-cloudsql-instances=python-350012:asia-northeast3:kikit-pg-20260203
+          --set-secrets=DATABASE_URL=KIKIT_PRICE_CHANGE_DATABASE_URL:latest,MASTER_SKU_DATABASE_URL=KIKIT_PRICE_CHANGE_MASTER_SKU_DATABASE_URL:latest
+          --network=default
+          --subnet=cr-egress-asia-ne3
+          --vpc-egress=all-traffic
+          --quiet
