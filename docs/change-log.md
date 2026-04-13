@@ -2,6 +2,28 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-13 / 상품준비중 처리 부분 성공 허용
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/coupang/order-service.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `상품준비중 처리`는 50건 배치 구조를 유지하되, 특정 배치가 예외로 실패하면 해당 배치 안의 주문을 단건으로 다시 시도하도록 바꿨습니다.
+  - 아직 수집되지 않아 실패하는 주문은 실패 항목으로 남기고, 나머지 주문은 계속 `상품준비중` 처리합니다.
+  - 부분 성공 동작을 order service 테스트로 고정했습니다.
+- 이유:
+  - 수집 누락 주문 몇 건 때문에 전체 준비중 처리가 중단되면 운영자가 이미 처리 가능한 주문까지 다시 골라야 했습니다.
+- 남은 점:
+  - 실제 쿠팡 API에서 어떤 에러 문구로 내려오는지는 환경별 차이가 있을 수 있습니다.
+  - 브라우저에서 실제 출고 화면 버튼을 눌러 부분 성공 메시지까지 확인한 것은 아직 아닙니다.
+- 검증:
+  - `npm exec vitest run --root . server/services/coupang/order-service.test.ts`
+  - `npm run check`
+
 ## 2026-04-13 / 빌드-배포 하드닝
 
 - 변경 유형:

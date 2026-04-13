@@ -2588,10 +2588,7 @@ export async function markPreparing(input: {
     return buildActionResponse([]);
   }
 
-  const items: CoupangActionItemResult[] = [];
-
-  for (let index = 0; index < input.items.length; index += MAX_PREPARE_COUNT) {
-    const chunk = input.items.slice(index, index + MAX_PREPARE_COUNT);
+  const requestBatch = async (items: CoupangPrepareTarget[]) => {
     const payload = await requestCoupangJson({
       credentials: {
         accessKey: store.credentials.accessKey,
@@ -2602,18 +2599,57 @@ export async function markPreparing(input: {
       path:
         `/v2/providers/openapi/apis/api/v4/vendors/${encodeURIComponent(store.vendorId)}` +
         "/ordersheets/acknowledgement",
-      body: buildPrepareBody(store.vendorId, chunk),
+      body: buildPrepareBody(store.vendorId, items),
     });
 
     const orderIdByShipmentBox = new Map(
-      chunk.map((item) => [item.shipmentBoxId, item.orderId ?? null]),
+      items.map((item) => [item.shipmentBoxId, item.orderId ?? null]),
     );
-    items.push(
-      ...normalizeBatchResponseList(payload, {
-        action: "markPreparing",
-        orderIdByShipmentBox,
-      }),
-    );
+
+    return normalizeBatchResponseList(payload, {
+      action: "markPreparing",
+      orderIdByShipmentBox,
+    });
+  };
+
+  const items: CoupangActionItemResult[] = [];
+
+  for (let index = 0; index < input.items.length; index += MAX_PREPARE_COUNT) {
+    const chunk = input.items.slice(index, index + MAX_PREPARE_COUNT);
+    try {
+      items.push(...(await requestBatch(chunk)));
+    } catch {
+      const fallbackItems = await mapWithConcurrency(chunk, ACTION_CONCURRENCY, async (item) => {
+        try {
+          const [result] = await requestBatch([item]);
+          if (result) {
+            return result;
+          }
+
+          return createActionItem({
+            action: "markPreparing",
+            targetId: item.shipmentBoxId,
+            shipmentBoxId: item.shipmentBoxId,
+            orderId: item.orderId,
+            status: "failed",
+            retryRequired: false,
+            message: "상품준비중 처리 결과를 확인하지 못했습니다.",
+          });
+        } catch (error) {
+          return createActionItem({
+            action: "markPreparing",
+            targetId: item.shipmentBoxId,
+            shipmentBoxId: item.shipmentBoxId,
+            orderId: item.orderId,
+            status: "failed",
+            retryRequired: false,
+            message: getActionMessage(error, "상품준비중 처리에 실패했습니다."),
+          });
+        }
+      });
+
+      items.push(...fallbackItems);
+    }
   }
 
   return buildActionResponse(items);

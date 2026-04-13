@@ -1241,4 +1241,64 @@ describe("coupang order service", () => {
       Array.from({ length: 52 }, (_, index) => String(index + 1)),
     );
   });
+
+  it("skips only failing prepare items by retrying individually after a batch error", async () => {
+    requestCoupangJsonMock
+      .mockRejectedValueOnce(new Error("batch failed"))
+      .mockResolvedValueOnce({
+        data: {
+          responseList: [
+            {
+              shipmentBoxId: "101",
+              succeed: true,
+              retryRequired: false,
+              resultCode: "OK",
+              resultMessage: "prepared",
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error("order not collected yet"));
+
+    const result = await markPreparing({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "101",
+          orderId: "O-101",
+          productName: "Item 101",
+        },
+        {
+          shipmentBoxId: "102",
+          orderId: "O-102",
+          productName: "Item 102",
+        },
+      ],
+    });
+
+    expect(requestCoupangJsonMock).toHaveBeenCalledTimes(3);
+    expect(result.summary.total).toBe(2);
+    expect(result.summary.succeededCount).toBe(1);
+    expect(result.summary.failedCount).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "101",
+      orderId: "O-101",
+      status: "succeeded",
+    });
+    expect(result.items[1]).toMatchObject({
+      shipmentBoxId: "102",
+      orderId: "O-102",
+      status: "failed",
+      message: "order not collected yet",
+    });
+    expect((requestCoupangJsonMock.mock.calls[0]?.[0] as MockApiInput).body).toContain(
+      '"shipmentBoxIds":[101,102]',
+    );
+    expect((requestCoupangJsonMock.mock.calls[1]?.[0] as MockApiInput).body).toContain(
+      '"shipmentBoxIds":[101]',
+    );
+    expect((requestCoupangJsonMock.mock.calls[2]?.[0] as MockApiInput).body).toContain(
+      '"shipmentBoxIds":[102]',
+    );
+  });
 });
