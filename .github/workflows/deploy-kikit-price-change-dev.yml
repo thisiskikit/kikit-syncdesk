@@ -1,4 +1,6 @@
-name: Deploy Kikit Price Change Dev
+name: Cloud Run Dev Deploy
+
+run-name: Dev deploy · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   push:
@@ -31,7 +33,7 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet
 
-      - name: Build and push image
+      - name: Build and push dev image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -40,7 +42,7 @@ jobs:
           push: true
           tags: asia-northeast3-docker.pkg.dev/python-350012/cloud-run-source-deploy/kikit-syncdesk/kikit-price-change-dev:${{ github.sha }}
 
-      - name: Deploy to Cloud Run
+      - name: Deploy dev service to Cloud Run
         run: >
           gcloud run deploy kikit-price-change-dev
           --image=asia-northeast3-docker.pkg.dev/python-350012/cloud-run-source-deploy/kikit-syncdesk/kikit-price-change-dev:${{ github.sha }}

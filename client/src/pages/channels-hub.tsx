@@ -1,9 +1,11 @@
-﻿import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { ChannelStoreSummary } from "@shared/channel-settings";
 import type { CoupangStoreSummary } from "@shared/coupang";
 import { StatusBadge } from "@/components/status-badge";
 import { WorkspaceEntryLink } from "@/components/workspace-tabs";
 import { getJson } from "@/lib/queryClient";
+import { buildChannelsHubSections } from "./hub-navigation";
 
 interface NaverStoresResponse {
   items: ChannelStoreSummary[];
@@ -25,18 +27,34 @@ export default function ChannelsHubPage() {
 
   const naverConnected = (naverStoresQuery.data?.items ?? []).filter((store) => store.connectionTest.status === "success").length;
   const coupangConnected = (coupangStoresQuery.data?.items ?? []).filter((store) => store.connectionTest.status === "success").length;
+  const totalConnected = naverConnected + coupangConnected;
+  const sections = useMemo(
+    () =>
+      buildChannelsHubSections({
+        naverConnected,
+        coupangConnected,
+      }),
+    [coupangConnected, naverConnected],
+  );
+  const originalEntryCount = useMemo(
+    () =>
+      sections
+        .filter((section) => section.key !== "connections")
+        .reduce((count, section) => count + section.actions.length, 0),
+    [sections],
+  );
 
   return (
     <div className="page">
       <div className="hero">
         <div className="hero-badges">
           <StatusBadge tone="shared" label="채널 허브" />
-          <StatusBadge tone="coming" label="세부 / 원본 화면" />
+          <StatusBadge tone="coming" label="원본 / 연결 / 레거시" />
         </div>
         <h1>채널</h1>
         <p>
-          쿠팡과 네이버는 운영 데스크의 주인공이 아니라 데이터 출처와 세부 설정 레이어입니다. 메인 동선에서 숨긴
-          채널별 세부 화면은 여기서 다시 진입합니다.
+          채널 허브는 채널별 정보 모음이 아니라 연결 점검, 원본 화면 진입, 채널별 대표 도구로 나뉜 운영 진입점입니다.
+          메인 동선에서 숨긴 세부 화면은 여기서 다시 엽니다.
         </p>
       </div>
 
@@ -49,41 +67,60 @@ export default function ChannelsHubPage() {
           <div className="metric-label">COUPANG 연결</div>
           <div className="metric-value">{coupangConnected}</div>
         </div>
+        <div className="metric">
+          <div className="metric-label">연결된 채널 합계</div>
+          <div className="metric-value">{totalConnected}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">대표 원본 진입</div>
+          <div className="metric-value">{originalEntryCount}</div>
+        </div>
       </div>
 
-      <div className="dashboard-grid">
-        <WorkspaceEntryLink href="/coupang/connection" className="dashboard-card" workspaceBehavior="tab">
-          <div className="dashboard-card-header">
-            <strong>COUPANG 연결 / 설정</strong>
-            <StatusBadge tone="live" label={`${coupangConnected}개 연결`} />
+      {totalConnected === 0 ? (
+        <div className="feedback warning">
+          <strong>연결된 채널이 없습니다.</strong>
+          <div className="muted">
+            먼저 NAVER 또는 COUPANG 연결 설정으로 들어가 인증 상태를 확인해야 이후 원본 화면 진입이 자연스럽습니다.
           </div>
-          <p>vendorId, 인증키, 연결 확인과 쿠팡 세부 운영 화면으로 이어지는 진입점입니다.</p>
-        </WorkspaceEntryLink>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="dashboard-section-header">
+            <div>
+              <h2>읽는 순서</h2>
+              <p>1) 연결 상태 확인 2) 원본 화면 진입 3) 채널별 대표 도구 순서로 읽도록 정리했습니다.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
-        <WorkspaceEntryLink href="/naver/connection" className="dashboard-card" workspaceBehavior="tab">
-          <div className="dashboard-card-header">
-            <strong>NAVER 연결 / 설정</strong>
-            <StatusBadge tone="live" label={`${naverConnected}개 연결`} />
+      {sections.map((section) => (
+        <section key={section.key} className="card dashboard-section">
+          <div className="dashboard-section-header">
+            <div>
+              <h2>{section.title}</h2>
+              <p>{section.description}</p>
+            </div>
           </div>
-          <p>NAVER 커머스 API 연결 상태와 정산, 문의, 클레임 원본 화면으로 이동합니다.</p>
-        </WorkspaceEntryLink>
-
-        <WorkspaceEntryLink href="/coupang/inquiries" className="dashboard-card" workspaceBehavior="tab">
-          <div className="dashboard-card-header">
-            <strong>COUPANG 원본 화면</strong>
-            <StatusBadge tone="shared" label="세부" />
+          <div className="dashboard-grid">
+            {section.actions.map((action) => (
+              <WorkspaceEntryLink
+                key={`${section.key}:${action.href}`}
+                href={action.href}
+                className="dashboard-card"
+                workspaceBehavior="tab"
+              >
+                <div className="dashboard-card-header">
+                  <strong>{action.title}</strong>
+                  <StatusBadge tone={action.badgeTone} label={action.badgeLabel} />
+                </div>
+                <p>{action.description}</p>
+              </WorkspaceEntryLink>
+            ))}
           </div>
-          <p>문의, 반품, 교환, 물류, 주문 같은 채널별 세부 화면을 원본 흐름 그대로 엽니다.</p>
-        </WorkspaceEntryLink>
-
-        <WorkspaceEntryLink href="/naver/inquiries" className="dashboard-card" workspaceBehavior="tab">
-          <div className="dashboard-card-header">
-            <strong>NAVER 원본 화면</strong>
-            <StatusBadge tone="shared" label="세부" />
-          </div>
-          <p>문의, 클레임, 주문, 정산, 판매자 정보 같은 채널별 세부 화면을 다시 확인합니다.</p>
-        </WorkspaceEntryLink>
-      </div>
+        </section>
+      ))}
 
       <details className="card dashboard-legacy-panel">
         <summary>고급 / 레거시 화면</summary>
@@ -102,7 +139,7 @@ export default function ChannelsHubPage() {
           </WorkspaceEntryLink>
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
-          bulk-price, product-edit, grouped products 같은 레거시 노출은 메인 동선에서 내리고 직접 URL 접근만 유지합니다.
+          bulk-price, product-edit, grouped products 같은 레거시 노출은 메인 운영 흐름에서 내리고 직접 진입만 유지합니다.
         </p>
       </details>
     </div>

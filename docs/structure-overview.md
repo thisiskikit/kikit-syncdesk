@@ -1,6 +1,6 @@
 ﻿# Structure Overview
 
-- 스냅샷 날짜: 2026-04-12
+- 스냅샷 날짜: 2026-04-13
 - 목적: 현재 KIKIT SyncDesk가 어떤 top-level 구조와 화면 책임을 가지는지 설명합니다.
 
 ## 1. 최상위 구조
@@ -78,32 +78,26 @@ docs/
 
 ## 4. 출고 화면 구조
 
-출고 화면의 구현 중심은 여전히 쿠팡 배송/송장 feature이지만, 화면 위계는 운영 데스크 기준으로 다시 짰습니다.
+출고 화면의 구현 중심은 여전히 쿠팡 배송/송장 feature이지만, 화면 위계는 운영 데스크 기준으로 다시 짰고 render/controller 책임도 2차 분리했습니다.
 
 ### 현재 출고 화면 계층
-1. 페이지 헤더
-2. 1차 액션
-   - `빠른 수집`
-   - `결제완료 -> 상품준비중`
-   - `송장 입력`
-   - `송장 전송`
-3. 2차 액션
-   - `누락 검수`
-   - `보관함`
-   - `화면 설정`
-4. 기본 필터
-   - 스토어
-   - 기간
-   - 검색
-   - 보기 범위
-5. 출고 판단 탭
-6. 결과 요약
-7. 현재 적용 조건
-8. 세부 필터
-9. 메인 워크시트 테이블
-10. 선택 일괄 작업 바
-11. 우측 Drawer
-12. 깊은 상세 다이얼로그
+1. `page.tsx`
+   - 상태, query, action coordinator
+2. `fulfillment-shell.tsx`
+   - 페이지 slot 조립
+3. `fulfillment-toolbar.tsx`
+   - 헤더, 1차 액션, 관리 작업, 기본 필터
+4. `fulfillment-summary-bar.tsx`
+   - 출고 판단 요약 또는 보관함 메트릭
+5. `fulfillment-selection-controller.tsx`
+   - 선택 일괄 작업 bar
+6. `fulfillment-grid-controller.tsx`
+   - 작업 화면 / 보관함 / 화면 설정 전환
+   - grid wiring, archive panel, column settings panel lazy mount
+7. `fulfillment-drawer-controller.tsx`
+   - audit dialog, decision drawer, full detail dialog, excel sort dialog, invoice input dialog lazy mount
+8. `quick-collect-focus-controller.ts`
+   - 빠른 수집 집중 보기 active sheet / visible rows 재구성
 
 ### 출고 필터 위계
 - 메인 축:
@@ -136,11 +130,13 @@ docs/
 
 ### 빠른 수집 직후 신규 주문 집중 보기
 `client/src/features/coupang/shipments/quick-collect-focus.ts`
+`client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
 
 - `new_only` 빠른 수집 후 실제로 추가된 주문이 있으면 그 주문만 임시로 먼저 보여줍니다.
 - 현재 스토어와 출고 판단 탭은 유지합니다.
 - 검색, 범위, 세부 필터는 집중 보기 중에는 우선 적용하지 않습니다.
 - 필터 변경, 새로고침, 탭 이동 시 자동 해제됩니다.
+- 집중 보기의 active/inactive 전환과 fallback sheet 구성은 controller 단위 테스트로 고정했습니다.
 
 ### 컬럼 보기 프리셋
 `client/src/features/coupang/shipments/shipment-column-presets.ts`
@@ -155,6 +151,18 @@ docs/
 - 사용자가 프리셋을 직접 적용할 때만 컬럼 집합/폭이 바뀝니다.
 
 ### 출고 supporting modules
+- `fulfillment-shell.tsx`
+  - 출고 화면 slot 조립
+- `fulfillment-toolbar.tsx`
+  - 페이지 헤더, 상단 action, 기본 필터
+- `fulfillment-summary-bar.tsx`
+  - 출고 요약 / 보관함 메트릭 전환
+- `fulfillment-selection-controller.tsx`
+  - 선택 bar 노출 조건과 action 위임
+- `fulfillment-grid-controller.tsx`
+  - worksheet/archive/settings branch와 grid wiring
+- `fulfillment-drawer-controller.tsx`
+  - drawer/dialog lazy mounting
 - `shipment-base-filters.tsx`
   - 스토어 / 기간 / 검색 / 보기 범위
 - `shipment-worksheet-overview.tsx`
@@ -167,22 +175,29 @@ docs/
   - 보관함 카드 shell, 빈 상태, 페이지네이션
 - `shipment-decision-drawer.tsx`
   - 출고 판단 우선의 얇은 상세 패널
+- `client/src/lib/ops-handoff-links.ts`
+  - 출고 / CS / 작업센터 사이의 deep-link build/parse와 operation payload 기반 handoff 문맥 추출
 
 ## 5. 작업센터 구조
 
 - 구현 파일: `client/src/pages/operation-center.tsx`
+- recovery helper: `client/src/pages/operation-center-recovery.ts`
+- 상세 section 분리: `client/src/pages/operation-center-operation-detail-sections.tsx`
 - 역할:
   - 실패 작업 복구 우선의 작업 로그 화면
 
 ### 현재 동작
-- 경고 / 오류 / 재시도 가능 / 진행 중 / 느린 요청을 우선 정렬합니다.
-- 메인 목록은 얇게 유지합니다.
+- `즉시 재시도 / 원인 확인 / 진행 관찰 / 완료` lane을 기준으로 우선 정렬합니다.
+- 상단 `복구 묶음`에서 같은 성격 실패를 묶어 보여줍니다.
+- 메인 목록은 복구 판단, 영향 범위, 원인 요약을 먼저 읽게 정리합니다.
 - 재시도는 목록과 상세 모두에서 접근할 수 있습니다.
+- 쿠팡 operation 상세는 payload에서 추출한 storeId / 주문 식별자를 기준으로 `출고`, `CS 허브`로 바로 이어집니다.
 - 원본 요청 payload, 정규화 payload, 에러 JSON은 상세 패널의 접힘 섹션에 둡니다.
 
 ### 작업 티켓 상세
 - 메인 목록에는 보이지 않습니다.
 - 상세 패널에서만 `작업 티켓 상세` 섹션을 보여줍니다.
+- 상세 패널의 foldout 렌더는 별도 section component로 분리했습니다.
 - 최대 5건까지만 기록합니다.
 - 우선순위는 `실패 -> 경고 -> 건너뜀 -> 성공`입니다.
 - 현재 적용 대상:
@@ -198,19 +213,24 @@ docs/
 - 역할:
   - 채널별 문의/클레임 화면으로 보내는 허브
   - 출고 판단에 영향을 주는 이슈로 이어지는 진입점
+- 현재 `/cs?focus=...&source=...` deep-link를 읽어 이번 진입 문맥과 복귀 버튼을 함께 보여줍니다.
 
 ### 채널
 - 구현 파일: `client/src/pages/channels-hub.tsx`
+- section descriptor: `client/src/pages/hub-navigation.ts`
 - 역할:
   - 채널 연결 화면
   - 원본 채널 작업 화면 진입
   - 고급/레거시 도구 노출
+- 현재 `연결 상태 / 점검`, `원본 화면 진입`, `채널별 주요 도구`, `고급 / 레거시 화면` 순서로 읽히게 정리했습니다.
 
 ### 설정
 - 구현 파일: `client/src/pages/settings-hub.tsx`
+- section descriptor: `client/src/pages/hub-navigation.ts`
 - 역할:
   - 연결 설정
   - 초안 / 실행 이력 / 고급 도구 진입
+- 현재 `연결 설정`, `운영 고급 도구`, `레거시 / 직접 진입` 순서로 읽히게 정리했습니다.
 
 ## 7. 레거시 노출 정책
 
@@ -240,11 +260,27 @@ docs/
   - `shared/coupang.ts`
   - `shared/operations.ts`
 
-## 9. 현재 구조에서 아직 남아 있는 일
+## 9. 빌드 / 배포 하드닝
 
-- `client/src/features/coupang/shipments/page.tsx`는 여전히 큰 coordinator 파일입니다.
+- 프론트 build 설정은 `vite.config.ts`에 있습니다.
+- 현재 chunk 정책:
+  - `vendor-react`
+  - `vendor-grid`
+  - `vendor-sheet`
+  - `route-coupang`
+  - `route-naver`
+  - `route-engine`
+- 목적:
+  - 메인 entry chunk를 가볍게 유지
+  - 무거운 채널/도구 영역을 별도 chunk로 분리
+  - `xlsx`, `react-data-grid` 같은 무거운 의존성을 분리
+- Cloud Run 배포 규칙과 smoke check:
+  - `docs/deployment/cloud-run-branch-deployments.md`
+  - `docs/deployment/cloud-run-smoke-check.md`
+
+## 10. 현재 구조에서 아직 남아 있는 일
+
+- `client/src/features/coupang/shipments/page.tsx`는 여전히 상태/query/action handler가 많은 coordinator 파일입니다.
+- render tree와 quick collect view state는 분리됐지만, network action orchestration은 아직 `page.tsx`에 남아 있습니다.
 - 출고 그리드는 프리셋으로 1차 완화했지만, 합성 컬럼 기반의 2차 압축은 아직 남아 있습니다.
-- 작업센터 상세 helper 분리는 아직 하지 않았습니다.
-- 빌드 경고 2건이 남아 있습니다.
-  - CSS minify `sourceMappingURL`
-  - 메인 청크 크기
+- 작업센터는 helper와 detail section을 분리했지만, 브라우저 클릭 기반 체감 검증은 아직 하지 않았습니다.

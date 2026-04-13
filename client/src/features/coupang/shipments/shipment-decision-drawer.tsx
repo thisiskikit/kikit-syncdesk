@@ -36,6 +36,15 @@ export interface ShipmentDecisionDrawerProps {
   deliveryRows: ShipmentDetailInfoRow[];
   statusRows: ShipmentDetailInfoRow[];
   activityRows: ShipmentDetailInfoRow[];
+  handoffGuide: {
+    title: string;
+    description: string;
+    links: ReadonlyArray<{
+      href: string;
+      label: string;
+      variant?: "secondary" | "ghost";
+    }>;
+  } | null;
   isLoading: boolean;
   errorMessage: string | null;
   onClose: () => void;
@@ -102,6 +111,31 @@ export default function ShipmentDecisionDrawer(props: ShipmentDecisionDrawerProp
           {renderInfoRows("배송 정보", props.deliveryRows)}
           {renderInfoRows("출고 판단", props.statusRows)}
           {renderInfoRows("최근 작업 / 실시간 상태", props.activityRows)}
+          {props.handoffGuide ? (
+            <section className="shipment-decision-drawer-section">
+              <div className="shipment-decision-drawer-section-title">다음 운영 이동</div>
+              <div className="shipment-decision-drawer-info-grid">
+                <div className="shipment-decision-drawer-info-row">
+                  <span className="shipment-decision-drawer-info-label">{props.handoffGuide.title}</span>
+                  <div className="shipment-decision-drawer-info-value">
+                    <div>{props.handoffGuide.description}</div>
+                    <div className="shipment-decision-drawer-actions" style={{ marginTop: "0.75rem" }}>
+                      {props.handoffGuide.links.map((link) => (
+                        <WorkspaceEntryLink
+                          key={`${link.href}:${link.label}`}
+                          href={link.href}
+                          className={`button${link.variant === "ghost" ? " ghost" : " secondary"}`}
+                          workspaceBehavior="tab"
+                        >
+                          {link.label}
+                        </WorkspaceEntryLink>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
           <details className="shipment-decision-drawer-foldout">
             <summary>원본 상세 / 클레임 / 기술 로그 보기</summary>

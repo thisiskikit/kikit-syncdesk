@@ -1,6 +1,4 @@
 import {
-  lazy,
-  Suspense,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -8,11 +6,10 @@ import {
   type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import * as XLSX from "xlsx";
-import { RefreshCcw } from "lucide-react";
 import {
   type CellClickArgs,
-  DataGrid,
   SelectColumn,
   type CellSelectArgs,
   type RenderEditCellProps,
@@ -46,8 +43,8 @@ import {
   type CoupangShipmentWorksheetViewScope,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
-import { StatusBadge } from "@/components/status-badge";
 import { useOperations } from "@/components/operation-provider";
+import { StatusBadge } from "@/components/status-badge";
 import {
   canSendInvoiceRow,
   getInvoiceStatusCardKey,
@@ -78,6 +75,12 @@ import { parseCoupangInvoicePopupInput } from "@/lib/coupang-invoice-input";
 import { parseSpreadsheetClipboardMatrix } from "@/lib/spreadsheet-grid";
 import { apiRequestJson, getJson } from "@/lib/queryClient";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import {
+  buildCsHubWorkspaceHref,
+  buildFulfillmentWorkspaceHref,
+  buildWorkCenterWorkspaceHref,
+  parseFulfillmentWorkspaceSearch,
+} from "@/lib/ops-handoff-links";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 import { formatNumber } from "@/lib/utils";
 import {
@@ -134,23 +137,22 @@ import {
 } from "./fulfillment-filter-summary";
 import {
   buildQuickCollectFocusSignature,
-  resolveQuickCollectFocusRows,
   type QuickCollectFocusState,
 } from "./quick-collect-focus";
-import ShipmentBaseFilters from "./shipment-base-filters";
-import ShipmentArchivePanel from "./shipment-archive-panel";
-import ShipmentSelectionActionBar from "./shipment-selection-action-bar";
+import FulfillmentDrawerController from "./fulfillment-drawer-controller";
+import FulfillmentGridController from "./fulfillment-grid-controller";
+import FulfillmentSelectionController from "./fulfillment-selection-controller";
+import FulfillmentShell from "./fulfillment-shell";
+import FulfillmentSummaryBar from "./fulfillment-summary-bar";
+import FulfillmentToolbar from "./fulfillment-toolbar";
 import {
   buildShipmentBlockedDecisionDetails,
   summarizeShipmentBlockedDecisionRows,
 } from "./shipment-selection-summary";
-import ShipmentWorksheetPanel from "./shipment-worksheet-panel";
-import ShipmentWorksheetOverview from "./shipment-worksheet-overview";
 import {
   buildShipmentColumnPresetConfigs,
   buildShipmentColumnPresetWidths,
   detectShipmentColumnPresetKey,
-  SHIPMENT_COLUMN_PRESETS,
   type ShipmentColumnPresetKey,
 } from "./shipment-column-presets";
 import type {
@@ -158,6 +160,7 @@ import type {
   ShipmentDetailInfoRow,
   ShipmentDetailTable,
 } from "./shipment-detail-dialog";
+import { resolveQuickCollectFocusViewState } from "./quick-collect-focus-controller";
 import type {
   CoupangStoresResponse,
   EditableColumnKey,
@@ -174,12 +177,6 @@ import type {
 
 type InvoiceTransmissionMode = "upload" | "update";
 const SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
-const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
-const LazyShipmentAuditMissingDialog = lazy(() => import("./shipment-audit-missing-dialog"));
-const LazyShipmentDecisionDrawer = lazy(() => import("./shipment-decision-drawer"));
-const LazyShipmentDetailDialog = lazy(() => import("./shipment-detail-dialog"));
-const LazyShipmentExcelSortDialog = lazy(() => import("./shipment-excel-sort-dialog"));
-const LazyShipmentInvoiceInputDialog = lazy(() => import("./shipment-invoice-input-dialog"));
 
 type QuickFilterCardOption<TValue extends string> = {
   value: TValue;
@@ -1439,6 +1436,8 @@ function omitRowsFromMap(
 }
 
 export default function CoupangShipmentsPage() {
+  const [pathname, navigate] = useLocation();
+  const search = useSearch();
   const {
     startLocalOperation,
     finishLocalOperation,
@@ -1497,6 +1496,34 @@ export default function CoupangShipmentsPage() {
     () => detectShipmentColumnPresetKey(columnConfigs),
     [columnConfigs],
   );
+  const routeWorkspaceState = useMemo(
+    () => parseFulfillmentWorkspaceSearch(search),
+    [search],
+  );
+  const isRouteWorkspaceStatePending = useMemo(
+    () =>
+      (routeWorkspaceState.activeTab !== null && routeWorkspaceState.activeTab !== activeTab) ||
+      (routeWorkspaceState.filterPatch.selectedStoreId !== undefined &&
+        routeWorkspaceState.filterPatch.selectedStoreId !== filters.selectedStoreId) ||
+      (routeWorkspaceState.filterPatch.scope !== undefined &&
+        routeWorkspaceState.filterPatch.scope !== filters.scope) ||
+      (routeWorkspaceState.filterPatch.decisionStatus !== undefined &&
+        routeWorkspaceState.filterPatch.decisionStatus !== filters.decisionStatus) ||
+      (routeWorkspaceState.filterPatch.query !== undefined &&
+        routeWorkspaceState.filterPatch.query !== filters.query),
+    [
+      activeTab,
+      filters.decisionStatus,
+      filters.query,
+      filters.scope,
+      filters.selectedStoreId,
+      routeWorkspaceState.activeTab,
+      routeWorkspaceState.filterPatch.decisionStatus,
+      routeWorkspaceState.filterPatch.query,
+      routeWorkspaceState.filterPatch.scope,
+      routeWorkspaceState.filterPatch.selectedStoreId,
+    ],
+  );
 
   useEffect(() => {
     if (!isFiltersLoaded) {
@@ -1542,6 +1569,34 @@ export default function CoupangShipmentsPage() {
     }));
   }, [filters.selectedStoreId, isFiltersLoaded, setFilters, stores]);
 
+  useEffect(() => {
+    if (!isFiltersLoaded) {
+      return;
+    }
+
+    if (routeWorkspaceState.activeTab && routeWorkspaceState.activeTab !== activeTab) {
+      setActiveTab(routeWorkspaceState.activeTab);
+    }
+
+    if (!Object.keys(routeWorkspaceState.filterPatch).length) {
+      return;
+    }
+
+    setFilters((current) => {
+      const next = {
+        ...current,
+        ...routeWorkspaceState.filterPatch,
+      };
+      return areFiltersEqual(current, next) ? current : next;
+    });
+  }, [
+    activeTab,
+    isFiltersLoaded,
+    routeWorkspaceState.activeTab,
+    routeWorkspaceState.filterPatch,
+    setFilters,
+  ]);
+
   const deferredQuery = useDeferredValue(filters.query);
   const activeSortColumn = sortColumns[0] ?? null;
   const activeSortField = useMemo(
@@ -1549,6 +1604,40 @@ export default function CoupangShipmentsPage() {
     [activeSortColumn?.columnKey, columnConfigs],
   );
   const activeSortDirection = activeSortColumn?.direction === "DESC" ? "desc" : "asc";
+  useEffect(() => {
+    if (!isFiltersLoaded) {
+      return;
+    }
+
+    if (isRouteWorkspaceStatePending) {
+      return;
+    }
+
+    const nextHref = buildFulfillmentWorkspaceHref({
+      tab: activeTab,
+      storeId: filters.selectedStoreId || null,
+      scope: filters.scope,
+      decisionStatus: filters.decisionStatus,
+      query: filters.query,
+    });
+    const currentHref = `${pathname}${search}`;
+
+    if (nextHref !== currentHref) {
+      navigate(nextHref, { replace: true });
+    }
+  }, [
+    activeTab,
+    filters.decisionStatus,
+    filters.query,
+    filters.scope,
+    filters.selectedStoreId,
+    isRouteWorkspaceStatePending,
+    isFiltersLoaded,
+    navigate,
+    pathname,
+    search,
+  ]);
+
   const worksheetQuery = useQuery({
     queryKey: [
       "/api/coupang/shipments/worksheet/view",
@@ -1727,8 +1816,8 @@ export default function CoupangShipmentsPage() {
 
   const baseActiveSheet = sheetSnapshot ?? worksheetQuery.data ?? null;
   const archiveSheet = archiveQuery.data ?? null;
-  const selectedStoreName =
-    stores.find((store) => store.id === filters.selectedStoreId)?.storeName ?? null;
+  const selectedStore = stores.find((store) => store.id === filters.selectedStoreId) ?? null;
+  const selectedStoreName = selectedStore?.storeName ?? null;
   const activeInvoiceStatusCard = normalizeInvoiceStatusCardKey(filters.invoiceStatusCard);
   const activeOrderStatusCard = normalizeOrderStatusCardKey(filters.orderStatusCard);
   const activeOutputStatusCard = normalizeOutputStatusCardKey(filters.outputStatusCard);
@@ -1758,110 +1847,70 @@ export default function CoupangShipmentsPage() {
       filters.selectedStoreId,
     ],
   );
-  const isQuickCollectFocusActive =
-    activeTab === "worksheet" &&
-    quickCollectFocus?.active === true &&
-    quickCollectFocus.filterSignature === quickCollectFocusSignature;
   useEffect(() => {
     if (quickCollectFocus && quickCollectFocus.filterSignature !== quickCollectFocusSignature) {
       setQuickCollectFocus(null);
     }
   }, [quickCollectFocus, quickCollectFocusSignature]);
-  const quickCollectFocusResult = useMemo(() => {
-    if (!isQuickCollectFocusActive || !quickCollectFocus) {
-      return null;
-    }
-
-    const sortedRows = sortShipmentRows(
-      quickCollectFocus.rows.map((row) => dirtyRowsBySourceKey[row.sourceKey] ?? row),
-      sortColumns,
-      columnConfigs,
-    );
-
-    return resolveQuickCollectFocusRows({
-      rows: sortedRows,
-      sourceKeys: quickCollectFocus.sourceKeys,
-      decisionStatus: activeDecisionStatus,
-      page: worksheetPage,
-      pageSize: worksheetPageSize,
-    });
-  }, [
-    activeDecisionStatus,
-    columnConfigs,
-    dirtyRowsBySourceKey,
-    isQuickCollectFocusActive,
-    quickCollectFocus,
-    sortColumns,
-    worksheetPage,
-    worksheetPageSize,
-  ]);
-  const activeSheet =
-    isQuickCollectFocusActive && quickCollectFocusResult
-        ? {
-          ...(baseActiveSheet ?? {
-            store:
-              stores.find((store) => store.id === filters.selectedStoreId)
-                ? {
-                    id: filters.selectedStoreId,
-                    name: selectedStoreName ?? "",
-                    vendorId:
-                      stores.find((store) => store.id === filters.selectedStoreId)?.vendorId ?? "",
-                  }
-                : {
-                    id: filters.selectedStoreId,
-                    name: selectedStoreName ?? "",
-                    vendorId: "",
-                  },
-            fetchedAt: new Date().toISOString(),
-            collectedAt: null,
-            message: null,
-            source: "live" as const,
-            syncSummary: null,
-            scope: filters.scope,
-            scopeCounts: {
-              dispatch_active: 0,
-              post_dispatch: 0,
-              claims: 0,
-              all: 0,
-            },
-          }),
-          items: quickCollectFocusResult.focusedRows,
-          page: quickCollectFocusResult.page,
-          pageSize: worksheetPageSize,
-          totalPages: quickCollectFocusResult.totalPages,
-          totalRowCount: quickCollectFocusResult.focusedRows.length,
-          scopeRowCount: quickCollectFocusResult.focusedRows.length,
-          filteredRowCount: quickCollectFocusResult.focusedRows.length,
-          invoiceReadyCount: quickCollectFocusResult.invoiceReadyCount,
-          invoiceCounts: quickCollectFocusResult.invoiceCounts,
-          orderCounts: quickCollectFocusResult.orderCounts,
-          outputCounts: quickCollectFocusResult.outputCounts,
-        }
-      : baseActiveSheet;
-  const effectiveDraftRows =
-    isQuickCollectFocusActive && quickCollectFocusResult
-      ? quickCollectFocusResult.pageRows
-      : draftRows;
+  const quickCollectFocusRows = useMemo(
+    () =>
+      quickCollectFocus
+        ? sortShipmentRows(
+            quickCollectFocus.rows.map((row) => dirtyRowsBySourceKey[row.sourceKey] ?? row),
+            sortColumns,
+            columnConfigs,
+          )
+        : [],
+    [columnConfigs, dirtyRowsBySourceKey, quickCollectFocus, sortColumns],
+  );
+  const quickCollectFocusViewState = useMemo(
+    () =>
+      resolveQuickCollectFocusViewState({
+        activeTab,
+        quickCollectFocus,
+        filterSignature: quickCollectFocusSignature,
+        rows: quickCollectFocusRows,
+        draftRows,
+        decisionStatus: activeDecisionStatus,
+        page: worksheetPage,
+        pageSize: worksheetPageSize,
+        baseActiveSheet,
+        selectedStore: selectedStore
+          ? {
+              id: selectedStore.id,
+              storeName: selectedStore.storeName,
+              vendorId: selectedStore.vendorId,
+            }
+          : null,
+        scope: filters.scope,
+      }),
+    [
+      activeDecisionStatus,
+      activeTab,
+      baseActiveSheet,
+      draftRows,
+      filters.scope,
+      quickCollectFocus,
+      quickCollectFocusRows,
+      quickCollectFocusSignature,
+      selectedStore,
+      worksheetPage,
+      worksheetPageSize,
+    ],
+  );
+  const isQuickCollectFocusActive = quickCollectFocusViewState.isActive;
+  const quickCollectFocusResult = quickCollectFocusViewState.result;
+  const activeSheet = quickCollectFocusViewState.activeSheet;
+  const effectiveDraftRows = quickCollectFocusViewState.effectiveDraftRows;
   const decisionCounts = useMemo(
     () => buildFulfillmentDecisionCounts(effectiveDraftRows),
     [effectiveDraftRows],
   );
-  const visibleRows = useMemo(
-    () =>
-      isQuickCollectFocusActive && quickCollectFocusResult
-        ? quickCollectFocusResult.visibleRows
-        : effectiveDraftRows.filter((row) => matchesFulfillmentDecisionFilter(row, activeDecisionStatus)),
-    [activeDecisionStatus, effectiveDraftRows, isQuickCollectFocusActive, quickCollectFocusResult],
-  );
+  const visibleRows = quickCollectFocusViewState.visibleRows;
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
   const archiveRows = archiveSheet?.items ?? [];
   const archiveTotalPages = archiveSheet?.totalPages ?? 1;
-  const scopeCounts = (isQuickCollectFocusActive ? baseActiveSheet : activeSheet)?.scopeCounts ?? {
-    dispatch_active: 0,
-    post_dispatch: 0,
-    claims: 0,
-    all: 0,
-  };
+  const scopeCounts = quickCollectFocusViewState.scopeCounts;
   const activeDetailFilterCount = useMemo(
     () =>
       countActiveShipmentDetailFilters({
@@ -1989,6 +2038,104 @@ export default function CoupangShipmentsPage() {
   ]
     .filter(Boolean)
     .join(" · ");
+  const worksheetOpsHandoffGuide = useMemo(() => {
+    const blockedCount = decisionCounts.blocked;
+    const holdCount = decisionCounts.hold;
+    const recheckCount = decisionCounts.recheck;
+    const sharedQuery = deferredQuery.trim() || null;
+
+    if (
+      activeDecisionStatus === "blocked" ||
+      (activeDecisionStatus === "all" && blockedCount > 0)
+    ) {
+      return {
+        title: `차단 ${formatNumber(blockedCount)}건은 CS 확인이 먼저입니다.`,
+        description:
+          "취소, 반품, 교환, 출고중지 문맥은 채널 원본 화면과 CS 허브에서 먼저 확인한 뒤 출고로 돌아오세요.",
+        links: [
+          {
+            href: buildCsHubWorkspaceHref({
+              focus: "claims",
+              source: "fulfillment",
+            }),
+            label: "CS 허브에서 클레임 확인",
+          },
+          {
+            href: buildWorkCenterWorkspaceHref({
+              tab: "operations",
+              channel: "coupang",
+              status: "error",
+              query: sharedQuery,
+            }),
+            label: "작업센터 복구 보기",
+            variant: "ghost" as const,
+          },
+        ],
+      };
+    }
+
+    if (
+      activeDecisionStatus === "recheck" ||
+      (activeDecisionStatus === "all" && recheckCount > 0)
+    ) {
+      return {
+        title: `재확인 ${formatNumber(recheckCount)}건은 복구 로그와 같이 봅니다.`,
+        description:
+          "송장 실패, 동기화 지연, 데이터 누락은 작업센터 복구 기록을 먼저 보고 필요한 경우 CS 허브와 원본 화면으로 이어집니다.",
+        links: [
+          {
+            href: buildWorkCenterWorkspaceHref({
+              tab: "operations",
+              channel: "coupang",
+              status: "error",
+              query: sharedQuery,
+            }),
+            label: "작업센터에서 복구 확인",
+          },
+          {
+            href: buildCsHubWorkspaceHref({
+              focus: "recovery",
+              source: "fulfillment",
+            }),
+            label: "CS 영향 확인",
+            variant: "ghost" as const,
+          },
+        ],
+      };
+    }
+
+    if (
+      activeDecisionStatus === "hold" ||
+      (activeDecisionStatus === "all" && holdCount > 0)
+    ) {
+      return {
+        title: `보류 ${formatNumber(holdCount)}건은 문의/영향 확인이 먼저입니다.`,
+        description:
+          "문의, 보류, 경미한 CS 영향은 CS 허브에서 먼저 분기하고, 경고 로그가 반복되면 작업센터로 이어서 확인하세요.",
+        links: [
+          {
+            href: buildCsHubWorkspaceHref({
+              focus: "fulfillment-impact",
+              source: "fulfillment",
+            }),
+            label: "CS 허브 열기",
+          },
+          {
+            href: buildWorkCenterWorkspaceHref({
+              tab: "operations",
+              channel: "coupang",
+              status: "warning",
+              query: sharedQuery,
+            }),
+            label: "경고 로그 보기",
+            variant: "ghost" as const,
+          },
+        ],
+      };
+    }
+
+    return null;
+  }, [activeDecisionStatus, decisionCounts.blocked, decisionCounts.hold, decisionCounts.recheck, deferredQuery]);
   const invoiceReadyRows = useMemo(
     () => visibleRows.filter((row) => canSendInvoiceRow(row) && row.invoiceTransmissionStatus !== "pending"),
     [visibleRows],
@@ -2143,6 +2290,82 @@ export default function CoupangShipmentsPage() {
     detailItem?.claimLookupCreatedAtFrom && detailItem?.claimLookupCreatedAtTo
       ? `${detailItem.claimLookupCreatedAtFrom} ~ ${detailItem.claimLookupCreatedAtTo}`
       : "-";
+  const detailHandoffQuery =
+    detailRow?.shipmentBoxId ??
+    detailRow?.productOrderNumber ??
+    detailRow?.selpickOrderNumber ??
+    detailRow?.orderId ??
+    null;
+  const detailHandoffGuide = useMemo(() => {
+    if (!detailDecisionPresentation) {
+      return null;
+    }
+
+    if (
+      detailDecisionPresentation.status === "blocked" ||
+      detailDecisionPresentation.status === "hold"
+    ) {
+      return {
+        title:
+          detailDecisionPresentation.status === "blocked"
+            ? "클레임/출고중지 원인을 먼저 확인합니다."
+            : "문의·CS 영향부터 정리합니다.",
+        description:
+          "이 주문은 출고 실행보다 CS 맥락 확인이 먼저입니다. 채널 원본 화면과 CS 허브를 본 뒤 다시 출고 판단으로 돌아오세요.",
+        links: [
+          {
+            href: buildCsHubWorkspaceHref({
+              focus:
+                detailDecisionPresentation.status === "blocked"
+                  ? "claims"
+                  : "fulfillment-impact",
+              source: "fulfillment",
+            }),
+            label: "CS 허브 열기",
+          },
+          {
+            href: buildWorkCenterWorkspaceHref({
+              tab: "operations",
+              channel: "coupang",
+              status: detailDecisionPresentation.status === "blocked" ? "error" : "warning",
+              query: detailHandoffQuery,
+            }),
+            label: "관련 복구 로그 보기",
+            variant: "ghost" as const,
+          },
+        ],
+      };
+    }
+
+    if (detailDecisionPresentation.status === "recheck") {
+      return {
+        title: "복구 로그를 먼저 보고 다시 판단합니다.",
+        description:
+          "송장 실패나 동기화 지연 성격이면 작업센터 복구 기록을 먼저 확인하고, 필요하면 CS 허브에서 영향 범위를 다시 봅니다.",
+        links: [
+          {
+            href: buildWorkCenterWorkspaceHref({
+              tab: "operations",
+              channel: "coupang",
+              status: "error",
+              query: detailHandoffQuery,
+            }),
+            label: "작업센터에서 복구 보기",
+          },
+          {
+            href: buildCsHubWorkspaceHref({
+              focus: "recovery",
+              source: "fulfillment",
+            }),
+            label: "CS 영향 확인",
+            variant: "ghost" as const,
+          },
+        ],
+      };
+    }
+
+    return null;
+  }, [detailDecisionPresentation, detailHandoffQuery]);
 
   useEffect(() => {
     if (
@@ -2610,6 +2833,11 @@ export default function CoupangShipmentsPage() {
     isFallback ||
     busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
+  const prepareActionDisabled =
+    !filters.selectedStoreId ||
+    isFallback ||
+    busyAction !== null ||
+    (activeSheet?.orderCounts.ACCEPT ?? 0) === 0;
   const refreshActionDisabled =
     !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
   const openInvoiceInputDisabled =
@@ -4233,543 +4461,366 @@ export default function CoupangShipmentsPage() {
     setDraggingConfigId(null);
   }
 
-  return (
-    <div className="page">
-      <div className="card shipment-page-header">
-        <div className="shipment-page-header-main">
-          <div className="hero">
-            <div className="hero-badges">
-              <StatusBadge
-                tone={activeSheet?.source === "live" ? "live" : "draft"}
-                label={activeSheet?.source === "live" ? "실시간 동기화" : "대체 데이터"}
-              />
-              <StatusBadge
-                tone="shared"
-                label={activeTab === "archive" ? "보관함" : activeTab === "settings" ? "화면 설정" : "출고 운영"}
-              />
-            </div>
-            <h1>{activeTab === "archive" ? "출고 보관함" : activeTab === "settings" ? "출고 화면 설정" : "출고"}</h1>
-            <p>
-              오늘 처리할 출고 판단, 송장 입력과 전송, 누락 검수, 예외 확인을 한 화면에서 이어서 처리합니다.
-            </p>
-            <div className="segmented-control" style={{ marginTop: "0.75rem", width: "fit-content" }}>
-              <button
-                className={`segmented-button${activeTab === "worksheet" ? " active" : ""}`}
-                onClick={() => setActiveTab("worksheet")}
-              >
-                작업 화면
-              </button>
-              <button
-                className={`segmented-button${activeTab === "archive" ? " active" : ""}`}
-                onClick={() => setActiveTab("archive")}
-              >
-                보관함
-              </button>
-              <button
-                className={`segmented-button${activeTab === "settings" ? " active" : ""}`}
-                onClick={() => setActiveTab("settings")}
-              >
-                화면 설정
-              </button>
-            </div>
-          </div>
-
-          <div className="shipment-page-actions">
-            {activeTab !== "archive" ? (
-            <div className="shipment-primary-actions">
-              <button
-                className="button"
-                onClick={() => void collectWorksheet("new_only")}
-                disabled={collectActionDisabled}
-              >
-                {busyAction === "collect-new" ? "빠른 수집 중..." : "빠른 수집"}
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => void executePrepareAcceptedOrders()}
-                disabled={
-                  !filters.selectedStoreId ||
-                  isFallback ||
-                  busyAction !== null ||
-                  (activeSheet?.orderCounts.ACCEPT ?? 0) === 0
-                }
-              >
-                {busyAction === "prepare-orders" ? "상품준비중 처리 중..." : "결제완료 -> 상품준비중"}
-              </button>
-              <button
-                className="button secondary"
-                onClick={() =>
-                  void (worksheetMode === "invoice" ? executeInvoiceInputMode() : executeSelectedInvoices())
-                }
-                disabled={transmitActionDisabled}
-              >
-                {transmitActionBusyLabel}
-              </button>
-              <button
-                className="button ghost"
-                onClick={openInvoiceInputDialog}
-                disabled={openInvoiceInputDisabled}
-              >
-                송장 입력
-              </button>
-              <button
-                className="button ghost"
-                onClick={() => openExcelSortDialog("selected")}
-                disabled={openExcelExportDisabled}
-              >
-                선택 행 엑셀 다운로드
-              </button>
-              <button
-                className="button ghost"
-                onClick={() => openExcelSortDialog("notExported")}
-                disabled={openNotExportedExcelExportDisabled}
-              >
-                미출력건 전부 다운로드
-              </button>
-              {selectedRows.length > 0 && selectedExportBlockedRows.length > 0 ? (
-                <div className="muted action-disabled-reason">
-                  선택한 클레임 {selectedExportBlockedRows.length}건은 엑셀 다운로드에서 제외됩니다.
-                </div>
-              ) : null}
-              {(activeSheet?.outputCounts.notExported ?? 0) > 0 && scopeCounts.claims > 0 ? (
-                <div className="muted action-disabled-reason">
-                  클레임 주문은 미출력 전체 다운로드에서 자동 제외됩니다.
-                </div>
-              ) : null}
-              {dirtyCount ? (
-                <button
-                  className="button secondary"
-                  onClick={() => void saveWorksheetChanges()}
-                  disabled={busyAction !== null}
-                >
-                  {busyAction === "save" ? "저장 중..." : "변경 저장"}
-                </button>
-              ) : null}
-              <details className="shipment-manage-actions">
-                <summary className="shipment-manage-actions-trigger">관리 작업</summary>
-                <div className="shipment-manage-actions-menu">
-                  <button
-                    className="button ghost"
-                    onClick={() => void executeShipmentAuditMissing()}
-                    disabled={collectActionDisabled}
-                  >
-                    {busyAction === "audit-missing" ? "누락 검수 중..." : "누락 검수"}
-                  </button>
-                  <button
-                    className="button ghost"
-                    onClick={() => void collectWorksheet("incremental")}
-                    disabled={collectActionDisabled}
-                  >
-                    {busyAction === "collect-incremental" ? "재수집 중..." : "전체 재수집"}
-                  </button>
-                  <button
-                    className="button ghost"
-                    onClick={() => void collectWorksheet("full")}
-                    disabled={collectActionDisabled}
-                  >
-                    {busyAction === "collect-full" ? "재동기화 중..." : "전체 재동기화"}
-                  </button>
-                </div>
-              </details>
-            </div>
-            ) : (
-              <div className="shipment-primary-actions">
-                <div className="muted">
-                  보관함은 읽기 전용입니다. 상세 확인만 가능하고 수정, 송장 처리, 상품준비중 처리는 숨겨집니다.
-                </div>
-              </div>
-            )}
-            {activeTab !== "archive" && isFallback ? (
-              <div className="muted action-disabled-reason">
-                대체 데이터에서는 송장 전송을 실행할 수 없습니다.
-              </div>
-            ) : activeTab !== "archive" && selectedInvoiceBlockedRows.length ? (
-              <div className="muted action-disabled-reason">
-                클레임 {selectedInvoiceBlockedRows.length}건은 송장 전송 대상에서 제외됩니다.
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      <ShipmentBaseFilters
-        activeTab={activeTab}
-        filters={filters}
-        stores={stores}
-        scopeCounts={scopeCounts}
-        scopeOptions={WORKSHEET_SCOPE_OPTIONS}
-        refreshDisabled={refreshActionDisabled}
-        onPatchFilters={(patch) =>
+  const toolbarNode = (
+    <FulfillmentToolbar
+      activeTab={activeTab}
+      activeSheetSource={activeSheet?.source ?? null}
+      busyAction={busyAction}
+      collectActionDisabled={collectActionDisabled}
+      prepareActionDisabled={prepareActionDisabled}
+      transmitActionDisabled={transmitActionDisabled}
+      openInvoiceInputDisabled={openInvoiceInputDisabled}
+      openExcelExportDisabled={openExcelExportDisabled}
+      openNotExportedExcelExportDisabled={openNotExportedExcelExportDisabled}
+      transmitActionBusyLabel={transmitActionBusyLabel}
+      dirtyCount={dirtyCount}
+      isFallback={isFallback}
+      selectedRowsCount={selectedRows.length}
+      selectedExportBlockedRowsCount={selectedExportBlockedRows.length}
+      selectedInvoiceBlockedRowsCount={selectedInvoiceBlockedRows.length}
+      notExportedCount={activeSheet?.outputCounts.notExported ?? 0}
+      claimScopeCount={scopeCounts.claims}
+      filtersProps={{
+        activeTab,
+        filters,
+        stores,
+        scopeCounts,
+        scopeOptions: WORKSHEET_SCOPE_OPTIONS,
+        refreshDisabled: refreshActionDisabled,
+        onPatchFilters: (patch) =>
           setFilters((current) => ({
             ...current,
             ...patch,
-          }))
-        }
-        onRefresh={() => void handleShipmentRefresh()}
-      />
+          })),
+        onRefresh: () => void handleShipmentRefresh(),
+      }}
+      onChangeTab={setActiveTab}
+      onQuickCollect={() => void collectWorksheet("new_only")}
+      onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
+      onTransmit={() =>
+        void (worksheetMode === "invoice" ? executeInvoiceInputMode() : executeSelectedInvoices())
+      }
+      onOpenInvoiceInput={openInvoiceInputDialog}
+      onOpenSelectedExcelExport={() => openExcelSortDialog("selected")}
+      onOpenNotExportedExcelExport={() => openExcelSortDialog("notExported")}
+      onSaveChanges={() => void saveWorksheetChanges()}
+      onAuditMissing={() => void executeShipmentAuditMissing()}
+      onCollectIncremental={() => void collectWorksheet("incremental")}
+      onCollectFull={() => void collectWorksheet("full")}
+    />
+  );
 
-      {activeTab === "worksheet" ? (
-        <ShipmentWorksheetOverview
-          quickCollectFocusActive={isQuickCollectFocusActive}
-          quickCollectFocusCount={quickCollectFocusResult?.focusedRows.length ?? 0}
-          quickCollectFocusMessage={
-            isQuickCollectFocusActive && quickCollectFocusResult
-              ? `빠른 수집으로 추가된 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건을 먼저 보여줍니다.`
-              : null
-          }
-          activeDecisionStatus={activeDecisionStatus}
-          decisionCounts={decisionCounts}
-          decisionOptions={FULFILLMENT_DECISION_OPTIONS}
-          detailFilterToggleLabel={effectiveDetailFilterToggleLabel}
-          detailFiltersOpen={detailFiltersOpen}
-          activeDetailFilterCount={effectiveDetailFilterCount}
-          activeFilterSummaryTokens={activeFilterSummaryTokens}
-          filterSummarySupportText={filterSummarySupportText}
-          hasCustomWorksheetFilters={effectiveHasCustomWorksheetFilters}
-          pageRowCount={effectiveDraftRows.length}
-          visibleRowsCount={visibleRows.length}
-          filters={filters}
-          activeSheet={activeSheet}
-          activeInvoiceStatusCard={activeInvoiceStatusCard}
-          activeOrderStatusCard={activeOrderStatusCard}
-          activeOutputStatusCard={activeOutputStatusCard}
-          invoiceStatusOptions={INVOICE_STATUS_CARD_OPTIONS}
-          outputStatusOptions={OUTPUT_STATUS_CARD_OPTIONS}
-          orderStatusOptions={ORDER_STATUS_CARD_OPTIONS}
-          onClearQuickCollectFocus={() => {
-            setQuickCollectFocus(null);
-            setWorksheetPage(1);
-          }}
-          onPatchFilters={(patch) =>
-            setFilters((current) => ({
-              ...current,
-              ...patch,
-            }))
-          }
-          onResetFilters={() =>
-            setFilters((current) => ({
-              ...current,
-              query: "",
-              scope: "dispatch_active",
-              decisionStatus: "all",
-              invoiceStatusCard: "all",
-              orderStatusCard: "all",
-              outputStatusCard: "all",
-            }))
-          }
-          onToggleDetailFilters={() => setDetailFiltersOpen((current) => !current)}
-        />
-      ) : (
-        <div className="metric-grid">
-          <div className="metric">
-            <div className="metric-label">보관 전체</div>
-            <div className="metric-value">{formatNumber(archiveSheet?.totalRowCount ?? 0)}</div>
-          </div>
-          <div className="metric">
-            <div className="metric-label">검색 결과</div>
-            <div className="metric-value">{formatNumber(archiveSheet?.filteredRowCount ?? 0)}</div>
-          </div>
-          <div className="metric">
-            <div className="metric-label">현재 페이지</div>
-            <div className="metric-value">
-              {archivePage} / {archiveTotalPages}
-            </div>
-          </div>
-          <div className="metric">
-            <div className="metric-label">페이지 크기</div>
-            <div className="metric-value">{worksheetPageSize}</div>
-          </div>
-        </div>
-      )}
+  const summaryNode = (
+    <FulfillmentSummaryBar
+      activeTab={activeTab}
+      worksheetSummaryProps={{
+        quickCollectFocusActive: isQuickCollectFocusActive,
+        quickCollectFocusCount: quickCollectFocusResult?.focusedRows.length ?? 0,
+        quickCollectFocusMessage:
+          isQuickCollectFocusActive && quickCollectFocusResult
+            ? `빠른 수집으로 추가된 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건을 먼저 보여줍니다.`
+            : null,
+        activeDecisionStatus,
+        decisionCounts,
+        decisionOptions: FULFILLMENT_DECISION_OPTIONS,
+        detailFilterToggleLabel: effectiveDetailFilterToggleLabel,
+        detailFiltersOpen,
+        activeDetailFilterCount: effectiveDetailFilterCount,
+        activeFilterSummaryTokens,
+        filterSummarySupportText,
+        hasCustomWorksheetFilters: effectiveHasCustomWorksheetFilters,
+        pageRowCount: effectiveDraftRows.length,
+        visibleRowsCount: visibleRows.length,
+        filters,
+        activeSheet,
+        activeInvoiceStatusCard,
+        activeOrderStatusCard,
+        activeOutputStatusCard,
+        invoiceStatusOptions: INVOICE_STATUS_CARD_OPTIONS,
+        outputStatusOptions: OUTPUT_STATUS_CARD_OPTIONS,
+        orderStatusOptions: ORDER_STATUS_CARD_OPTIONS,
+        opsHandoffGuide: worksheetOpsHandoffGuide,
+        onClearQuickCollectFocus: () => {
+          setQuickCollectFocus(null);
+          setWorksheetPage(1);
+        },
+        onPatchFilters: (patch) =>
+          setFilters((current) => ({
+            ...current,
+            ...patch,
+          })),
+        onResetFilters: () =>
+          setFilters((current) => ({
+            ...current,
+            query: "",
+            scope: "dispatch_active",
+            decisionStatus: "all",
+            invoiceStatusCard: "all",
+            orderStatusCard: "all",
+            outputStatusCard: "all",
+          })),
+        onToggleDetailFilters: () => setDetailFiltersOpen((current) => !current),
+      }}
+      archiveSummary={{
+        totalRowCount: archiveSheet?.totalRowCount ?? 0,
+        filteredRowCount: archiveSheet?.filteredRowCount ?? 0,
+        archivePage,
+        archiveTotalPages,
+        worksheetPageSize,
+      }}
+    />
+  );
 
-      {recentActivityItems.length ? (
-        <details className="card shipment-activity-card">
-          <summary className="shipment-activity-summary">
-            <div>
-              <strong>최근 작업 알림</strong>
-              <div className="muted shipment-activity-summary-text">
-                {recentActivityItems[0]?.title ?? "최근 작업"} · {recentActivityItems.length}건
-              </div>
-            </div>
-            <span className="shipment-activity-summary-action">펼치기</span>
-          </summary>
-
-          <div className="shipment-activity-list">
-            {recentActivityItems.map((item) => (
-              <div
-                key={item.id}
-                className={`feedback${item.tone === "error" ? " error" : item.tone === "warning" ? " warning" : item.tone === "success" ? " success" : ""}`}
-              >
-                <strong>{item.title}</strong>
-                <div className="muted">{item.message}</div>
-                {item.details.length ? (
-                  <ul className="messages">
-                    {item.details.map((detail) => (
-                      <li key={detail}>{detail}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
-
-      {auditResult ? (
-        <div className={`feedback${auditResult.missingCount > 0 || auditResult.hiddenCount > 0 ? " warning" : " success"}`}>
-          <strong>누락 검수 결과</strong>
-          <div className="muted">{auditResult.message ?? summarizeShipmentWorksheetAuditResult(auditResult)}</div>
-          <div className="toolbar" style={{ justifyContent: "space-between", marginTop: 12 }}>
-            <div className="muted">
-              live {formatNumber(auditResult.liveCount)}건 / 누락 {formatNumber(auditResult.missingCount)}건 /
-              현재 뷰 숨김 {formatNumber(auditResult.hiddenCount)}건
-            </div>
-            <button className="button ghost" onClick={() => setIsAuditDialogOpen(true)}>
-              상세 보기
-            </button>
+  const activityNode = recentActivityItems.length ? (
+    <details className="card shipment-activity-card">
+      <summary className="shipment-activity-summary">
+        <div>
+          <strong>최근 작업 알림</strong>
+          <div className="muted shipment-activity-summary-text">
+            {recentActivityItems[0]?.title ?? "최근 작업"} · {recentActivityItems.length}건
           </div>
         </div>
-      ) : null}
+        <span className="shipment-activity-summary-action">펼치기</span>
+      </summary>
 
-      {activeTab === "worksheet" && selectedRows.length ? (
-        <ShipmentSelectionActionBar
-          selectedRowsCount={selectedRows.length}
-          selectedReadyRowsCount={selectedReadyRows.length}
-          selectedDecisionBlockedRowsCount={selectedDecisionBlockedRows.length}
-          blockedDecisionSummary={selectedBlockedDecisionSummary}
-          transmitDisabled={!selectedReadyRows.length || transmitActionDisabled}
-          downloadDisabled={openExcelExportDisabled}
-          onTransmit={() => void executeSelectedInvoices()}
-          onDownload={() => openExcelSortDialog("selected")}
-          onClear={() => {
-            setSelectedRowIds(new Set());
-            setSelectedRowsById({});
-          }}
-        />
-      ) : null}
-
-      {activeTab === "worksheet" ? (
-        <ShipmentWorksheetPanel
-          invoiceModeNotice={invoiceModeNotice}
-          detailGuideNotice={detailGuideNotice}
-          worksheetMode={worksheetMode}
-          activeColumnPreset={activeColumnPreset}
-          columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
-          isLoading={worksheetQuery.isLoading && !activeSheet}
-          hasSheetRows={Boolean(activeSheet?.totalRowCount ?? 0)}
-          hasRowsForCurrentFilters={Boolean(effectiveDraftRows.length)}
-          filteredRowCount={activeSheet?.filteredRowCount ?? 0}
-          visibleRowsCount={visibleRows.length}
-          worksheetPage={worksheetPage}
-          worksheetTotalPages={worksheetTotalPages}
-          worksheetPageSize={worksheetPageSize}
-          pageSizeOptions={SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS}
-          onWorksheetModeChange={setWorksheetMode}
-          onApplyColumnPreset={applyColumnPreset}
-          onOpenSettings={() => setActiveTab("settings")}
-          onPageSizeChange={(pageSize) => {
-            setWorksheetPageSize(pageSize);
-            setWorksheetPage(1);
-          }}
-          onPrevPage={() => setWorksheetPage((current) => Math.max(1, current - 1))}
-          onNextPage={() => setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1))}
-        >
-          <div className="grid-shell shipment-grid-shell" onPasteCapture={handleGridPaste}>
-            <DataGrid
-              className={`rdg-light shipment-grid${worksheetMode === "invoice" ? " invoice-input-mode" : ""}`}
-              columns={columns}
-              defaultColumnOptions={{ resizable: true }}
-              rows={visibleRows}
-              rowKeyGetter={(row: CoupangShipmentWorksheetRow) => row.id}
-              selectedRows={pageSelectedRowIds}
-              sortColumns={sortColumns}
-              onSortColumnsChange={(nextSortColumns) => setSortColumns(nextSortColumns.slice(-1))}
-              onSelectedRowsChange={handlePageSelectedRowsChange}
-              onRowsChange={handleVisibleRowsChange}
-              onFill={handleGridFill}
-              onCellClick={handleGridCellClick}
-              onSelectedCellChange={(args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>
-                setSelectedCell({
-                  rowIdx: args.rowIdx,
-                  columnId: String(args.column.key),
-                })
-              }
-              onColumnResize={(column, width) =>
-                setColumnWidths((current) => ({
-                  ...current,
-                  [String(column.key)]: width,
-                }))
-              }
-              onColumnsReorder={handleGridColumnsReorder}
-              rowClass={(row) => {
-                const classNames = [];
-                if (dirtySet.has(row.sourceKey)) {
-                  classNames.push("shipment-row-dirty");
-                }
-                if (row.invoiceTransmissionStatus === "failed") {
-                  classNames.push("shipment-row-failed");
-                }
-                if (row.invoiceTransmissionStatus === "pending") {
-                  classNames.push("shipment-row-pending");
-                }
-                return classNames.length ? classNames.join(" ") : undefined;
-              }}
-              style={{ height: 640 }}
-            />
+      <div className="shipment-activity-list">
+        {recentActivityItems.map((item) => (
+          <div
+            key={item.id}
+            className={`feedback${item.tone === "error" ? " error" : item.tone === "warning" ? " warning" : item.tone === "success" ? " success" : ""}`}
+          >
+            <strong>{item.title}</strong>
+            <div className="muted">{item.message}</div>
+            {item.details.length ? (
+              <ul className="messages">
+                {item.details.map((detail) => (
+                  <li key={detail}>{detail}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
-        </ShipmentWorksheetPanel>
-      ) : activeTab === "archive" ? (
-        <ShipmentArchivePanel
-          detailGuideNotice={detailGuideNotice}
-          isLoading={archiveQuery.isLoading && !archiveSheet}
-          totalRowCount={archiveSheet?.totalRowCount ?? 0}
-          filteredRowCount={archiveSheet?.filteredRowCount ?? 0}
-          rows={archiveRows}
-          archivePage={archivePage}
-          archiveTotalPages={archiveTotalPages}
-          worksheetPageSize={worksheetPageSize}
-          pageSizeOptions={SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS}
-          onPageSizeChange={(pageSize) => {
-            setWorksheetPageSize(pageSize);
-            setArchivePage(1);
-          }}
-          onPrevPage={() => setArchivePage((current) => Math.max(1, current - 1))}
-          onNextPage={() => setArchivePage((current) => Math.min(archiveTotalPages, current + 1))}
-          getStatusPresentation={getWorksheetStatusPresentation}
-          formatDateTimeLabel={formatDateTimeLabel}
-          formatInvoiceText={(row) => formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber])}
-          onOpenDetail={openShipmentDetailDialog}
-        />
-      ) : (
-        <Suspense
-          fallback={
-            <div className="card">
-              <div className="empty">컬럼 설정을 불러오는 중입니다...</div>
-            </div>
-          }
-        >
-          <LazyShipmentColumnSettingsPanel
-            columnConfigs={columnConfigs}
-            columnWidths={columnWidths}
-            draggingConfigId={draggingConfigId}
-            previewRow={columnPreviewRow}
-            previewRowDescription={columnPreviewDescription}
-            openExcelExportDisabled={openExcelExportDisabled}
-            openNotExportedExcelExportDisabled={openNotExportedExcelExportDisabled}
-            selectedRowsCount={selectedRows.length}
-            selectedExportBlockedRowCount={selectedExportBlockedRows.length}
-            claimScopeCount={scopeCounts.claims}
-            notExportedCount={activeSheet?.outputCounts.notExported ?? 0}
-            activeColumnPreset={activeColumnPreset}
-            columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
-            shipmentColumnLabels={SHIPMENT_COLUMN_LABELS}
-            shipmentColumnDefaultWidths={SHIPMENT_COLUMN_DEFAULT_WIDTHS}
-            shipmentColumnSourceOptions={SHIPMENT_COLUMN_SOURCE_OPTIONS}
-            onBack={() => setActiveTab("worksheet")}
-            onAdd={addColumnConfig}
-            onApplyColumnPreset={applyColumnPreset}
-            onReset={resetColumnConfigs}
-            onDelete={deleteColumnConfig}
-            onDragStart={(id) => setDraggingConfigId(id)}
-            onDragEnd={() => setDraggingConfigId(null)}
-            onDrop={handleSettingsDrop}
-            onUpdate={updateColumnConfig}
-            onOpenExcelSortDialog={openExcelSortDialog}
-          />
-        </Suspense>
-      )}
+        ))}
+      </div>
+    </details>
+  ) : null;
 
-      <Suspense fallback={null}>
-        <LazyShipmentAuditMissingDialog
-          isOpen={isAuditDialogOpen}
-          result={auditResult}
-          onClose={() => setIsAuditDialogOpen(false)}
-        />
-      </Suspense>
-
-      <Suspense fallback={null}>
-        <LazyShipmentDecisionDrawer
-          isOpen={Boolean(detailRow && !isFullDetailDialogOpen)}
-          rowTitle={detailRow?.exposedProductName || detailRow?.productName || ""}
-          heroMeta={detailHeroMeta}
-          decision={detailDecisionPresentation}
-          worksheetStatusValue={detailWorksheetStatusValue}
-          invoiceStatusValue={detailInvoiceStatusValue}
-          claimStatusValue={detailClaimStatusValue}
-          worksheetRows={detailWorksheetRows}
-          deliveryRows={detailDeliveryRows}
-          statusRows={detailStatusRows}
-          activityRows={detailRealtimeOrderRows}
-          isLoading={shipmentDetailQuery.isLoading}
-          errorMessage={shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null}
-          onClose={closeShipmentDetailDialog}
-          onOpenFullDetail={openShipmentFullDetailDialog}
-        />
-      </Suspense>
-
-      <Suspense
-        fallback={
-          detailRow && isFullDetailDialogOpen ? (
-            <div className="csv-overlay">
-              <div className="csv-dialog detail-dialog shipment-detail-dialog">
-                <div className="empty">상세 화면을 불러오는 중입니다...</div>
-              </div>
-            </div>
-          ) : null
-        }
-      >
-        <LazyShipmentDetailDialog
-          isOpen={Boolean(detailRow && isFullDetailDialogOpen)}
-          rowTitle={detailRow?.exposedProductName || detailRow?.productName || ""}
-          heroMeta={detailHeroMeta}
-          worksheetStatusValue={detailWorksheetStatusValue}
-          invoiceStatusValue={detailInvoiceStatusValue}
-          claimStatusValue={detailClaimStatusValue}
-          worksheetRows={detailWorksheetRows}
-          deliveryRows={detailDeliveryRows}
-          statusRows={detailStatusRows}
-          isLoading={shipmentDetailQuery.isLoading}
-          errorMessage={shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null}
-          warningTitle={detailDialogWarningTitle}
-          warningMessage={detailDialogWarningMessage}
-          realtimeOrderRows={detailRealtimeOrderRows}
-          orderItemsTable={detailOrderItemsTable}
-          returnSummaryText={`총 ${formatNumber(detailReturnRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`}
-          returnClaims={detailReturnClaimCards}
-          exchangeSummaryText={`총 ${formatNumber(detailExchangeRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`}
-          exchangeClaims={detailExchangeClaimCards}
-          onClose={closeShipmentFullDetailDialog}
-        />
-      </Suspense>
-
-      <Suspense fallback={null}>
-        <LazyShipmentExcelSortDialog
-          isOpen={isExcelSortDialogOpen}
-          exportScope={excelExportScope}
-          targetRowCount={
-            excelExportScope === "selected"
-              ? selectedExportRows.length
-              : activeSheet?.outputCounts.notExported ?? 0
-          }
-          blockedClaimCount={
-            excelExportScope === "selected" ? selectedExportBlockedRows.length : scopeCounts.claims
-          }
-          onClose={closeExcelSortDialog}
-          onApply={applyExcelSortDialog}
-          getScopeLabel={getShipmentExcelExportScopeLabel}
-        />
-      </Suspense>
-
-      <Suspense fallback={null}>
-        <LazyShipmentInvoiceInputDialog
-          isOpen={isInvoiceInputDialogOpen}
-          value={invoiceInputDialogValue}
-          isBusy={busyAction !== null}
-          onChange={setInvoiceInputDialogValue}
-          onClose={closeInvoiceInputDialog}
-          onApply={() => void applyInvoiceInputDialog()}
-        />
-      </Suspense>
+  const auditNode = auditResult ? (
+    <div
+      className={`feedback${auditResult.missingCount > 0 || auditResult.hiddenCount > 0 ? " warning" : " success"}`}
+    >
+      <strong>누락 검수 결과</strong>
+      <div className="muted">{auditResult.message ?? summarizeShipmentWorksheetAuditResult(auditResult)}</div>
+      <div className="toolbar" style={{ justifyContent: "space-between", marginTop: 12 }}>
+        <div className="muted">
+          live {formatNumber(auditResult.liveCount)}건 / 누락 {formatNumber(auditResult.missingCount)}건
+          / 현재 뷰 숨김 {formatNumber(auditResult.hiddenCount)}건
+        </div>
+        <button className="button ghost" onClick={() => setIsAuditDialogOpen(true)}>
+          상세 보기
+        </button>
+      </div>
     </div>
+  ) : null;
+
+  const selectionNode = (
+    <FulfillmentSelectionController
+      activeTab={activeTab}
+      selectedRowsCount={selectedRows.length}
+      selectedReadyRowsCount={selectedReadyRows.length}
+      selectedDecisionBlockedRowsCount={selectedDecisionBlockedRows.length}
+      blockedDecisionSummary={selectedBlockedDecisionSummary}
+      transmitDisabled={!selectedReadyRows.length || transmitActionDisabled}
+      downloadDisabled={openExcelExportDisabled}
+      onTransmit={() => void executeSelectedInvoices()}
+      onDownload={() => openExcelSortDialog("selected")}
+      onClear={() => {
+        setSelectedRowIds(new Set());
+        setSelectedRowsById({});
+      }}
+    />
+  );
+
+  const contentNode = (
+    <FulfillmentGridController
+      activeTab={activeTab}
+      worksheet={{
+        invoiceModeNotice,
+        detailGuideNotice,
+        worksheetMode,
+        activeColumnPreset,
+        isLoading: worksheetQuery.isLoading && !activeSheet,
+        hasSheetRows: Boolean(activeSheet?.totalRowCount ?? 0),
+        hasRowsForCurrentFilters: Boolean(effectiveDraftRows.length),
+        filteredRowCount: activeSheet?.filteredRowCount ?? 0,
+        visibleRowsCount: visibleRows.length,
+        worksheetPage,
+        worksheetTotalPages,
+        worksheetPageSize,
+        pageSizeOptions: SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
+        columns,
+        rows: visibleRows,
+        selectedRows: pageSelectedRowIds,
+        sortColumns,
+        dirtySourceKeys: dirtySet,
+        onWorksheetModeChange: setWorksheetMode,
+        onApplyColumnPreset: applyColumnPreset,
+        onOpenSettings: () => setActiveTab("settings"),
+        onPageSizeChange: (pageSize) => {
+          setWorksheetPageSize(pageSize);
+          setWorksheetPage(1);
+        },
+        onPrevPage: () => setWorksheetPage((current) => Math.max(1, current - 1)),
+        onNextPage: () => setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1)),
+        onPasteCapture: handleGridPaste,
+        onSortColumnsChange: (nextSortColumns) => setSortColumns(nextSortColumns.slice(-1)),
+        onSelectedRowsChange: handlePageSelectedRowsChange,
+        onRowsChange: handleVisibleRowsChange,
+        onFill: handleGridFill,
+        onCellClick: handleGridCellClick,
+        onSelectedCellChange: (args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>
+          setSelectedCell({
+            rowIdx: args.rowIdx,
+            columnId: String(args.column.key),
+          }),
+        onColumnResize: (column, width) =>
+          setColumnWidths((current) => ({
+            ...current,
+            [String(column.key)]: width,
+          })),
+        onColumnsReorder: handleGridColumnsReorder,
+      }}
+      archive={{
+        detailGuideNotice,
+        isLoading: archiveQuery.isLoading && !archiveSheet,
+        totalRowCount: archiveSheet?.totalRowCount ?? 0,
+        filteredRowCount: archiveSheet?.filteredRowCount ?? 0,
+        rows: archiveRows,
+        archivePage,
+        archiveTotalPages,
+        worksheetPageSize,
+        pageSizeOptions: SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
+        getStatusPresentation: getWorksheetStatusPresentation,
+        formatDateTimeLabel,
+        formatInvoiceText: (row) => formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber]),
+        onOpenDetail: openShipmentDetailDialog,
+        onPageSizeChange: (pageSize) => {
+          setWorksheetPageSize(pageSize);
+          setArchivePage(1);
+        },
+        onPrevPage: () => setArchivePage((current) => Math.max(1, current - 1)),
+        onNextPage: () => setArchivePage((current) => Math.min(archiveTotalPages, current + 1)),
+      }}
+      settings={{
+        columnConfigs,
+        columnWidths,
+        draggingConfigId,
+        previewRow: columnPreviewRow,
+        previewRowDescription: columnPreviewDescription,
+        openExcelExportDisabled,
+        openNotExportedExcelExportDisabled,
+        selectedRowsCount: selectedRows.length,
+        selectedExportBlockedRowCount: selectedExportBlockedRows.length,
+        claimScopeCount: scopeCounts.claims,
+        notExportedCount: activeSheet?.outputCounts.notExported ?? 0,
+        activeColumnPreset,
+        shipmentColumnLabels: SHIPMENT_COLUMN_LABELS,
+        shipmentColumnDefaultWidths: SHIPMENT_COLUMN_DEFAULT_WIDTHS,
+        shipmentColumnSourceOptions: SHIPMENT_COLUMN_SOURCE_OPTIONS,
+        onBack: () => setActiveTab("worksheet"),
+        onAdd: addColumnConfig,
+        onApplyColumnPreset: applyColumnPreset,
+        onReset: resetColumnConfigs,
+        onDelete: deleteColumnConfig,
+        onDragStart: (id) => setDraggingConfigId(id),
+        onDragEnd: () => setDraggingConfigId(null),
+        onDrop: handleSettingsDrop,
+        onUpdate: updateColumnConfig,
+        onOpenExcelSortDialog: openExcelSortDialog,
+      }}
+    />
+  );
+
+  const drawersNode = (
+    <FulfillmentDrawerController
+      audit={{
+        isOpen: isAuditDialogOpen,
+        result: auditResult,
+        onClose: () => setIsAuditDialogOpen(false),
+      }}
+      decisionDrawer={{
+        isOpen: Boolean(detailRow && !isFullDetailDialogOpen),
+        rowTitle: detailRow?.exposedProductName || detailRow?.productName || "",
+        heroMeta: detailHeroMeta,
+        decision: detailDecisionPresentation,
+        worksheetStatusValue: detailWorksheetStatusValue,
+        invoiceStatusValue: detailInvoiceStatusValue,
+        claimStatusValue: detailClaimStatusValue,
+        worksheetRows: detailWorksheetRows,
+        deliveryRows: detailDeliveryRows,
+        statusRows: detailStatusRows,
+        activityRows: detailRealtimeOrderRows,
+        handoffGuide: detailHandoffGuide,
+        isLoading: shipmentDetailQuery.isLoading,
+        errorMessage: shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null,
+        onClose: closeShipmentDetailDialog,
+        onOpenFullDetail: openShipmentFullDetailDialog,
+      }}
+      detailDialog={{
+        isOpen: Boolean(detailRow && isFullDetailDialogOpen),
+        rowTitle: detailRow?.exposedProductName || detailRow?.productName || "",
+        heroMeta: detailHeroMeta,
+        worksheetStatusValue: detailWorksheetStatusValue,
+        invoiceStatusValue: detailInvoiceStatusValue,
+        claimStatusValue: detailClaimStatusValue,
+        worksheetRows: detailWorksheetRows,
+        deliveryRows: detailDeliveryRows,
+        statusRows: detailStatusRows,
+        isLoading: shipmentDetailQuery.isLoading,
+        errorMessage: shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null,
+        warningTitle: detailDialogWarningTitle,
+        warningMessage: detailDialogWarningMessage,
+        realtimeOrderRows: detailRealtimeOrderRows,
+        orderItemsTable: detailOrderItemsTable,
+        returnSummaryText: `총 ${formatNumber(detailReturnRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`,
+        returnClaims: detailReturnClaimCards,
+        exchangeSummaryText: `총 ${formatNumber(detailExchangeRows.length)}건 · 조회 범위 ${detailClaimLookupRange}`,
+        exchangeClaims: detailExchangeClaimCards,
+        detailRow,
+        onClose: closeShipmentFullDetailDialog,
+      }}
+      excelSortDialog={{
+        isOpen: isExcelSortDialogOpen,
+        exportScope: excelExportScope,
+        targetRowCount:
+          excelExportScope === "selected"
+            ? selectedExportRows.length
+            : activeSheet?.outputCounts.notExported ?? 0,
+        blockedClaimCount:
+          excelExportScope === "selected" ? selectedExportBlockedRows.length : scopeCounts.claims,
+        onClose: closeExcelSortDialog,
+        onApply: applyExcelSortDialog,
+        getScopeLabel: getShipmentExcelExportScopeLabel,
+      }}
+      invoiceInputDialog={{
+        isOpen: isInvoiceInputDialogOpen,
+        value: invoiceInputDialogValue,
+        isBusy: busyAction !== null,
+        onChange: setInvoiceInputDialogValue,
+        onClose: closeInvoiceInputDialog,
+        onApply: () => void applyInvoiceInputDialog(),
+      }}
+    />
+  );
+
+  return (
+    <FulfillmentShell
+      toolbar={toolbarNode}
+      summary={summaryNode}
+      activity={activityNode}
+      audit={auditNode}
+      selection={selectionNode}
+      content={contentNode}
+      drawers={drawersNode}
+    />
   );
 }

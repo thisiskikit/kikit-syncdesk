@@ -1,15 +1,13 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-12
+- 스냅샷 날짜: 2026-04-13
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
 
 - 코드 경로 확인
 - 타입체크
-- 대상 단위 테스트
-- 로컬 프로덕션 빌드
-- 로컬 프로덕션 서버 기준 Chrome headless 스크린샷 확인
+- 출고 quick collect/controller, 작업센터 recovery helper 대상 단위 테스트
 
 ## 현재 상태
 
@@ -26,6 +24,8 @@
 
 ### 출고
 - `출고`는 쿠팡 배송/송장 워크시트를 운영 화면으로 재배치한 top-level 화면입니다.
+- `client/src/features/coupang/shipments/page.tsx`는 상태, 조회, 실행 action coordinator를 맡고, 렌더 구조는 별도 controller/component로 분리됐습니다.
+- `tab / storeId / scope / decisionStatus / query` 기반 deep-link를 읽고, 현재 상태에 맞춰 `/fulfillment` URL을 다시 정규화합니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `출고 판단`
   - 보조 축: `작업 대상 / 배송 이후 / 예외·클레임 / 전체`
@@ -33,6 +33,17 @@
 - 상단은 `기본 필터`, `출고 판단 요약`, `현재 적용 조건`, `세부 필터`, `선택 일괄 작업 바` 순서로 읽히도록 정리돼 있습니다.
 - 기본 `출고 판단` 상태는 `출고 가능`, `송장 대기`, `보류`, `차단`, `재확인 필요`입니다.
 - 상세는 메인 표가 아니라 우측 Drawer에서 먼저 확인합니다.
+- `보류 / 차단 / 재확인 필요` 상태에서는 요약 영역과 Drawer에서 다음 이동 경로를 `CS 허브` 또는 `작업센터` 기준으로 함께 안내합니다.
+
+### 출고 coordinator 분해 상태
+- 렌더 shell은 `fulfillment-shell.tsx`로 이동했습니다.
+- 헤더, 1차 액션, 기본 필터는 `fulfillment-toolbar.tsx`로 이동했습니다.
+- 출고 판단 요약과 보관함 메트릭은 `fulfillment-summary-bar.tsx`로 이동했습니다.
+- 선택 일괄 작업 bar는 `fulfillment-selection-controller.tsx`로 이동했습니다.
+- 작업 화면/보관함/화면 설정 전환과 grid wiring은 `fulfillment-grid-controller.tsx`로 이동했습니다.
+- Drawer/상세/dialog lazy mounting은 `fulfillment-drawer-controller.tsx`로 이동했습니다.
+- 빠른 수집 집중 보기의 시트 재구성 로직은 `quick-collect-focus-controller.ts`로 이동했습니다.
+- 따라서 `page.tsx`는 여전히 큰 coordinator이지만, 화면 조립과 빠른 수집 view state 계산이 한 파일에 섞여 있지는 않습니다.
 
 ### 출고 컬럼 보기 프리셋
 - 워크시트 카드와 화면 설정 패널 모두에서 아래 보기 프리셋을 적용할 수 있습니다.
@@ -69,13 +80,23 @@
 ### CS / 채널 / 설정
 - `CS`는 통합 실행 화면이 아니라 허브입니다.
 - 기존 NAVER / COUPANG 문의/클레임 화면으로 deep-link 합니다.
+- `/cs`는 `focus / source` query를 읽어 이번 진입 문맥을 안내하고, 다시 `출고` 또는 `작업센터`로 이어지는 복귀 링크를 함께 보여줍니다.
 - `채널`은 연결/원본 화면 허브입니다.
+- `채널`은 `연결 상태 / 점검`, `원본 화면 진입`, `채널별 주요 도구`, `고급 / 레거시 화면` 순서로 읽히게 정리됐습니다.
+- 연결이 전혀 없으면 먼저 연결 설정으로 들어가야 한다는 empty state 문구를 보여줍니다.
 - `설정`은 연결 설정과 고급/레거시 도구 진입점입니다.
+- `설정`은 `연결 설정`, `운영 고급 도구`, `레거시 / 직접 진입` 순서로 읽히게 정리됐습니다.
+- 두 허브의 카드 배치와 레이블은 `client/src/pages/hub-navigation.ts`의 section descriptor로 고정했습니다.
 
 ### 작업센터
 - 작업센터는 로그 뷰어가 아니라 실패 작업 복구 중심 화면입니다.
-- 메인 목록은 여전히 얇게 유지하고, 재시도 가능 여부를 우선 노출합니다.
-- 상세 패널에서만 주문 단위 티켓 샘플을 확인할 수 있습니다.
+- `tab / channel / status / level / q / slowOnly / logId` deep-link를 읽고, 현재 필터 상태를 `/work-center` URL에 다시 반영합니다.
+- 메인 목록은 `즉시 재시도 / 원인 확인 / 진행 관찰 / 완료` 순서로 읽히도록 recovery-first 우선순위를 적용합니다.
+- 동일 성격 실패는 상단 `복구 묶음`으로 먼저 요약합니다.
+- 리스트에서는 재시도 가능 여부와 영향 범위를 제목보다 먼저 판단할 수 있게 정리했습니다.
+- 상세 패널은 `지금 할 일`, `영향 범위`, `작업 티켓 상세`, `요청 / 결과 요약`, payload 순서로 읽히게 정리했습니다.
+- 쿠팡 operation 상세에서는 payload에서 추출한 주문 식별자와 storeId를 기준으로 `관련 출고 보기`, `CS 허브 열기`로 바로 이어집니다.
+- 상세 foldout 렌더는 `operation-center-operation-detail-sections.tsx`로 분리됐습니다.
 - 티켓 상세는 최대 5건까지만 기록합니다.
 - 우선순위는 `실패 -> 경고 -> 건너뜀 -> 성공`입니다.
 - 현재 적용 대상은 다음 작업들입니다.
@@ -83,7 +104,19 @@
   - 결제완료 -> 상품준비중
   - 송장 업로드
   - 송장 수정
+
+### 빌드 / 배포 하드닝
+- `vite.config.ts`는 `vendor-react`, `vendor-grid`, `vendor-sheet`, `route-coupang`, `route-naver`, `route-engine` chunk 분리를 사용합니다.
+- 2026-04-13 기준 production build에서 기존 `index` 메인 청크는 약 `1,333.80kB`에서 `72.05kB`로 줄었고, 500k 초과 chunk warning은 사라졌습니다.
+- 남은 빌드 경고는 `node_modules/react-data-grid/lib/styles.css`의 `//# sourceMappingURL=styles.css.map` 코멘트 때문에 발생하는 CSS minify warning입니다.
+- GitHub Actions 워크플로우 이름은 `Cloud Run Prod Deploy`, `Cloud Run Dev Deploy`로 정리했습니다.
+- 배포 후 smoke check와 rollback 포인트는 `docs/deployment/cloud-run-smoke-check.md`에 정리돼 있습니다.
 - 작업 상태 패널과 작업센터 주요 레이블은 현재 한국어로 정리돼 있습니다.
+
+### 운영 회귀 문서
+- 출고 수동 회귀 시나리오는 `docs/qa/manual-fulfillment-regression.md`에 정리돼 있습니다.
+- 작업센터 recovery 흐름 시나리오는 `docs/qa/work-center-recovery-scenarios.md`에 정리돼 있습니다.
+- 브라우저에서 아직 직접 밟지 못한 기대 결과는 문서에 `추정`으로 표시했습니다.
 
 ## 라우트 요약
 
@@ -113,11 +146,28 @@
 - `client/src/pages/cs-hub.tsx`
 - `client/src/pages/channels-hub.tsx`
 - `client/src/pages/operation-center.tsx`
+- `client/src/pages/operation-center-recovery.ts`
+- `client/src/pages/operation-center-operation-detail-sections.tsx`
+- `client/src/pages/operation-center-recovery.test.ts`
+- `client/src/pages/hub-navigation.ts`
+- `client/src/pages/hub-navigation.test.ts`
+- `client/src/lib/ops-handoff-links.ts`
+- `client/src/lib/ops-handoff-links.test.ts`
+- `vite.config.ts`
+- `.github/workflows/deploy-kikit-price-change.yml`
+- `.github/workflows/deploy-kikit-price-change-dev.yml`
 - `client/src/pages/settings-hub.tsx`
 - `client/src/features/coupang/shipments/page.tsx`
+- `client/src/features/coupang/shipments/fulfillment-shell.tsx`
+- `client/src/features/coupang/shipments/fulfillment-toolbar.tsx`
+- `client/src/features/coupang/shipments/fulfillment-summary-bar.tsx`
+- `client/src/features/coupang/shipments/fulfillment-selection-controller.tsx`
+- `client/src/features/coupang/shipments/fulfillment-grid-controller.tsx`
+- `client/src/features/coupang/shipments/fulfillment-drawer-controller.tsx`
 - `client/src/features/coupang/shipments/fulfillment-decision.ts`
 - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
 - `client/src/features/coupang/shipments/quick-collect-focus.ts`
+- `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
 - `client/src/features/coupang/shipments/shipment-column-presets.ts`
 - `client/src/features/coupang/shipments/shipment-base-filters.tsx`
 - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
@@ -125,6 +175,8 @@
 - `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
 - `client/src/features/coupang/shipments/shipment-archive-panel.tsx`
 - `client/src/features/coupang/shipments/shipment-decision-drawer.tsx`
+- `client/src/features/coupang/shipments/quick-collect-focus.test.ts`
+- `client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts`
 - `server/services/coupang/shipment-worksheet-service.ts`
 - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
 - `server/http/coupang/tracked-actions.ts`
@@ -132,28 +184,29 @@
 - `server/http/handlers/coupang/shipments.ts`
 - `shared/coupang.ts`
 - `shared/operations.ts`
+- `docs/qa/manual-fulfillment-regression.md`
+- `docs/qa/work-center-recovery-scenarios.md`
+- `docs/deployment/cloud-run-branch-deployments.md`
+- `docs/deployment/cloud-run-smoke-check.md`
 
 ## 검증
 
 ### 통과
 - `npm run check`
-- `npm run build`
-- `npx vitest run client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/features/coupang/shipments/shipment-column-presets.test.ts client/src/features/coupang/shipments/quick-collect-focus.test.ts`
-- `npx vitest run --root . shared/operations.test.ts server/http/coupang/tracked-actions.test.ts server/http/handlers/coupang/shipments.test.ts server/services/coupang/shipment-worksheet-collection.test.ts`
-- 로컬 프로덕션 서버 기준 `http://127.0.0.1:5001/fulfillment`, `http://127.0.0.1:5001/work-center` HTTP 200 확인
-- Chrome headless fresh profile 스크린샷으로 `출고`, `작업센터`, `작업 상태` 패널의 주요 한국어 레이블 렌더 확인
+- `npm exec vitest run --root . client/src/lib/ops-handoff-links.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts client/src/pages/operation-center-recovery.test.ts`
 
 ### 아직 직접 검증하지 못한 것
 - 브라우저에서 실제 클릭 기반의 완전한 수동 검증
   - 빠른 수집 후 신규 주문 집중 보기 상호작용
   - 혼합 선택 후 자동 제외 실행
-  - 작업센터 상세 패널의 티켓 상세 상호작용
+  - 보관함 / 화면 설정 전환 이후 주요 액션 비활성화 흐름
+  - Drawer / 전체 상세 dialog 왕복 흐름
+  - 작업센터 복구 묶음 카드와 리스트 우선순위 체감
+  - 작업센터 상세 패널의 재시도 버튼, 티켓 상세, payload foldout 상호작용
 
 ## 남은 이슈
 
-- `client/src/features/coupang/shipments/page.tsx`는 여전히 큰 coordinator 파일입니다.
+- `client/src/features/coupang/shipments/page.tsx`는 여전히 상태, query, action handler가 많은 coordinator 파일입니다.
+- 다만 render 조립, quick collect view state 계산, drawer mounting 책임은 분리됐습니다.
 - 기본 작업 보기의 가로 폭은 프리셋으로 1차 완화했지만, 합성 컬럼 기반 압축은 아직 남아 있습니다.
-- 작업센터는 복구 중심 구조로 정리됐지만, 상세 섹션 helper 분리는 아직 하지 않았습니다.
-- 빌드 경고는 2건이 남아 있습니다.
-  - CSS minify `sourceMappingURL` 경고
-  - 메인 청크 크기 경고
+- 작업센터는 recovery-first 구조로 더 선명해졌지만, 브라우저 클릭 기반 체감 검증은 아직 남아 있습니다.

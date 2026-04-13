@@ -1,4 +1,5 @@
 import type { CoupangShipmentWorksheetViewResponse } from "@shared/coupang";
+import { WorkspaceEntryLink } from "@/components/workspace-tabs";
 import type {
   InvoiceStatusCardKey,
   OrderStatusCardKey,
@@ -17,6 +18,18 @@ type StatusOption<TValue extends string> = {
   value: TValue;
   label: string;
   toneClassName: string;
+};
+
+type OpsHandoffLink = {
+  href: string;
+  label: string;
+  variant?: "secondary" | "ghost";
+};
+
+type OpsHandoffGuide = {
+  title: string;
+  description: string;
+  links: readonly OpsHandoffLink[];
 };
 
 type ShipmentWorksheetOverviewProps = {
@@ -42,6 +55,7 @@ type ShipmentWorksheetOverviewProps = {
   invoiceStatusOptions: readonly StatusOption<InvoiceStatusCardKey>[];
   outputStatusOptions: readonly StatusOption<OutputStatusCardKey>[];
   orderStatusOptions: readonly StatusOption<OrderStatusCardKey>[];
+  opsHandoffGuide: OpsHandoffGuide | null;
   onClearQuickCollectFocus: () => void;
   onPatchFilters: (patch: Partial<FilterState>) => void;
   onResetFilters: () => void;
@@ -71,6 +85,7 @@ export default function ShipmentWorksheetOverview({
   invoiceStatusOptions,
   outputStatusOptions,
   orderStatusOptions,
+  opsHandoffGuide,
   onClearQuickCollectFocus,
   onPatchFilters,
   onResetFilters,
@@ -150,6 +165,30 @@ export default function ShipmentWorksheetOverview({
           <div className="metric-value">{formatNumber(decisionCounts.recheck)}</div>
         </div>
       </div>
+
+      {opsHandoffGuide ? (
+        <div className="card shipment-filter-summary-card">
+          <div className="shipment-filter-summary-header">
+            <div>
+              <div className="shipment-filter-summary-label">다음 운영 이동</div>
+              <strong>{opsHandoffGuide.title}</strong>
+              <div className="muted shipment-filter-summary-note">{opsHandoffGuide.description}</div>
+            </div>
+            <div className="shipment-filter-summary-actions">
+              {opsHandoffGuide.links.map((link) => (
+                <WorkspaceEntryLink
+                  key={`${link.href}:${link.label}`}
+                  href={link.href}
+                  className={`button${link.variant === "ghost" ? " ghost" : " secondary"}`}
+                  workspaceBehavior="tab"
+                >
+                  {link.label}
+                </WorkspaceEntryLink>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="card shipment-filter-summary-card">
         <div className="shipment-filter-summary-header">

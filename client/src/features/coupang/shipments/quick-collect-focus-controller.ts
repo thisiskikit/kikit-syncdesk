@@ -1,0 +1,176 @@
+import type {
+  CoupangShipmentWorksheetInvoiceStatusCard,
+  CoupangShipmentWorksheetOrderStatusCard,
+  CoupangShipmentWorksheetOutputStatusCard,
+  CoupangShipmentWorksheetRow,
+  CoupangShipmentWorksheetViewResponse,
+  CoupangShipmentWorksheetViewScope,
+} from "@shared/coupang";
+import { matchesFulfillmentDecisionFilter } from "./fulfillment-decision";
+import {
+  resolveQuickCollectFocusRows,
+  type QuickCollectFocusRowsResult,
+  type QuickCollectFocusState,
+} from "./quick-collect-focus";
+import type { FulfillmentDecisionFilterValue } from "./types";
+
+type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+
+type SelectedStoreRef = {
+  id: string;
+  storeName: string;
+  vendorId: string;
+} | null;
+
+type ResolveQuickCollectFocusViewStateInput = {
+  activeTab: FulfillmentActiveTab;
+  quickCollectFocus: QuickCollectFocusState | null;
+  filterSignature: string;
+  rows: readonly CoupangShipmentWorksheetRow[];
+  draftRows: readonly CoupangShipmentWorksheetRow[];
+  decisionStatus: FulfillmentDecisionFilterValue;
+  page: number;
+  pageSize: number;
+  baseActiveSheet: CoupangShipmentWorksheetViewResponse | null;
+  selectedStore: SelectedStoreRef;
+  scope: CoupangShipmentWorksheetViewScope;
+};
+
+export type QuickCollectFocusViewState = {
+  isActive: boolean;
+  result: QuickCollectFocusRowsResult | null;
+  activeSheet: CoupangShipmentWorksheetViewResponse | null;
+  effectiveDraftRows: CoupangShipmentWorksheetRow[];
+  visibleRows: CoupangShipmentWorksheetRow[];
+  scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
+};
+
+const EMPTY_SCOPE_COUNTS: Record<CoupangShipmentWorksheetViewScope, number> = {
+  dispatch_active: 0,
+  post_dispatch: 0,
+  claims: 0,
+  all: 0,
+};
+
+const EMPTY_INVOICE_COUNTS: Record<CoupangShipmentWorksheetInvoiceStatusCard, number> = {
+  all: 0,
+  idle: 0,
+  ready: 0,
+  pending: 0,
+  failed: 0,
+  applied: 0,
+};
+
+const EMPTY_ORDER_COUNTS: Record<CoupangShipmentWorksheetOrderStatusCard, number> = {
+  all: 0,
+  ACCEPT: 0,
+  INSTRUCT: 0,
+  DEPARTURE: 0,
+  DELIVERING: 0,
+  FINAL_DELIVERY: 0,
+  NONE_TRACKING: 0,
+  SHIPMENT_STOP_REQUESTED: 0,
+  SHIPMENT_STOP_HANDLED: 0,
+  CANCEL: 0,
+  RETURN: 0,
+  EXCHANGE: 0,
+};
+
+const EMPTY_OUTPUT_COUNTS: Record<CoupangShipmentWorksheetOutputStatusCard, number> = {
+  all: 0,
+  notExported: 0,
+  exported: 0,
+};
+
+function resolveFallbackActiveSheet(input: {
+  result: QuickCollectFocusRowsResult;
+  selectedStore: SelectedStoreRef;
+  scope: CoupangShipmentWorksheetViewScope;
+  pageSize: number;
+}): CoupangShipmentWorksheetViewResponse {
+  return {
+    store: {
+      id: input.selectedStore?.id ?? "",
+      name: input.selectedStore?.storeName ?? "",
+      vendorId: input.selectedStore?.vendorId ?? "",
+    },
+    items: input.result.focusedRows,
+    fetchedAt: new Date().toISOString(),
+    collectedAt: null,
+    message: null,
+    source: "live",
+    syncSummary: null,
+    scope: input.scope,
+    page: input.result.page,
+    pageSize: input.pageSize,
+    totalPages: input.result.totalPages,
+    totalRowCount: input.result.focusedRows.length,
+    scopeRowCount: input.result.focusedRows.length,
+    filteredRowCount: input.result.focusedRows.length,
+    invoiceReadyCount: input.result.invoiceReadyCount,
+    scopeCounts: { ...EMPTY_SCOPE_COUNTS },
+    invoiceCounts: { ...EMPTY_INVOICE_COUNTS },
+    orderCounts: { ...EMPTY_ORDER_COUNTS },
+    outputCounts: { ...EMPTY_OUTPUT_COUNTS },
+  };
+}
+
+export function resolveQuickCollectFocusViewState(
+  input: ResolveQuickCollectFocusViewStateInput,
+): QuickCollectFocusViewState {
+  const isActive =
+    input.activeTab === "worksheet" &&
+    input.quickCollectFocus?.active === true &&
+    input.quickCollectFocus.filterSignature === input.filterSignature;
+
+  if (!isActive || !input.quickCollectFocus) {
+    return {
+      isActive: false,
+      result: null,
+      activeSheet: input.baseActiveSheet,
+      effectiveDraftRows: [...input.draftRows],
+      visibleRows: input.draftRows.filter((row) =>
+        matchesFulfillmentDecisionFilter(row, input.decisionStatus),
+      ),
+      scopeCounts: input.baseActiveSheet?.scopeCounts ?? { ...EMPTY_SCOPE_COUNTS },
+    };
+  }
+
+  const result = resolveQuickCollectFocusRows({
+    rows: input.rows,
+    sourceKeys: input.quickCollectFocus.sourceKeys,
+    decisionStatus: input.decisionStatus,
+    page: input.page,
+    pageSize: input.pageSize,
+  });
+  const activeSheet = input.baseActiveSheet
+    ? {
+        ...input.baseActiveSheet,
+        items: result.focusedRows,
+        page: result.page,
+        pageSize: input.pageSize,
+        totalPages: result.totalPages,
+        totalRowCount: result.focusedRows.length,
+        scopeRowCount: result.focusedRows.length,
+        filteredRowCount: result.focusedRows.length,
+        invoiceReadyCount: result.invoiceReadyCount,
+        invoiceCounts: result.invoiceCounts,
+        orderCounts: result.orderCounts,
+        outputCounts: result.outputCounts,
+      }
+    : resolveFallbackActiveSheet({
+        result,
+        selectedStore: input.selectedStore,
+        scope: input.scope,
+        pageSize: input.pageSize,
+      });
+
+  return {
+    isActive: true,
+    result,
+    activeSheet,
+    effectiveDraftRows: result.pageRows,
+    visibleRows: result.visibleRows,
+    scopeCounts: input.baseActiveSheet?.scopeCounts ?? { ...EMPTY_SCOPE_COUNTS },
+  };
+}
