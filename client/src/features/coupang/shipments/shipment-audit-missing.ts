@@ -74,14 +74,14 @@ export function buildShipmentWorksheetAuditDetails(
   ];
 }
 
-export function shouldBlockPrepareForShipmentAudit(
+export function hasShipmentPrepareAuditWarnings(
   result: CoupangShipmentWorksheetAuditMissingResponse,
 ) {
   return result.missingCount > 0;
 }
 
-export function summarizeShipmentPrepareAuditBlock(
+export function summarizeShipmentPrepareAuditWarning(
   result: CoupangShipmentWorksheetAuditMissingResponse,
 ) {
-  return `수집 누락 ${result.missingCount}건이 있어 상품준비중 처리를 차단했습니다. 먼저 누락 주문을 수집한 뒤 다시 시도해 주세요.`;
+  return `수집 누락 ${result.missingCount}건은 현재 worksheet에서 제외하고, 확인 가능한 주문만 계속 처리했습니다.`;
 }

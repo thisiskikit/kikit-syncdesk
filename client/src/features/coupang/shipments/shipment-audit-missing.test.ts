@@ -4,8 +4,8 @@ import {
   buildShipmentWorksheetAuditDetails,
   buildShipmentWorksheetAuditRequest,
   formatShipmentWorksheetAuditHiddenReason,
-  shouldBlockPrepareForShipmentAudit,
-  summarizeShipmentPrepareAuditBlock,
+  hasShipmentPrepareAuditWarnings,
+  summarizeShipmentPrepareAuditWarning,
   summarizeShipmentWorksheetAuditResult,
 } from "./shipment-audit-missing";
 
@@ -100,9 +100,9 @@ describe("shipment-audit-missing helpers", () => {
     ]);
   });
 
-  it("blocks prepare only when missing worksheet rows exist", () => {
+  it("treats missing worksheet rows as warnings for prepare flow", () => {
     expect(
-      shouldBlockPrepareForShipmentAudit({
+      hasShipmentPrepareAuditWarnings({
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 2,
         worksheetMatchedCount: 1,
@@ -115,7 +115,7 @@ describe("shipment-audit-missing helpers", () => {
     ).toBe(true);
 
     expect(
-      shouldBlockPrepareForShipmentAudit({
+      hasShipmentPrepareAuditWarnings({
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 2,
         worksheetMatchedCount: 2,
@@ -128,9 +128,9 @@ describe("shipment-audit-missing helpers", () => {
     ).toBe(false);
   });
 
-  it("summarizes the prepare block warning", () => {
+  it("summarizes the prepare warning without blocking wording", () => {
     expect(
-      summarizeShipmentPrepareAuditBlock({
+      summarizeShipmentPrepareAuditWarning({
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 4,
         worksheetMatchedCount: 2,
@@ -141,7 +141,7 @@ describe("shipment-audit-missing helpers", () => {
         message: null,
       }),
     ).toBe(
-      "수집 누락 2건이 있어 상품준비중 처리를 차단했습니다. 먼저 누락 주문을 수집한 뒤 다시 시도해 주세요.",
+      "수집 누락 2건은 현재 worksheet에서 제외하고, 확인 가능한 주문만 계속 처리했습니다.",
     );
   });
 });

@@ -2,6 +2,31 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-14 / 상품준비중 선행 차단 제거
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `결제완료 -> 상품준비중` 실행 전에 보던 `수집 누락 audit`는 유지하되, 누락 주문이 있어도 현재 worksheet에서 처리 가능한 주문은 계속 `상품준비중`으로 전달하도록 바꿨습니다.
+  - 결과 피드백에는 기존 실패 항목과 함께 `수집 누락` 상세를 같이 남기고, audit 다이얼로그도 계속 열 수 있게 유지했습니다.
+  - helper 테스트를 추가해 `누락이 있어도 진행`, `실패 상세 + 누락 상세 동시 표시`를 고정했습니다.
+- 이유:
+  - 실제 백엔드는 부분 성공을 허용하고 있었는데, 출고 화면만 선행 audit 때문에 전체를 막고 있어 운영 동선이 끊기고 있었습니다.
+- 남은 점:
+  - 브라우저에서 실제 클릭으로 audit 다이얼로그와 결과 피드백이 함께 어떻게 보이는지는 아직 직접 확인하지 못했습니다.
+- 검증:
+  - `npm exec vitest run --root . client/src/features/coupang/shipments/shipment-audit-missing.test.ts client/src/features/coupang/shipments/shipment-prepare-flow.test.ts server/services/coupang/order-service.test.ts`
+  - `npm run check`
+  - `git diff --check`
+
 ## 2026-04-13 / 상품준비중 처리 부분 성공 허용
 
 - 변경 유형:

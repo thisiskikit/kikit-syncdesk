@@ -120,10 +120,12 @@ import {
 import {
   buildShipmentWorksheetAuditDetails,
   buildShipmentWorksheetAuditRequest,
-  shouldBlockPrepareForShipmentAudit,
-  summarizeShipmentPrepareAuditBlock,
   summarizeShipmentWorksheetAuditResult,
 } from "./shipment-audit-missing";
+import {
+  buildPrepareAcceptedOrdersFeedback,
+  resolvePrepareAcceptedOrdersPlan,
+} from "./shipment-prepare-flow";
 import {
   buildFulfillmentDecisionCounts,
   getFulfillmentDecision,
@@ -1071,24 +1073,6 @@ function getShipmentClaimSummary(
         customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
       }),
     )
-  );
-}
-
-function buildPrepareClaimBlockedDetails(
-  rows: Array<
-    Pick<
-      CoupangShipmentWorksheetRow,
-      | "orderId"
-      | "shipmentBoxId"
-      | "orderStatus"
-      | "customerServiceIssueSummary"
-      | "customerServiceIssueCount"
-      | "customerServiceIssueBreakdown"
-    >
-  >,
-) {
-  return rows.map(
-    (row) => `주문 ${row.orderId} / 배송 ${row.shipmentBoxId} / ${getShipmentClaimSummary(row)}`,
   );
 }
 
@@ -3005,34 +2989,25 @@ export default function CoupangShipmentsPage() {
         return;
       }
 
-      if (shouldBlockPrepareForShipmentAudit(auditResponse)) {
+      const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
+      const preparePlan = resolvePrepareAcceptedOrdersPlan({
+        auditResponse,
+        resolvedRows,
+      });
+
+      if (preparePlan.hasAuditWarnings) {
         setAuditResult(auditResponse);
         setIsAuditDialogOpen(true);
-        setFeedback({
-          type: "warning",
-          title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
-          message: summarizeShipmentPrepareAuditBlock(auditResponse),
-          details: buildShipmentWorksheetAuditDetails(auditResponse, {
-            limit: 8,
-            includeHidden: false,
-          }),
-        });
-        return;
       }
 
-      const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
-      const blockedClaimRows = resolvedRows?.blockedItems ?? [];
-      const blockedClaimDetails = buildPrepareClaimBlockedDetails(blockedClaimRows);
-      const targetRows = resolvedRows?.items ?? [];
-
-      if (!targetRows.length) {
+      if (!preparePlan.shouldSubmitPrepare) {
         setFeedback({
           type: "warning",
           title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC",
           message: resolvedRows?.matchedCount
             ? "\uD074\uB808\uC784\uC774 \uC788\uB294 \uC8FC\uBB38\uC774 \uC81C\uC678\uB418\uC5B4 \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
             : "\uD604\uC7AC \uD654\uBA74 \uC870\uAC74\uC5D0\uC11C \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
-          details: blockedClaimDetails.slice(0, 8),
+          details: [...preparePlan.blockedClaimDetails, ...preparePlan.auditWarningDetails].slice(0, 8),
         });
         return;
       }
@@ -3041,7 +3016,7 @@ export default function CoupangShipmentsPage() {
         channel: "coupang",
         actionName:
           "\uCFE0\uD321 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38 \uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC",
-        targetCount: targetRows.length,
+        targetCount: preparePlan.targetRows.length,
       });
 
       const result = await apiRequestJson<CoupangBatchActionResponse>(
@@ -3049,7 +3024,7 @@ export default function CoupangShipmentsPage() {
         "/api/coupang/orders/prepare",
         {
           storeId: filters.selectedStoreId,
-          items: targetRows.map(
+          items: preparePlan.targetRows.map(
             (row) =>
               ({
                 shipmentBoxId: row.shipmentBoxId,
@@ -3069,22 +3044,17 @@ export default function CoupangShipmentsPage() {
         skipBusyState: true,
       });
 
-      const detailLines = [...buildFailureDetails(result), ...blockedClaimDetails].slice(0, 8);
-      const warning =
-        blockedClaimDetails.length > 0 ||
-        result.summary.failedCount > 0 ||
-        result.summary.warningCount > 0 ||
-        result.summary.skippedCount > 0;
-
-      setFeedback({
-        type: warning ? "warning" : "success",
-        title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uACB0\uACFC",
-        message: `${buildResultSummary(result)} / \uACB0\uC81C\uC644\uB8CC ${targetRows.length}\uAC74 \uCC98\uB9AC`,
-        details: detailLines,
+      const feedbackState = buildPrepareAcceptedOrdersFeedback({
+        auditResponse,
+        blockedClaimDetails: preparePlan.blockedClaimDetails,
+        result,
+        targetRowCount: preparePlan.targetRows.length,
       });
+
+      setFeedback(feedbackState);
       finishLocalOperation(localToastId, {
-        status: warning ? "warning" : "success",
-        summary: `${targetRows.length}\uAC74 \uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC`,
+        status: feedbackState.type,
+        summary: `${preparePlan.targetRows.length}\uAC74 \uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC`,
       });
       const finishedToastId = localToastId;
       if (finishedToastId) {
