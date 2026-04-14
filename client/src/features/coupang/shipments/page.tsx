@@ -81,6 +81,7 @@ import {
   buildFulfillmentWorkspaceHref,
   buildWorkCenterWorkspaceHref,
   parseFulfillmentWorkspaceSearch,
+  type FulfillmentWorkspaceTab,
 } from "@/lib/ops-handoff-links";
 import { useServerMenuState } from "@/lib/use-server-menu-state";
 import { formatNumber } from "@/lib/utils";
@@ -1453,7 +1454,7 @@ export default function CoupangShipmentsPage() {
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
   const [isFullDetailDialogOpen, setIsFullDetailDialogOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"worksheet" | "archive" | "settings">("worksheet");
+  const [activeTab, setActiveTab] = useState<FulfillmentWorkspaceTab>("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
   const [quickCollectFocus, setQuickCollectFocus] = useState<QuickCollectFocusState | null>(null);
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
@@ -1511,6 +1512,27 @@ export default function CoupangShipmentsPage() {
       routeWorkspaceState.filterPatch.selectedStoreId,
     ],
   );
+
+  const changeWorkspaceTab = (nextTab: FulfillmentWorkspaceTab) => {
+    setActiveTab(nextTab);
+
+    if (!isFiltersLoaded) {
+      return;
+    }
+
+    const nextHref = buildFulfillmentWorkspaceHref({
+      tab: nextTab,
+      storeId: filters.selectedStoreId || null,
+      scope: filters.scope,
+      decisionStatus: filters.decisionStatus,
+      query: filters.query,
+    });
+    const currentHref = `${pathname}${search}`;
+
+    if (nextHref !== currentHref) {
+      navigate(nextHref, { replace: true });
+    }
+  };
 
   useEffect(() => {
     if (!isFiltersLoaded) {
@@ -4565,7 +4587,7 @@ export default function CoupangShipmentsPage() {
           })),
         onRefresh: () => void handleShipmentRefresh(),
       }}
-      onChangeTab={setActiveTab}
+      onChangeTab={changeWorkspaceTab}
       onQuickCollect={() => void collectWorksheet("new_only")}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
       onTransmit={() =>
@@ -4735,7 +4757,7 @@ export default function CoupangShipmentsPage() {
         dirtySourceKeys: dirtySet,
         onWorksheetModeChange: setWorksheetMode,
         onApplyColumnPreset: applyColumnPreset,
-        onOpenSettings: () => setActiveTab("settings"),
+        onOpenSettings: () => changeWorkspaceTab("settings"),
         onPageSizeChange: (pageSize) => {
           setWorksheetPageSize(pageSize);
           setWorksheetPage(1);
@@ -4797,7 +4819,7 @@ export default function CoupangShipmentsPage() {
         shipmentColumnLabels: SHIPMENT_COLUMN_LABELS,
         shipmentColumnDefaultWidths: SHIPMENT_COLUMN_DEFAULT_WIDTHS,
         shipmentColumnSourceOptions: SHIPMENT_COLUMN_SOURCE_OPTIONS,
-        onBack: () => setActiveTab("worksheet"),
+        onBack: () => changeWorkspaceTab("worksheet"),
         onAdd: addColumnConfig,
         onApplyColumnPreset: applyColumnPreset,
         onReset: resetColumnConfigs,
