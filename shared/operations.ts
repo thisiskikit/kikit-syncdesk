@@ -196,6 +196,7 @@ const actionLabelMap: Record<string, string> = {
   "list-products": "상품 조회",
   "list-orders": "주문 조회",
   "mark-preparing": "상품준비중 처리",
+  "refresh-worksheet": "출고 후속 보강",
   "upload-invoice": "송장 업로드",
   "update-invoice": "송장 수정",
   "mark-shipment-stopped": "출고중지완료",

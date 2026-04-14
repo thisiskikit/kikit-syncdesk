@@ -11,6 +11,7 @@ import {
   getShipmentWorksheetView,
   getShipmentWorksheetDetail,
   patchShipmentWorksheet,
+  refreshShipmentWorksheet,
   resolveShipmentWorksheetBulkRows,
   runShipmentArchive,
 } from "../../../services/coupang/shipment-worksheet-service";
@@ -28,6 +29,7 @@ import {
   parseCollectShipmentInput,
   parseInvoiceTargets,
   parseRunShipmentArchiveInput,
+  parseRefreshShipmentWorksheetInput,
   parseShipmentArchiveViewQuery,
   parseShipmentWorksheetAuditMissingInput,
   parseShipmentWorksheetBulkResolveRequest,
@@ -139,6 +141,27 @@ function buildCollectResultSummary(
           ticketDetails: ticketDetailState.items,
           source: response.source,
         },
+    preview: response.message ?? headline,
+  });
+}
+
+function buildRefreshResultSummary(
+  response: Awaited<ReturnType<typeof refreshShipmentWorksheet>>,
+) {
+  const headline = `후속 보강 ${response.updatedCount}건 갱신 / ${response.refreshedCount}건 확인`;
+
+  return summarizeResult({
+    headline,
+    detail: response.message,
+    stats: {
+      scope: response.scope,
+      refreshedCount: response.refreshedCount,
+      updatedCount: response.updatedCount,
+      completedPhases: response.completedPhases,
+      pendingPhases: response.pendingPhases,
+      warningPhases: response.warningPhases,
+      source: response.source,
+    },
     preview: response.message ?? headline,
   });
 }
@@ -369,6 +392,56 @@ export const collectShipmentWorksheetHandler: RequestHandler = async (req, res) 
       code: "COUPANG_SHIPMENT_COLLECT_FAILED",
       message:
         error instanceof Error ? error.message : "Failed to collect Coupang shipment worksheet.",
+    });
+  }
+};
+
+export const refreshShipmentWorksheetHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseRefreshShipmentWorksheetInput(req.body);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+    const normalizedPayload = { ...input } as Record<string, unknown>;
+    const requestPayload =
+      req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : null;
+
+    const tracked = await runTrackedOperation({
+      channel: "coupang",
+      menuKey: COUPANG_SHIPMENTS_MENU_KEY,
+      actionKey: "refresh-worksheet",
+      mode: "background",
+      targetType: "store",
+      targetCount: 1,
+      targetIds: [input.storeId],
+      requestPayload,
+      normalizedPayload,
+      retryable: false,
+      execute: async () => {
+        const data = await refreshShipmentWorksheet(input);
+        const hasWarnings =
+          data.warningPhases.length > 0 || data.source === "fallback" || Boolean(data.message);
+
+        return {
+          data,
+          status: hasWarnings ? "warning" : "success",
+          normalizedPayload,
+          resultSummary: buildRefreshResultSummary(data),
+        };
+      },
+    });
+
+    sendData(res, {
+      ...tracked.data,
+      operation: tracked.operation,
+    });
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_REFRESH_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to refresh Coupang shipment worksheet.",
     });
   }
 };

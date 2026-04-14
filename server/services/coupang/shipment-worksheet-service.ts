@@ -15,6 +15,9 @@ import type {
   CoupangShipmentSyncMode,
   CoupangShipmentWorksheetDetailResponse,
   CoupangShipmentWorksheetInvoiceInputApplyResponse,
+  CoupangShipmentWorksheetRefreshResponse,
+  CoupangShipmentWorksheetRefreshScope,
+  CoupangShipmentWorksheetSyncPhase,
   CoupangShipmentArchiveRow,
   CoupangShipmentArchiveViewQuery,
   CoupangShipmentArchiveViewResponse,
@@ -23,6 +26,7 @@ import type {
   CoupangShipmentWorksheetSyncSummary,
   CoupangShipmentWorksheetViewQuery,
   CoupangShipmentWorksheetViewResponse,
+  RefreshCoupangShipmentWorksheetInput,
   RunCoupangShipmentArchiveInput,
   RunCoupangShipmentArchiveResponse,
   PatchCoupangShipmentWorksheetInput,
@@ -36,7 +40,6 @@ import {
   listExchanges,
   listOrders,
   listReturns,
-  markPreparing,
 } from "./order-service";
 import { buildCoupangCustomerServiceIssueState } from "./customer-service-issues";
 import { getProductDetail } from "./product-service";
@@ -506,6 +509,12 @@ const SHIPMENT_WORKSHEET_STATUSES = new Set([
   "FINAL_DELIVERY",
   "NONE_TRACKING",
 ]);
+const COLLECT_COMPLETED_PHASES = ["worksheet_collect"] as const satisfies readonly CoupangShipmentWorksheetSyncPhase[];
+const COLLECT_PENDING_PHASES = [
+  "order_detail_hydration",
+  "product_detail_hydration",
+  "customer_service_refresh",
+] as const satisfies readonly CoupangShipmentWorksheetSyncPhase[];
 
 type ShipmentWorksheetCandidateRow = Pick<
   CoupangOrderRow,
@@ -539,6 +548,12 @@ type ShipmentWorksheetSyncPlan = {
   fetchCreatedAtFrom: string;
   fetchCreatedAtTo: string;
   statusFilter: string | null;
+};
+
+type ShipmentWorksheetRefreshPhaseState = {
+  completedPhases: CoupangShipmentWorksheetSyncPhase[];
+  pendingPhases: CoupangShipmentWorksheetSyncPhase[];
+  warningPhases: CoupangShipmentWorksheetSyncPhase[];
 };
 
 type ShipmentOrderLookupResult = Pick<CoupangOrderListResponse, "items" | "source" | "message"> & {
@@ -581,6 +596,37 @@ function validateShipmentWorksheetAuditRange(createdAtFrom: string, createdAtTo:
   if (daySpan > WORKSHEET_AUDIT_MAX_RANGE_DAYS) {
     throw new Error(`누락 검수는 최대 ${WORKSHEET_AUDIT_MAX_RANGE_DAYS}일 범위까지만 지원합니다.`);
   }
+}
+
+function buildShipmentWorksheetAuditRanges(createdAtFrom: string, createdAtTo: string) {
+  const fromTimestamp = parseDateOnlyTimestamp(createdAtFrom);
+  const toTimestamp = parseDateOnlyTimestamp(createdAtTo);
+
+  if (!Number.isFinite(fromTimestamp) || !Number.isFinite(toTimestamp)) {
+    throw new Error("검수 기간 날짜 형식이 올바르지 않습니다.");
+  }
+
+  if (fromTimestamp > toTimestamp) {
+    throw new Error("검수 시작일이 종료일보다 늦을 수는 없습니다.");
+  }
+
+  const ranges: Array<{ createdAtFrom: string; createdAtTo: string }> = [];
+  const dayInMilliseconds = 24 * 60 * 60 * 1000;
+  const chunkSpan = WORKSHEET_AUDIT_MAX_RANGE_DAYS * dayInMilliseconds;
+
+  for (let cursor = fromTimestamp; cursor <= toTimestamp; cursor += chunkSpan) {
+    const chunkToTimestamp = Math.min(
+      cursor + (WORKSHEET_AUDIT_MAX_RANGE_DAYS - 1) * dayInMilliseconds,
+      toTimestamp,
+    );
+
+    ranges.push({
+      createdAtFrom: formatSeoulDateOnly(new Date(cursor)),
+      createdAtTo: formatSeoulDateOnly(new Date(chunkToTimestamp)),
+    });
+  }
+
+  return ranges;
 }
 
 function isOlderThanDays(value: string | null | undefined, days: number, now: Date) {
@@ -951,6 +997,365 @@ function buildReadCustomerServiceSyncPlan(currentSheet: WorksheetStoreSheet): Sh
   };
 }
 
+function mergeWorksheetRowsBySourceKey(
+  currentRows: CoupangShipmentWorksheetRow[],
+  updates: CoupangShipmentWorksheetRow[],
+) {
+  const merged = new Map(currentRows.map((row) => [row.sourceKey, row] as const));
+
+  for (const nextRow of updates) {
+    merged.set(nextRow.sourceKey, nextRow);
+  }
+
+  return Array.from(merged.values());
+}
+
+function resolveShipmentWorksheetRefreshTargets(input: {
+  rows: CoupangShipmentWorksheetRow[];
+  scope: RefreshCoupangShipmentWorksheetInput["scope"];
+  shipmentBoxIds: string[];
+  nowIso: string;
+}) {
+  if (input.scope === "customer_service") {
+    return {
+      rows: input.rows,
+      phases: ["customer_service_refresh"] as CoupangShipmentWorksheetSyncPhase[],
+    };
+  }
+
+  if (input.scope === "shipment_boxes") {
+    const shipmentBoxIdSet = new Set(
+      input.shipmentBoxIds
+        .map((value) => normalizeWhitespace(value))
+        .filter((value): value is string => Boolean(value)),
+    );
+
+    return {
+      rows: input.rows.filter((row) => shipmentBoxIdSet.has(row.shipmentBoxId)),
+      phases: [
+        "order_detail_hydration",
+        "product_detail_hydration",
+        "customer_service_refresh",
+      ] as CoupangShipmentWorksheetSyncPhase[],
+    };
+  }
+
+  return {
+    rows: input.rows.filter(
+      (row) =>
+        shouldRefreshWorksheetOrderDetail(row, input.nowIso) ||
+        shouldRefreshWorksheetProductDetail(row) ||
+        shouldRefreshWorksheetCustomerService(row, input.nowIso),
+    ),
+    phases: [
+      "order_detail_hydration",
+      "product_detail_hydration",
+      "customer_service_refresh",
+    ] as CoupangShipmentWorksheetSyncPhase[],
+  };
+}
+
+function buildShipmentWorksheetRefreshResponse(
+  store: StoredCoupangStore,
+  sheet: WorksheetStoreSheet,
+  input: {
+    scope: RefreshCoupangShipmentWorksheetInput["scope"];
+    updatedRows: CoupangShipmentWorksheetRow[];
+    refreshedCount: number;
+    updatedCount: number;
+    completedPhases: CoupangShipmentWorksheetSyncPhase[];
+    pendingPhases: CoupangShipmentWorksheetSyncPhase[];
+    warningPhases: CoupangShipmentWorksheetSyncPhase[];
+    message: string | null;
+  },
+): CoupangShipmentWorksheetRefreshResponse {
+  return {
+    store: asStoreRef(store),
+    scope: input.scope,
+    items: buildWorksheetRowsSnapshot(input.updatedRows),
+    fetchedAt: new Date().toISOString(),
+    message: normalizeLegacyWorksheetMessage(input.message ?? sheet.message),
+    source: sheet.source,
+    syncSummary: sheet.syncSummary,
+    refreshedCount: input.refreshedCount,
+    updatedCount: input.updatedCount,
+    completedPhases: input.completedPhases,
+    pendingPhases: input.pendingPhases,
+    warningPhases: input.warningPhases,
+  };
+}
+
+async function refreshShipmentWorksheetRows(input: RefreshCoupangShipmentWorksheetInput) {
+  const store = await getStoreOrThrow(input.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const now = new Date().toISOString();
+  const syncPlan = buildReadCustomerServiceSyncPlan(currentSheet);
+  const refreshTargets = resolveShipmentWorksheetRefreshTargets({
+    rows: currentSheet.items.map(normalizeWorksheetRow),
+    scope: input.scope,
+    shipmentBoxIds: input.shipmentBoxIds ?? [],
+    nowIso: now,
+  });
+
+  if (!refreshTargets.rows.length) {
+    const completedPhases =
+      input.scope === "pending_after_collect"
+        ? currentSheet.syncSummary?.completedPhases ?? []
+        : [];
+    const pendingPhases =
+      input.scope === "pending_after_collect"
+        ? currentSheet.syncSummary?.pendingPhases ?? []
+        : [];
+    const warningPhases =
+      input.scope === "pending_after_collect"
+        ? currentSheet.syncSummary?.warningPhases ?? []
+        : [];
+
+    return buildShipmentWorksheetRefreshResponse(store, currentSheet, {
+      scope: input.scope,
+      updatedRows: [],
+      refreshedCount: 0,
+      updatedCount: 0,
+      completedPhases,
+      pendingPhases,
+      warningPhases,
+      message: null,
+    });
+  }
+
+  const phaseSet = new Set(refreshTargets.phases);
+  const detailWarnings: string[] = [];
+  const productWarnings: string[] = [];
+  const detailByShipmentBoxId = new Map<
+    string,
+    {
+      detail: CoupangOrderDetail | null;
+      preserveCustomerService: boolean;
+    }
+  >();
+
+  if (phaseSet.has("order_detail_hydration")) {
+    const detailTargets = Array.from(
+      new Set(
+        refreshTargets.rows
+          .filter((row) => shouldRefreshWorksheetOrderDetail(row, now))
+          .map((row) => normalizeWhitespace(row.shipmentBoxId))
+          .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+      ),
+    );
+
+    const detailResults = await mapWithConcurrency(detailTargets, 4, async (shipmentBoxId) => {
+      try {
+        const response = await getOrderDetail({
+          storeId: input.storeId,
+          shipmentBoxId,
+          includeCustomerService: false,
+        });
+
+        if (response.source !== "live") {
+          detailWarnings.push(
+            response.message
+              ? `${shipmentBoxId}: ${response.message}`
+              : `${shipmentBoxId}: 주문 상세 fallback 데이터를 사용하지 않았습니다.`,
+          );
+          return {
+            shipmentBoxId,
+            detail: null,
+            preserveCustomerService: true,
+          };
+        }
+
+        if (response.message) {
+          detailWarnings.push(`${shipmentBoxId}: ${response.message}`);
+        }
+
+        return {
+          shipmentBoxId,
+          detail: response.item,
+          preserveCustomerService: Boolean(response.message),
+        };
+      } catch (error) {
+        detailWarnings.push(
+          error instanceof Error
+            ? `${shipmentBoxId}: ${error.message}`
+            : `${shipmentBoxId}: 주문 상세 조회에 실패했습니다.`,
+        );
+        return {
+          shipmentBoxId,
+          detail: null,
+          preserveCustomerService: true,
+        };
+      }
+    });
+
+    for (const result of detailResults) {
+      detailByShipmentBoxId.set(result.shipmentBoxId, {
+        detail: result.detail,
+        preserveCustomerService: result.preserveCustomerService,
+      });
+    }
+  }
+
+  const productDetailPromiseBySellerProductId = new Map<
+    string,
+    Promise<Awaited<ReturnType<typeof getProductDetail>> | null>
+  >();
+  const getProductDetailCached = (row: CoupangShipmentWorksheetRow) => {
+    if (!row.sellerProductId) {
+      return Promise.resolve(null);
+    }
+
+    const cached = productDetailPromiseBySellerProductId.get(row.sellerProductId);
+    if (cached) {
+      return cached;
+    }
+
+    const nextPromise = getProductDetail({
+      storeId: input.storeId,
+      sellerProductId: row.sellerProductId,
+    })
+      .then((response) => {
+        if (!response || response.source !== "live" || !response.item) {
+          productWarnings.push(
+            response?.message
+              ? `${row.sellerProductId}: ${response.message}`
+              : `${row.sellerProductId}: 상품 상세 fallback 데이터를 사용하지 않았습니다.`,
+          );
+          return null;
+        }
+
+        return response;
+      })
+      .catch((error) => {
+        productWarnings.push(
+          error instanceof Error
+            ? `${row.sellerProductId}: ${error.message}`
+            : `${row.sellerProductId}: 상품 상세 조회에 실패했습니다.`,
+        );
+        return null;
+      });
+
+    productDetailPromiseBySellerProductId.set(row.sellerProductId, nextPromise);
+    return nextPromise;
+  };
+
+  const refreshedRows = await mapWithConcurrency(refreshTargets.rows, 4, async (currentRow) => {
+    const detailResult = detailByShipmentBoxId.get(currentRow.shipmentBoxId) ?? null;
+    const detail = detailResult?.detail ?? null;
+    const detailItem =
+      detail?.items.find(
+        (item) =>
+          item.vendorItemId === currentRow.vendorItemId ||
+          (item.orderId === currentRow.orderId && item.shipmentBoxId === currentRow.shipmentBoxId),
+      ) ?? null;
+    const sourceRow = detailItem ?? buildOrderRowFromWorksheetRow(currentRow);
+    const productDetail =
+      phaseSet.has("product_detail_hydration") && shouldRefreshWorksheetProductDetail(currentRow)
+        ? await getProductDetailCached(currentRow)
+        : null;
+
+    return buildWorksheetRow({
+      store,
+      row: sourceRow,
+      currentRow,
+      nowIso: now,
+      detail,
+      productDetail,
+      selpickOrderNumber: currentRow.selpickOrderNumber,
+    });
+  });
+
+  const customerServiceRefresh =
+    phaseSet.has("customer_service_refresh")
+      ? await refreshWorksheetCustomerServiceStatuses({
+          storeId: input.storeId,
+          rows: refreshedRows,
+          syncPlan,
+          forceRefresh: true,
+        })
+      : {
+          rows: refreshedRows,
+          message: null,
+        };
+
+  const finalRows = customerServiceRefresh.rows;
+  const updatedCount = finalRows.filter((row, index) =>
+    hasWorksheetRowChanged(refreshTargets.rows[index], row),
+  ).length;
+  const warningPhases = uniqueShipmentSyncPhases([
+    ...(detailWarnings.length > 0 ? (["order_detail_hydration"] as const) : []),
+    ...(productWarnings.length > 0 ? (["product_detail_hydration"] as const) : []),
+    ...(customerServiceRefresh.message ? (["customer_service_refresh"] as const) : []),
+  ]);
+  const completedPhases = refreshTargets.phases.filter(
+    (phase) => !warningPhases.includes(phase),
+  );
+  const nextSyncSummary =
+    input.scope === "pending_after_collect" && currentSheet.syncSummary
+      ? {
+          ...currentSheet.syncSummary,
+          ...mergeShipmentWorksheetSyncPhases(currentSheet.syncSummary, {
+            completedPhases: uniqueShipmentSyncPhases([
+              ...(currentSheet.syncSummary.completedPhases ?? []),
+              ...completedPhases,
+            ]),
+            pendingPhases: currentSheet.syncSummary.pendingPhases.filter(
+              (phase) => !refreshTargets.phases.includes(phase),
+            ),
+            warningPhases: uniqueShipmentSyncPhases([
+              ...(currentSheet.syncSummary.warningPhases ?? []),
+              ...warningPhases,
+            ]),
+          }),
+        }
+      : currentSheet.syncSummary;
+  const nextMessage = mergeMessages([
+    currentSheet.message,
+    detailWarnings.length
+      ? `주문 상세 ${detailWarnings.length}건은 기존 정보로 유지했습니다.`
+      : null,
+    productWarnings.length
+      ? `상품 상세 ${productWarnings.length}건은 주문 기본값으로 유지했습니다.`
+      : null,
+    customerServiceRefresh.message,
+  ]);
+  const nextSheet = await coupangShipmentWorksheetStore.setStoreSheet({
+    storeId: input.storeId,
+    items: mergeWorksheetRowsBySourceKey(currentSheet.items, finalRows),
+    collectedAt: currentSheet.collectedAt,
+    source: currentSheet.source,
+    message: nextMessage,
+    syncState: currentSheet.syncState ?? createEmptySyncState(),
+    syncSummary: nextSyncSummary,
+  });
+
+  return buildShipmentWorksheetRefreshResponse(store, nextSheet, {
+    scope: input.scope,
+    updatedRows: finalRows,
+    refreshedCount: refreshTargets.rows.length,
+    updatedCount,
+    completedPhases:
+      input.scope === "pending_after_collect"
+        ? nextSheet.syncSummary?.completedPhases ?? completedPhases
+        : completedPhases,
+    pendingPhases:
+      input.scope === "pending_after_collect"
+        ? nextSheet.syncSummary?.pendingPhases ?? []
+        : [],
+    warningPhases:
+      input.scope === "pending_after_collect"
+        ? nextSheet.syncSummary?.warningPhases ?? warningPhases
+        : warningPhases,
+    message: nextMessage,
+  });
+}
+
+export async function refreshShipmentWorksheet(
+  input: RefreshCoupangShipmentWorksheetInput,
+): Promise<CoupangShipmentWorksheetRefreshResponse> {
+  return refreshShipmentWorksheetRows(input);
+}
+
 function shouldHydrateOrderRow(
   row: CoupangOrderRow,
   currentRow: CoupangShipmentWorksheetRow | undefined,
@@ -1314,6 +1719,62 @@ function hasWorksheetRowChanged(
   return JSON.stringify({ ...currentRow, updatedAt: nextRow.updatedAt }) !== JSON.stringify(nextRow);
 }
 
+function uniqueShipmentSyncPhases(
+  phases: readonly CoupangShipmentWorksheetSyncPhase[] | null | undefined,
+) {
+  return Array.from(new Set((phases ?? []).filter(Boolean)));
+}
+
+function buildCollectPhaseState(input: {
+  hasCollectWarnings: boolean;
+  hasOrderDetailHydration: boolean;
+  hasProductDetailHydration: boolean;
+  hasCustomerServiceRefresh: boolean;
+}): ShipmentWorksheetRefreshPhaseState {
+  const pendingPhases = COLLECT_PENDING_PHASES.filter((phase) => {
+    if (phase === "order_detail_hydration") {
+      return input.hasOrderDetailHydration;
+    }
+    if (phase === "product_detail_hydration") {
+      return input.hasProductDetailHydration;
+    }
+    if (phase === "customer_service_refresh") {
+      return input.hasCustomerServiceRefresh;
+    }
+    return false;
+  });
+
+  return {
+    completedPhases: input.hasCollectWarnings ? [] : [...COLLECT_COMPLETED_PHASES],
+    pendingPhases: uniqueShipmentSyncPhases(pendingPhases),
+    warningPhases: input.hasCollectWarnings ? ["worksheet_collect"] : [],
+  };
+}
+
+function mergeShipmentWorksheetSyncPhases(
+  summary: CoupangShipmentWorksheetSyncSummary | null | undefined,
+  patch: Partial<ShipmentWorksheetRefreshPhaseState>,
+): ShipmentWorksheetRefreshPhaseState {
+  return {
+    completedPhases: uniqueShipmentSyncPhases(
+      patch.completedPhases ?? summary?.completedPhases ?? [],
+    ),
+    pendingPhases: uniqueShipmentSyncPhases(
+      patch.pendingPhases ?? summary?.pendingPhases ?? [],
+    ),
+    warningPhases: uniqueShipmentSyncPhases(
+      patch.warningPhases ?? summary?.warningPhases ?? [],
+    ),
+  };
+}
+
+function buildWorksheetRowsSnapshot(rows: CoupangShipmentWorksheetRow[]) {
+  const nowIso = new Date().toISOString();
+  return rows.map((row) =>
+    decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso),
+  );
+}
+
 function buildSyncSummary(input: {
   plan: ShipmentWorksheetSyncPlan;
   fetchedCount: number;
@@ -1321,6 +1782,7 @@ function buildSyncSummary(input: {
   insertedSourceKeys?: string[];
   updatedCount: number;
   skippedHydrationCount: number;
+  phaseState: ShipmentWorksheetRefreshPhaseState;
 }): CoupangShipmentWorksheetSyncSummary {
   return {
     mode: input.plan.mode,
@@ -1334,6 +1796,9 @@ function buildSyncSummary(input: {
     fetchCreatedAtFrom: input.plan.fetchCreatedAtFrom,
     fetchCreatedAtTo: input.plan.fetchCreatedAtTo,
     statusFilter: input.plan.statusFilter,
+    completedPhases: input.phaseState.completedPhases,
+    pendingPhases: input.phaseState.pendingPhases,
+    warningPhases: input.phaseState.warningPhases,
   };
 }
 
@@ -1364,38 +1829,6 @@ function isPrepareTargetStatus(status: string | null | undefined) {
   return (status ?? "").trim().toUpperCase() === "ACCEPT";
 }
 
-function buildPrepareTargets(rows: ShipmentWorksheetCollectionCandidate[]) {
-  const targetByShipmentBoxId = new Map<
-    string,
-    {
-      shipmentBoxId: string;
-      orderId: string | null;
-      productName: string | null;
-    }
-  >();
-
-  for (const row of rows) {
-    if (!isPrepareTargetStatus(row.row.status)) {
-      continue;
-    }
-
-    const shipmentBoxId = normalizeWhitespace(row.row.shipmentBoxId);
-    if (!shipmentBoxId || shipmentBoxId === "-") {
-      continue;
-    }
-
-    if (!targetByShipmentBoxId.has(shipmentBoxId)) {
-      targetByShipmentBoxId.set(shipmentBoxId, {
-        shipmentBoxId,
-        orderId: normalizeWhitespace(row.row.orderId),
-        productName: normalizeWhitespace(row.row.productName),
-      });
-    }
-  }
-
-  return Array.from(targetByShipmentBoxId.values());
-}
-
 function updateWorksheetActionsAfterPrepare(actions: CoupangOrderRow["availableActions"]) {
   const nextActions = actions.filter((action) => action !== "markPreparing");
 
@@ -1404,6 +1837,246 @@ function updateWorksheetActionsAfterPrepare(actions: CoupangOrderRow["availableA
   }
 
   return nextActions;
+}
+
+function buildOrderRowFromWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangOrderRow {
+  return {
+    id: row.id,
+    shipmentBoxId: row.shipmentBoxId,
+    orderId: row.orderId,
+    orderedAt: row.orderedAtRaw,
+    paidAt: row.orderedAtRaw,
+    status: row.orderStatus ?? "",
+    ordererName: row.ordererName,
+    receiverName: row.receiverBaseName ?? row.receiverName,
+    receiverSafeNumber: row.contact,
+    receiverAddress: row.receiverAddress,
+    receiverPostCode: null,
+    productName: row.productName,
+    optionName: row.optionName,
+    sellerProductId: row.sellerProductId,
+    sellerProductName: row.productName,
+    vendorItemId: row.vendorItemId,
+    externalVendorSku: row.sellerProductCode,
+    quantity: row.quantity,
+    salesPrice: row.salePrice,
+    orderPrice: row.salePrice,
+    discountPrice: 0,
+    cancelCount: 0,
+    holdCountForCancel: 0,
+    deliveryCompanyName: null,
+    deliveryCompanyCode: normalizeWhitespace(row.deliveryCompanyCode),
+    invoiceNumber: normalizeWhitespace(row.invoiceNumber),
+    invoiceNumberUploadDate: row.coupangInvoiceUploadedAt,
+    estimatedShippingDate: row.estimatedShippingDate,
+    inTransitDateTime: null,
+    deliveredDate: null,
+    shipmentType: null,
+    splitShipping: row.splitShipping,
+    ableSplitShipping: false,
+    customerServiceIssueCount: row.customerServiceIssueCount,
+    customerServiceIssueSummary: row.customerServiceIssueSummary,
+    customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+    customerServiceState: row.customerServiceState,
+    customerServiceFetchedAt: row.customerServiceFetchedAt,
+    availableActions: row.availableActions,
+  };
+}
+
+function buildWorksheetRow(input: {
+  store: StoredCoupangStore;
+  row: CoupangOrderRow;
+  currentRow: CoupangShipmentWorksheetRow | undefined;
+  nowIso: string;
+  detail: CoupangOrderDetail | null;
+  productDetail: Awaited<ReturnType<typeof getProductDetail>> | null;
+  selpickOrderNumber: string;
+  preparedShipmentBoxIds?: Set<string>;
+}) {
+  const { store, row, currentRow, nowIso, detail, productDetail, selpickOrderNumber } = input;
+  const preparedShipmentBoxIds = input.preparedShipmentBoxIds ?? new Set<string>();
+  const isOverseas = productDetail
+    ? resolveProductOverseasFlag(productDetail, row)
+    : currentRow?.isOverseas ?? false;
+  const productName = resolveWorksheetProductName(detail, productDetail, row, currentRow);
+  const optionName = resolveWorksheetOptionName(detail, productDetail, row, currentRow, productName);
+  const coupangDisplayProductName = resolveWorksheetCoupangDisplayProductName(
+    productDetail,
+    currentRow,
+  );
+  const receiverBaseName =
+    currentRow?.receiverBaseName ??
+    detail?.receiver.name ??
+    row.receiverName ??
+    currentRow?.receiverName ??
+    null;
+  const personalClearanceCode = currentRow?.personalClearanceCode ?? null;
+  const receiverName = composeReceiverName(receiverBaseName, personalClearanceCode, isOverseas);
+  const orderedAtRaw = row.orderedAt ?? row.paidAt ?? currentRow?.orderedAtRaw ?? null;
+  const orderDate = toSeoulDateParts(orderedAtRaw ?? currentRow?.createdAt ?? nowIso);
+  const preserveDeliveryRequest = hasManualDeliveryRequest(currentRow);
+  const refreshedDeliveryRequest = normalizeWhitespace(detail?.parcelPrintMessage);
+  const customerServiceIssueState =
+    row.customerServiceState === "ready" ||
+    row.customerServiceIssueCount > 0 ||
+    normalizeWhitespace(row.customerServiceIssueSummary)
+      ? {
+          customerServiceIssueCount: row.customerServiceIssueCount,
+          customerServiceIssueSummary: row.customerServiceIssueSummary,
+          customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+          customerServiceState: row.customerServiceState,
+          customerServiceFetchedAt: row.customerServiceFetchedAt,
+        }
+      : resolveWorksheetCustomerServiceState(currentRow, nowIso);
+
+  return {
+    id: currentRow?.id ?? buildSourceKey(store.id, row),
+    sourceKey: buildSourceKey(store.id, row),
+    storeId: store.id,
+    storeName: store.storeName,
+    orderDateText: orderDate.text,
+    orderDateKey: orderDate.key,
+    quantity: row.quantity,
+    productName,
+    optionName,
+    productOrderNumber: row.orderId,
+    collectedPlatform: "쿠팡",
+    ordererName: detail?.orderer.name ?? currentRow?.ordererName ?? row.ordererName ?? null,
+    contact:
+      detail?.receiver.safeNumber ??
+      detail?.receiver.receiverNumber ??
+      row.receiverSafeNumber ??
+      currentRow?.contact ??
+      null,
+    receiverName,
+    receiverBaseName: normalizeWhitespace(receiverBaseName),
+    personalClearanceCode,
+    collectedAccountName: store.storeName,
+    deliveryCompanyCode: normalizeDeliveryCode(
+      currentRow?.deliveryCompanyCode ?? row.deliveryCompanyCode ?? "",
+    ),
+    selpickOrderNumber,
+    invoiceNumber: normalizeInvoiceNumber(currentRow?.invoiceNumber ?? row.invoiceNumber ?? ""),
+    coupangDeliveryCompanyCode: null,
+    coupangInvoiceNumber: null,
+    coupangInvoiceUploadedAt: null,
+    salePrice: row.orderPrice ?? row.salesPrice,
+    shippingFee: 0,
+    receiverAddress:
+      (detail ? buildAddress(detail, row) : null) ??
+      currentRow?.receiverAddress ??
+      row.receiverAddress ??
+      null,
+    deliveryRequest: preserveDeliveryRequest
+      ? currentRow?.deliveryRequest ?? refreshedDeliveryRequest ?? null
+      : refreshedDeliveryRequest ?? currentRow?.deliveryRequest ?? null,
+    buyerPhoneNumber:
+      detail?.orderer.safeNumber ??
+      detail?.orderer.ordererNumber ??
+      detail?.receiver.safeNumber ??
+      row.receiverSafeNumber ??
+      currentRow?.buyerPhoneNumber ??
+      null,
+    productNumber: row.sellerProductId,
+    exposedProductName: buildExposedProductName(productName, optionName),
+    coupangDisplayProductName,
+    productOptionNumber: row.vendorItemId,
+    sellerProductCode: row.externalVendorSku,
+    isOverseas,
+    shipmentBoxId: row.shipmentBoxId,
+    orderId: row.orderId,
+    sellerProductId: row.sellerProductId,
+    vendorItemId: row.vendorItemId,
+    availableActions: resolveWorksheetActions(row, currentRow, preparedShipmentBoxIds),
+    orderStatus: normalizeStatusFilter(row.status),
+    customerServiceIssueCount: customerServiceIssueState.customerServiceIssueCount,
+    customerServiceIssueSummary: customerServiceIssueState.customerServiceIssueSummary,
+    customerServiceIssueBreakdown: customerServiceIssueState.customerServiceIssueBreakdown,
+    customerServiceState: customerServiceIssueState.customerServiceState,
+    customerServiceFetchedAt: customerServiceIssueState.customerServiceFetchedAt,
+    orderedAtRaw,
+    lastOrderHydratedAt: detail ? nowIso : currentRow?.lastOrderHydratedAt ?? null,
+    lastProductHydratedAt: productDetail ? nowIso : currentRow?.lastProductHydratedAt ?? null,
+    estimatedShippingDate: row.estimatedShippingDate ?? currentRow?.estimatedShippingDate ?? null,
+    splitShipping: row.splitShipping ?? currentRow?.splitShipping ?? null,
+    invoiceTransmissionStatus: currentRow?.invoiceTransmissionStatus ?? null,
+    invoiceTransmissionMessage: currentRow?.invoiceTransmissionMessage ?? null,
+    invoiceTransmissionAt: currentRow?.invoiceTransmissionAt ?? null,
+    exportedAt: currentRow?.exportedAt ?? null,
+    invoiceAppliedAt: currentRow?.invoiceAppliedAt ?? null,
+    createdAt: currentRow?.createdAt ?? nowIso,
+    updatedAt: nowIso,
+  } satisfies CoupangShipmentWorksheetRow;
+}
+
+function shouldRefreshWorksheetOrderDetail(
+  row: CoupangShipmentWorksheetRow,
+  nowIso: string,
+) {
+  if (!row.shipmentBoxId || row.shipmentBoxId === "-") {
+    return false;
+  }
+
+  if (!row.lastOrderHydratedAt) {
+    return true;
+  }
+
+  if (row.updatedAt.localeCompare(row.lastOrderHydratedAt) > 0) {
+    return true;
+  }
+
+  if (isTimestampOlderThanHours(row.lastOrderHydratedAt, nowIso, ORDER_DETAIL_REFRESH_HOURS)) {
+    return true;
+  }
+
+  return !(
+    normalizeWhitespace(row.contact) &&
+    normalizeWhitespace(row.receiverAddress) &&
+    normalizeWhitespace(row.deliveryRequest) &&
+    normalizeWhitespace(row.buyerPhoneNumber)
+  );
+}
+
+function shouldRefreshWorksheetProductDetail(row: CoupangShipmentWorksheetRow) {
+  if (!row.sellerProductId) {
+    return false;
+  }
+
+  if (!row.lastProductHydratedAt) {
+    return true;
+  }
+
+  if (row.updatedAt.localeCompare(row.lastProductHydratedAt) > 0) {
+    return true;
+  }
+
+  if (
+    hasMixedWorksheetOptionName(
+      row.optionName,
+      row.productName,
+      row.exposedProductName,
+    )
+  ) {
+    return true;
+  }
+
+  return !(normalizeWhitespace(row.productName) && normalizeWhitespace(row.optionName));
+}
+
+function shouldRefreshWorksheetCustomerService(
+  row: CoupangShipmentWorksheetRow,
+  nowIso: string,
+) {
+  const resolved = resolveWorksheetCustomerServiceState(row, nowIso);
+  if (resolved.customerServiceState !== "ready") {
+    return true;
+  }
+
+  if (!resolved.customerServiceFetchedAt) {
+    return true;
+  }
+
+  return row.updatedAt.localeCompare(resolved.customerServiceFetchedAt) > 0;
 }
 
 function resolveProductOverseasFlag(
@@ -1819,7 +2492,7 @@ export async function auditShipmentWorksheetMissing(
     throw new Error("누락 검수에는 시작일과 종료일이 모두 필요합니다.");
   }
 
-  validateShipmentWorksheetAuditRange(createdAtFrom, createdAtTo);
+  const auditRanges = buildShipmentWorksheetAuditRanges(createdAtFrom, createdAtTo);
 
   await getStoreOrThrow(input.storeId);
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
@@ -1830,10 +2503,11 @@ export async function auditShipmentWorksheetMissing(
     normalizeStatusFilter(status) === "INSTRUCT" ? 2 : normalizeStatusFilter(status) === "ACCEPT" ? 1 : 0;
 
   for (const status of WORKSHEET_AUDIT_STATUSES) {
+    for (const auditRange of auditRanges) {
     const response = await listOrders({
       storeId: input.storeId,
-      createdAtFrom,
-      createdAtTo,
+      createdAtFrom: auditRange.createdAtFrom,
+      createdAtTo: auditRange.createdAtTo,
       status,
       maxPerPage: WORKSHEET_AUDIT_PAGE_SIZE,
       fetchAllPages: true,
@@ -1854,6 +2528,7 @@ export async function auditShipmentWorksheetMissing(
       if (!existing || getStatusPriority(row.status) >= getStatusPriority(existing.status)) {
         liveRowBySourceKey.set(sourceKey, row);
       }
+    }
     }
   }
 
@@ -2179,6 +2854,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       fetchCreatedAtFrom: syncPlan.fetchCreatedAtFrom,
       fetchCreatedAtTo: syncPlan.fetchCreatedAtTo,
       statusFilter: syncPlan.statusFilter,
+      completedPhases: [],
+      pendingPhases: [],
+      warningPhases: ["worksheet_collect"],
     } satisfies CoupangShipmentWorksheetSyncSummary;
 
     return buildWorksheetResponse(
@@ -2193,10 +2871,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   }
 
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
-  const detailWarnings: string[] = [];
-  const productWarnings: string[] = [];
   const claimWarnings: string[] = [];
-  const prepareMessages: string[] = [];
   const collectionCandidates = candidateRows
     .map((row) => {
       const sourceKey = buildSourceKey(input.storeId, row);
@@ -2225,6 +2900,12 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       insertedSourceKeys: [],
       updatedCount: 0,
       skippedHydrationCount: 0,
+      phaseState: buildCollectPhaseState({
+        hasCollectWarnings: Boolean(listResponse.message || platformKey.warning),
+        hasOrderDetailHydration: false,
+        hasProductDetailHydration: false,
+        hasCustomerServiceRefresh: false,
+      }),
     });
     const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
       storeId: input.storeId,
@@ -2465,8 +3146,18 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     collectionCandidateBySourceKey.set(sourceKey, nextCandidate);
     quickCollectClaimInsertCount += 1;
   }
-  const prepareTargets = insertOnlyMode ? [] : buildPrepareTargets(collectionCandidates);
-  const preparedShipmentBoxIds = new Set<string>();
+  const skippedHydrationCount = collectionCandidates.filter((candidate) => {
+    if (!candidate.currentRow) {
+      return false;
+    }
+
+    return (
+      !candidate.shouldHydrateOrder &&
+      !candidate.shouldHydrateProduct &&
+      !shouldRefreshWorksheetCustomerService(candidate.currentRow, now)
+    );
+  }).length;
+  /* legacy collect-side prepare/detail hydration flow removed
 
   if (prepareTargets.length) {
     try {
@@ -2740,6 +3431,25 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     } satisfies CoupangShipmentWorksheetRow;
   });
 
+  */
+  const fetchedRows = await mapWithConcurrency(collectionCandidates, 4, async (candidate) =>
+    buildWorksheetRow({
+      store,
+      row: candidate.row,
+      currentRow: candidate.currentRow,
+      nowIso: now,
+      detail: null,
+      productDetail: null,
+      selpickOrderNumber:
+        candidate.currentRow?.selpickOrderNumber ??
+        selpickAllocator.next(
+          store.storeName,
+          candidate.currentRow?.orderDateKey ?? toSeoulDateParts(now).key,
+          platformKey.key,
+        ),
+    }),
+  );
+
   let insertedCount = 0;
   const insertedSourceKeys: string[] = [];
   let updatedCount = 0;
@@ -2763,38 +3473,17 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     mergedBySourceKey.set(nextRow.sourceKey, existingRow);
   }
 
-  let customerServiceMessage: string | null = null;
-  if (insertOnlyMode) {
-    const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
-      storeId: input.storeId,
-      rows: fetchedRows,
-      syncPlan,
-      forceRefresh: true,
-    });
-    customerServiceMessage = customerServiceRefresh.message;
-
-    for (const nextRow of customerServiceRefresh.rows) {
-      mergedBySourceKey.set(nextRow.sourceKey, nextRow);
-    }
-  } else {
-    const customerServiceRefresh = await refreshWorksheetCustomerServiceStatuses({
-      storeId: input.storeId,
-      rows: Array.from(mergedBySourceKey.values()),
-      syncPlan,
-      forceRefresh: true,
-    });
-    customerServiceMessage = customerServiceRefresh.message;
-    mergedBySourceKey.clear();
-    for (const nextRow of customerServiceRefresh.rows) {
-      mergedBySourceKey.set(nextRow.sourceKey, nextRow);
-    }
-  }
-
   const syncState = buildNextSyncState(
     currentSheet.syncState ?? createEmptySyncState(),
     syncPlan,
     now,
   );
+  const phaseState = buildCollectPhaseState({
+    hasCollectWarnings: Boolean(listResponse.message || platformKey.warning || claimWarnings.length),
+    hasOrderDetailHydration: collectionCandidates.some((candidate) => candidate.shouldHydrateOrder),
+    hasProductDetailHydration: collectionCandidates.some((candidate) => candidate.shouldHydrateProduct),
+    hasCustomerServiceRefresh: collectionCandidates.length > 0,
+  });
   const syncSummary = buildSyncSummary({
     plan: syncPlan,
     fetchedCount: collectionCandidates.length,
@@ -2802,6 +3491,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     insertedSourceKeys,
     updatedCount,
     skippedHydrationCount,
+    phaseState,
   });
   const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
     storeId: input.storeId,
@@ -2817,14 +3507,17 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
           ? `${syncModeLabel}에서 신규 클레임 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.`
           : `${syncModeLabel}에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
         : null,
-      detailWarnings.length
+      phaseState.pendingPhases.length
+        ? "워크시트 반영 후 주문 상세, 상품 상세, CS 상태 보강을 이어서 진행합니다."
+        : null,
+      /*
         ? `주문 상세 ${detailWarnings.length}건은 일부 정보를 기존 값으로 유지했습니다.`
         : null,
       productWarnings.length
         ? `상품 상세 ${productWarnings.length}건은 쿠팡 주문 원본값으로 보완했습니다.`
         : null,
       customerServiceMessage,
-      ...prepareMessages,
+      */
     ]),
     syncState,
     syncSummary,

@@ -6,7 +6,9 @@ import type {
 } from "@shared/coupang";
 
 import {
+  buildOptimisticPrepareRowUpdates,
   buildPrepareAcceptedOrdersFeedback,
+  getSucceededPrepareShipmentBoxIds,
   resolvePrepareAcceptedOrdersPlan,
 } from "./shipment-prepare-flow";
 
@@ -172,5 +174,86 @@ describe("shipment prepare flow helpers", () => {
         "[누락] ACCEPT / 누락 주문 / 100",
       ]),
     );
+  });
+
+  it("returns unique shipment boxes that succeeded during prepare", () => {
+    const shipmentBoxIds = getSucceededPrepareShipmentBoxIds({
+      ...createBatchResponse(),
+      items: [
+        {
+          targetId: "BOX-row-1",
+          action: "markPreparing",
+          shipmentBoxId: "BOX-row-1",
+          orderId: "ORDER-row-1",
+          receiptId: null,
+          vendorItemId: null,
+          status: "succeeded",
+          resultCode: null,
+          retryRequired: false,
+          message: null,
+          appliedAt: "2026-04-12T01:00:00.000Z",
+        },
+        {
+          targetId: "BOX-row-1",
+          action: "markPreparing",
+          shipmentBoxId: "BOX-row-1",
+          orderId: "ORDER-row-1",
+          receiptId: null,
+          vendorItemId: null,
+          status: "succeeded",
+          resultCode: null,
+          retryRequired: false,
+          message: null,
+          appliedAt: "2026-04-12T01:00:01.000Z",
+        },
+        {
+          targetId: "BOX-row-2",
+          action: "markPreparing",
+          shipmentBoxId: "BOX-row-2",
+          orderId: "ORDER-row-2",
+          receiptId: null,
+          vendorItemId: null,
+          status: "failed",
+          resultCode: null,
+          retryRequired: false,
+          message: "failed",
+          appliedAt: null,
+        },
+      ],
+    });
+
+    expect(shipmentBoxIds).toEqual(["BOX-row-1"]);
+  });
+
+  it("builds optimistic row updates for succeeded prepare rows only", () => {
+    const successRow = createRow({
+      id: "row-success",
+      sourceKey: "source-success",
+      shipmentBoxId: "BOX-row-1",
+      orderStatus: "ACCEPT",
+      availableActions: ["markPreparing"],
+      updatedAt: "2026-04-12T01:00:00.000Z",
+    });
+    const untouchedRow = createRow({
+      id: "row-untouched",
+      sourceKey: "source-untouched",
+      shipmentBoxId: "BOX-row-2",
+      orderStatus: "ACCEPT",
+      availableActions: ["markPreparing"],
+    });
+
+    const updates = buildOptimisticPrepareRowUpdates({
+      rows: [successRow, untouchedRow],
+      shipmentBoxIds: ["BOX-row-1"],
+      updatedAt: "2026-04-12T02:00:00.000Z",
+    });
+
+    expect(updates.size).toBe(1);
+    expect(updates.get("row-success")).toMatchObject({
+      orderStatus: "INSTRUCT",
+      availableActions: ["uploadInvoice"],
+      updatedAt: "2026-04-12T02:00:00.000Z",
+    });
+    expect(updates.has("row-untouched")).toBe(false);
   });
 });

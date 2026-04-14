@@ -65,7 +65,11 @@ vi.mock("../logs/service", () => ({
   recordSystemErrorEvent: recordSystemErrorEventMock,
 }));
 
-import { collectShipmentWorksheet, getShipmentWorksheet } from "./shipment-worksheet-service";
+import {
+  collectShipmentWorksheet,
+  getShipmentWorksheet,
+  refreshShipmentWorksheet,
+} from "./shipment-worksheet-service";
 
 function buildStore() {
   return {
@@ -396,7 +400,7 @@ describe("coupang shipment worksheet collection", () => {
     vi.useRealTimers();
   });
 
-  it("moves new ACCEPT orders to preparing and unlocks invoice upload in the worksheet", async () => {
+  it("collects ACCEPT orders without auto prepare and leaves follow-up phases pending", async () => {
     listOrdersMock.mockResolvedValue({
       items: [
         buildOrderRow({
@@ -430,23 +434,6 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    markPreparingMock.mockResolvedValue({
-      items: [
-        {
-          shipmentBoxId: "100",
-          status: "succeeded",
-        },
-      ],
-      summary: {
-        total: 1,
-        succeededCount: 1,
-        failedCount: 0,
-        warningCount: 0,
-        skippedCount: 0,
-      },
-      completedAt: "2026-03-26T00:00:00.000Z",
-    });
-
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-03-25",
@@ -462,38 +449,28 @@ describe("coupang shipment worksheet collection", () => {
         includeCustomerService: false,
       }),
     );
-    expect(getOrderDetailMock).toHaveBeenCalled();
-    expect(
-      getOrderDetailMock.mock.calls.every(
-        ([input]) => (input as { includeCustomerService?: boolean }).includeCustomerService === false,
-      ),
-    ).toBe(true);
-    expect(markPreparingMock).toHaveBeenCalledTimes(1);
-    expect(markPreparingMock).toHaveBeenCalledWith({
-      storeId: "store-1",
-      items: [
-        {
-          shipmentBoxId: "100",
-          orderId: "O-100",
-          productName: "Fresh Order 1",
-        },
-      ],
-    });
+    expect(getOrderDetailMock).not.toHaveBeenCalled();
+    expect(markPreparingMock).not.toHaveBeenCalled();
     expect(result.items).toHaveLength(3);
     const preparedRows = result.items.filter((item) => item.shipmentBoxId === "100");
     expect(preparedRows).toHaveLength(2);
-    expect(preparedRows.every((item) => item.availableActions.includes("uploadInvoice"))).toBe(true);
-    expect(preparedRows.some((item) => item.availableActions.includes("markPreparing"))).toBe(false);
+    expect(preparedRows.every((item) => item.availableActions.includes("markPreparing"))).toBe(true);
     expect(result.syncSummary).toMatchObject({
       mode: "full",
       insertedCount: 3,
       insertedSourceKeys: [],
       updatedCount: 0,
       autoExpanded: true,
+      completedPhases: ["worksheet_collect"],
+      pendingPhases: [
+        "order_detail_hydration",
+        "product_detail_hydration",
+        "customer_service_refresh",
+      ],
     });
   });
 
-  it("keeps collection working when the prepare call fails", async () => {
+  it("keeps collection working without blocking on the old prepare step", async () => {
     listOrdersMock.mockResolvedValue({
       items: [
         buildOrderRow({
@@ -509,8 +486,6 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    markPreparingMock.mockRejectedValue(new Error("prepare failed"));
-
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-03-25",
@@ -521,10 +496,11 @@ describe("coupang shipment worksheet collection", () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.availableActions).toContain("markPreparing");
-    expect(result.message).toContain("prepare failed");
+    expect(markPreparingMock).not.toHaveBeenCalled();
+    expect(result.message).toContain("워크시트 반영 후 주문 상세, 상품 상세, CS 상태 보강을 이어서 진행합니다.");
   });
 
-  it("prefers registered product and option names from the product detail", async () => {
+  it("defers registered product and option name hydration to the refresh phase", async () => {
     listOrdersMock.mockResolvedValue({
       items: [
         buildOrderRow({
@@ -541,26 +517,6 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    getProductDetailMock.mockResolvedValue({
-      item: {
-        sellerProductId: "P-V-500",
-        sellerProductName: "Registered Product",
-        displayProductName: "Exposed Product",
-        deliveryInfo: {
-          pccNeeded: false,
-        },
-        items: [
-          {
-            vendorItemId: "V-500",
-            itemName: "Registered Option",
-            pccNeeded: false,
-          },
-        ],
-      },
-      source: "live",
-      message: null,
-    });
-
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-03-25",
@@ -570,10 +526,9 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.productName).toBe("Registered Product");
-    expect(result.items[0]?.optionName).toBe("Registered Option");
-    expect(result.items[0]?.exposedProductName).toBe("Registered Product, Registered Option");
-    expect(result.items[0]?.coupangDisplayProductName).toBe("Exposed Product");
+    expect(getProductDetailMock).not.toHaveBeenCalled();
+    expect(result.items[0]?.productName).toBe("Exposed Product, Exposed Option");
+    expect(result.syncSummary?.pendingPhases).toContain("product_detail_hydration");
   });
 
   it("stores the total order price in the worksheet when quantity is greater than one", async () => {
@@ -1018,7 +973,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("ignores fallback product detail and keeps the live order product name", async () => {
+  it("defers fallback product detail handling to the refresh phase", async () => {
     listOrdersMock.mockResolvedValue({
       items: [
         buildOrderRow({
@@ -1036,17 +991,6 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    getProductDetailMock.mockResolvedValue({
-      item: {
-        sellerProductId: "P-V-600",
-        sellerProductName: "Fallback Sample Product",
-        displayProductName: "Fallback Sample Product",
-        items: [],
-      },
-      source: "fallback",
-      message: "fallback detail",
-    });
-
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-03-26",
@@ -1058,7 +1002,8 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.productName).toBe("Deleted But Ordered Product");
     expect(result.items[0]?.optionName).toBe("Red");
-    expect(result.message).toContain("쿠팡 주문 원본값으로 보완");
+    expect(getProductDetailMock).not.toHaveBeenCalled();
+    expect(result.syncSummary?.pendingPhases).toContain("product_detail_hydration");
   });
 
   it("merges incrementally and preserves manual invoice fields", async () => {
@@ -1488,23 +1433,6 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    markPreparingMock.mockResolvedValue({
-      items: [
-        {
-          shipmentBoxId: "409-B",
-          status: "succeeded",
-        },
-      ],
-      summary: {
-        total: 1,
-        succeededCount: 1,
-        failedCount: 0,
-        warningCount: 0,
-        skippedCount: 0,
-      },
-      completedAt: "2026-04-09T18:50:00.000Z",
-    });
-
     const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-04-08",
@@ -1522,22 +1450,13 @@ describe("coupang shipment worksheet collection", () => {
         includeCustomerService: false,
       }),
     );
-    expect(markPreparingMock).toHaveBeenCalledWith({
-      storeId: "store-1",
-      items: [
-        {
-          shipmentBoxId: "409-B",
-          orderId: "O-409-B",
-          productName: "Same Day Accept",
-        },
-      ],
-    });
+    expect(markPreparingMock).not.toHaveBeenCalled();
     expect(result.items.map((item) => item.shipmentBoxId)).toEqual(["409-A", "409-B"]);
     expect(result.items.find((item) => item.shipmentBoxId === "409-A")?.availableActions).toContain(
       "uploadInvoice",
     );
     expect(result.items.find((item) => item.shipmentBoxId === "409-B")?.availableActions).toContain(
-      "uploadInvoice",
+      "markPreparing",
     );
   });
 
@@ -1574,7 +1493,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("retries prepare calls for rows already seen as ACCEPT", async () => {
+  it("keeps already-seen ACCEPT rows pending prepare instead of retrying during collect", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
         buildWorksheetRow({
@@ -1612,24 +1531,7 @@ describe("coupang shipment worksheet collection", () => {
       source: "live",
       message: null,
     });
-    markPreparingMock.mockResolvedValue({
-      items: [
-        {
-          shipmentBoxId: "100",
-          status: "succeeded",
-        },
-      ],
-      summary: {
-        total: 1,
-        succeededCount: 1,
-        failedCount: 0,
-        warningCount: 0,
-        skippedCount: 0,
-      },
-      completedAt: "2026-03-26T00:00:00.000Z",
-    });
-
-    await collectShipmentWorksheet({
+    const result = await collectShipmentWorksheet({
       storeId: "store-1",
       createdAtFrom: "2026-03-25",
       createdAtTo: "2026-03-26",
@@ -1637,17 +1539,262 @@ describe("coupang shipment worksheet collection", () => {
       maxPerPage: 20,
     });
 
-    expect(markPreparingMock).toHaveBeenCalledTimes(1);
-    expect(markPreparingMock).toHaveBeenCalledWith({
-      storeId: "store-1",
+    expect(markPreparingMock).not.toHaveBeenCalled();
+    expect(result.items[0]?.availableActions).toContain("uploadInvoice");
+    expect(result.syncSummary?.pendingPhases).toContain("order_detail_hydration");
+  });
+
+  it("refreshes pending collect phases and moves them into completed phases", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "910",
+          orderId: "O-910",
+          vendorItemId: "V-910",
+          status: "INSTRUCT",
+          productName: "Worksheet Product",
+          optionName: "Worksheet Option",
+          customerServiceState: "stale",
+          customerServiceFetchedAt: null,
+          lastOrderHydratedAt: null,
+          lastProductHydratedAt: null,
+          updatedAt: "2026-03-26T10:00:00.000Z",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T10:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: {
+        mode: "incremental",
+        fetchedCount: 1,
+        insertedCount: 0,
+        insertedSourceKeys: [],
+        updatedCount: 1,
+        skippedHydrationCount: 0,
+        autoExpanded: false,
+        fetchCreatedAtFrom: "2026-03-25",
+        fetchCreatedAtTo: "2026-03-26",
+        statusFilter: null,
+        completedPhases: ["worksheet_collect"],
+        pendingPhases: [
+          "order_detail_hydration",
+          "product_detail_hydration",
+          "customer_service_refresh",
+        ],
+        warningPhases: [],
+      },
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    getOrderDetailMock.mockResolvedValue({
+      item: {
+        orderer: {
+          name: "Kim",
+          safeNumber: "050-9999-0000",
+          ordererNumber: "010-1111-2222",
+        },
+        receiver: {
+          name: "Lee",
+          safeNumber: "050-1111-2222",
+          receiverNumber: "010-3333-4444",
+          addr1: "Seoul",
+          addr2: "101",
+        },
+        parcelPrintMessage: "문 앞",
+        items: [
+          {
+            orderId: "O-910",
+            shipmentBoxId: "910",
+            vendorItemId: "V-910",
+            sellerProductName: "Detailed Product",
+            productName: "Detailed Product",
+            optionName: "Detailed Option",
+          },
+        ],
+      },
+      source: "live",
+      message: null,
+    });
+    getProductDetailMock.mockResolvedValue({
+      item: {
+        sellerProductId: "P-V-910",
+        sellerProductName: "Registered Product",
+        displayProductName: "Display Product",
+        deliveryInfo: {
+          pccNeeded: false,
+        },
+        items: [
+          {
+            vendorItemId: "V-910",
+            itemName: "Registered Option",
+            pccNeeded: false,
+          },
+        ],
+      },
+      source: "live",
+      message: null,
+    });
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
       items: [
         {
-          shipmentBoxId: "100",
-          orderId: "O-100",
-          productName: "Repeat Accept",
+          rowKey: "910:V-910",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "Shipment stop requested 1",
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_requested", count: 1, label: "Shipment stop requested 1" },
+          ],
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
         },
       ],
+      source: "live",
+      message: null,
     });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "pending_after_collect",
+    });
+
+    expect(getOrderDetailMock).toHaveBeenCalledTimes(1);
+    expect(getProductDetailMock).toHaveBeenCalledTimes(1);
+    expect(getOrderCustomerServiceSummaryMock).toHaveBeenCalledTimes(1);
+    expect(result.items[0]?.productName).toBe("Registered Product");
+    expect(result.items[0]?.optionName).toBe("Registered Option");
+    expect(result.items[0]?.customerServiceIssueSummary).toBe("Shipment stop requested 1");
+    expect(result.completedPhases).toEqual([
+      "worksheet_collect",
+      "order_detail_hydration",
+      "product_detail_hydration",
+      "customer_service_refresh",
+    ]);
+    expect(result.pendingPhases).toEqual([]);
+    expect(result.warningPhases).toEqual([]);
+  });
+
+  it("refreshes only targeted shipment boxes for shipment-box scoped follow-up", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "920-A",
+          orderId: "O-920-A",
+          vendorItemId: "V-920-A",
+          status: "INSTRUCT",
+          productName: "Before A",
+          lastOrderHydratedAt: null,
+          lastProductHydratedAt: null,
+          customerServiceFetchedAt: null,
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "920-B",
+          orderId: "O-920-B",
+          vendorItemId: "V-920-B",
+          status: "INSTRUCT",
+          productName: "Before B",
+          lastOrderHydratedAt: "2026-03-26T10:00:00.000Z",
+          lastProductHydratedAt: "2026-03-26T10:00:00.000Z",
+          customerServiceFetchedAt: "2026-03-26T10:00:00.000Z",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T10:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    getOrderDetailMock.mockResolvedValue({
+      item: null,
+      source: "live",
+      message: null,
+    });
+    getProductDetailMock.mockResolvedValue({
+      item: {
+        sellerProductId: "P-V-920-A",
+        sellerProductName: "After A",
+        displayProductName: "After A",
+        deliveryInfo: {
+          pccNeeded: false,
+        },
+        items: [
+          {
+            vendorItemId: "V-920-A",
+            itemName: "Option A",
+            pccNeeded: false,
+          },
+        ],
+      },
+      source: "live",
+      message: null,
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "shipment_boxes",
+      shipmentBoxIds: ["920-A"],
+    });
+
+    expect(getOrderDetailMock).toHaveBeenCalledTimes(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.shipmentBoxId).toBe("920-A");
+    expect(result.refreshedCount).toBe(1);
+  });
+
+  it("keeps worksheet rows and records warning phases when follow-up refresh has warnings", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "930",
+          orderId: "O-930",
+          vendorItemId: "V-930",
+          status: "INSTRUCT",
+          productName: "Before Warning",
+          lastOrderHydratedAt: "2026-03-26T10:00:00.000Z",
+          lastProductHydratedAt: null,
+          customerServiceFetchedAt: "2026-03-26T10:00:00.000Z",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T10:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: "customer service refresh warning",
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "shipment_boxes",
+      shipmentBoxIds: ["930"],
+    });
+
+    expect(result.items[0]?.productName).toBe("Before Warning");
+    expect(result.warningPhases).toContain("customer_service_refresh");
+    expect(result.message).toContain("customer service refresh warning");
+    expect(setStoreSheetMock).toHaveBeenCalled();
   });
 
   it("does not reinsert rows whose sourceKey already exists in archive storage", async () => {

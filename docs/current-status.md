@@ -1,6 +1,6 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-13
+- 스냅샷 날짜: 2026-04-14
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
@@ -74,7 +74,14 @@
 - 선택 바는 `즉시 실행`과 `제외 또는 확인 필요`를 분리해서 안내합니다.
 - `상품준비중 처리`는 선행 `수집 누락 audit`를 계속 보지만, 누락 주문이 있어도 현재 worksheet에 있는 처리 가능 주문은 그대로 진행합니다.
 - 누락 주문은 자동으로 포함하지 않고, 경고 상세와 audit 다이얼로그에서 별도로 안내합니다.
+- `수집 누락 audit`는 조회 범위가 7일을 넘어도 내부적으로 7일 단위로 나눠 확인합니다.
 - `결제완료 -> 상품준비중` 버튼은 조건이 맞지 않아도 바로 비활성화하지 않고, 클릭 시 현재 화면 기준으로 왜 처리 대상이 없는지 경고로 안내합니다.
+- `빠른 수집 / 전체 수집 / 증분 수집`은 1차로 `주문 목록 조회 + 클레임 병합 + worksheet 반영`까지만 완료하고 응답합니다.
+- 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 후속 단계로 분리됐고, collect 성공 직후 클라이언트가 non-blocking으로 이어서 호출합니다.
+- collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 `지금 끝난 단계`와 `이어질 보강 단계`를 함께 기록합니다.
+- `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
+- 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
+- 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
 
 ### 보관함
 - `보관함`은 읽기 전용 archive 조회 화면입니다.
@@ -181,10 +188,15 @@
 - `client/src/features/coupang/shipments/quick-collect-focus.test.ts`
 - `client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts`
 - `server/services/coupang/shipment-worksheet-service.ts`
+- `client/src/features/coupang/shipments/shipment-prepare-flow.ts`
+- `client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
 - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
 - `server/http/coupang/tracked-actions.ts`
 - `server/http/handlers/coupang/orders.ts`
 - `server/http/handlers/coupang/shipments.ts`
+- `server/http/coupang/parsers.ts`
+- `server/routes/coupang/shipments.ts`
+- `server/services/coupang/shipment-worksheet-collection.test.ts`
 - `shared/coupang.ts`
 - `shared/operations.ts`
 - `docs/qa/manual-fulfillment-regression.md`
@@ -196,6 +208,8 @@
 
 ### 통과
 - `npm run check`
+- `npm exec vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+- `npm exec vitest run --root . client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
 - `npm exec vitest run --root . client/src/lib/ops-handoff-links.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts client/src/pages/operation-center-recovery.test.ts`
 
 ### 아직 직접 검증하지 못한 것

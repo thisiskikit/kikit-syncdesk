@@ -107,3 +107,50 @@ export function buildPrepareAcceptedOrdersFeedback(input: {
     details,
   };
 }
+
+export function getSucceededPrepareShipmentBoxIds(result: CoupangBatchActionResponse) {
+  return Array.from(
+    new Set(
+      result.items
+        .filter(
+          (item): item is typeof item & { shipmentBoxId: string } =>
+            item.status === "succeeded" && Boolean(item.shipmentBoxId),
+        )
+        .map((item) => item.shipmentBoxId),
+    ),
+  );
+}
+
+function updateWorksheetActionsAfterPrepare(actions: CoupangShipmentWorksheetRow["availableActions"]) {
+  const nextActions = actions.filter((action) => action !== "markPreparing");
+
+  if (!nextActions.includes("uploadInvoice")) {
+    nextActions.unshift("uploadInvoice");
+  }
+
+  return nextActions;
+}
+
+export function buildOptimisticPrepareRowUpdates(input: {
+  rows: CoupangShipmentWorksheetRow[];
+  shipmentBoxIds: readonly string[];
+  updatedAt: string;
+}) {
+  const shipmentBoxIdSet = new Set(input.shipmentBoxIds);
+  const updates = new Map<string, CoupangShipmentWorksheetRow>();
+
+  for (const row of input.rows) {
+    if (!shipmentBoxIdSet.has(row.shipmentBoxId)) {
+      continue;
+    }
+
+    updates.set(row.id, {
+      ...row,
+      orderStatus: "INSTRUCT",
+      availableActions: updateWorksheetActionsAfterPrepare(row.availableActions),
+      updatedAt: input.updatedAt,
+    });
+  }
+
+  return updates;
+}

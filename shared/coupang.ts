@@ -1125,6 +1125,23 @@ export function isCoupangInvoiceAlreadyProcessedResult(input: {
 
 export type CoupangShipmentSyncMode = "new_only" | "incremental" | "full";
 
+export const coupangShipmentWorksheetSyncPhases = [
+  "worksheet_collect",
+  "order_detail_hydration",
+  "product_detail_hydration",
+  "customer_service_refresh",
+] as const;
+export type CoupangShipmentWorksheetSyncPhase =
+  (typeof coupangShipmentWorksheetSyncPhases)[number];
+
+export const coupangShipmentWorksheetRefreshScopes = [
+  "pending_after_collect",
+  "shipment_boxes",
+  "customer_service",
+] as const;
+export type CoupangShipmentWorksheetRefreshScope =
+  (typeof coupangShipmentWorksheetRefreshScopes)[number];
+
 export interface CoupangShipmentWorksheetSyncSummary {
   mode: CoupangShipmentSyncMode;
   fetchedCount: number;
@@ -1136,6 +1153,9 @@ export interface CoupangShipmentWorksheetSyncSummary {
   fetchCreatedAtFrom: string | null;
   fetchCreatedAtTo: string | null;
   statusFilter: string | null;
+  completedPhases: CoupangShipmentWorksheetSyncPhase[];
+  pendingPhases: CoupangShipmentWorksheetSyncPhase[];
+  warningPhases: CoupangShipmentWorksheetSyncPhase[];
 }
 
 export interface CoupangShipmentWorksheetResponse {
@@ -1146,6 +1166,7 @@ export interface CoupangShipmentWorksheetResponse {
   message: string | null;
   source: CoupangDataSource;
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  operation?: OperationLogEntry;
 }
 
 export type CoupangShipmentWorksheetViewScope =
@@ -1365,6 +1386,28 @@ export interface CollectCoupangShipmentInput {
   status?: string;
   maxPerPage?: number;
   syncMode?: CoupangShipmentSyncMode;
+}
+
+export interface RefreshCoupangShipmentWorksheetInput {
+  storeId: string;
+  scope: CoupangShipmentWorksheetRefreshScope;
+  shipmentBoxIds?: string[];
+}
+
+export interface CoupangShipmentWorksheetRefreshResponse {
+  store: CoupangStoreRef;
+  scope: CoupangShipmentWorksheetRefreshScope;
+  items: CoupangShipmentWorksheetRow[];
+  fetchedAt: string;
+  message: string | null;
+  source: CoupangDataSource;
+  syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  refreshedCount: number;
+  updatedCount: number;
+  completedPhases: CoupangShipmentWorksheetSyncPhase[];
+  pendingPhases: CoupangShipmentWorksheetSyncPhase[];
+  warningPhases: CoupangShipmentWorksheetSyncPhase[];
+  operation?: OperationLogEntry;
 }
 
 export interface PatchCoupangShipmentWorksheetItemInput {

@@ -417,6 +417,15 @@ function normalizeSyncSummary(
       typeof value.fetchCreatedAtFrom === "string" ? value.fetchCreatedAtFrom : null,
     fetchCreatedAtTo: typeof value.fetchCreatedAtTo === "string" ? value.fetchCreatedAtTo : null,
     statusFilter: typeof value.statusFilter === "string" ? value.statusFilter : null,
+    completedPhases: Array.isArray(value.completedPhases)
+      ? value.completedPhases.filter((item): item is CoupangShipmentWorksheetSyncSummary["completedPhases"][number] => typeof item === "string")
+      : [],
+    pendingPhases: Array.isArray(value.pendingPhases)
+      ? value.pendingPhases.filter((item): item is CoupangShipmentWorksheetSyncSummary["pendingPhases"][number] => typeof item === "string")
+      : [],
+    warningPhases: Array.isArray(value.warningPhases)
+      ? value.warningPhases.filter((item): item is CoupangShipmentWorksheetSyncSummary["warningPhases"][number] => typeof item === "string")
+      : [],
   } satisfies CoupangShipmentWorksheetSyncSummary;
 }
 
@@ -550,7 +559,7 @@ export class CoupangShipmentWorksheetStore {
     this.legacyMode = typeof filePath === "string";
   }
 
-  private async loadLegacy() {
+  private async loadLegacy(): Promise<PersistedWorksheetStore> {
     if (this.cache) {
       return this.cache;
     }
@@ -569,6 +578,10 @@ export class CoupangShipmentWorksheetStore {
         throw error;
       }
 
+      this.cache = structuredClone(defaultData);
+    }
+
+    if (!this.cache) {
       this.cache = structuredClone(defaultData);
     }
 

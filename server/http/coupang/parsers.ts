@@ -1,3 +1,6 @@
+import {
+  coupangShipmentWorksheetRefreshScopes,
+} from "@shared/coupang";
 import type {
   AuditCoupangShipmentWorksheetMissingInput,
   ApplyCoupangShipmentWorksheetInvoiceInput,
@@ -13,6 +16,7 @@ import type {
   CoupangProductQuantityUpdateTarget,
   CoupangProductSaleStatusUpdateTarget,
   CoupangShipmentWorksheetBulkResolveRequest,
+  RefreshCoupangShipmentWorksheetInput,
   CoupangReturnActionTarget,
   CoupangReturnCollectionInvoiceTarget,
   CoupangShipmentArchiveViewQuery,
@@ -169,6 +173,27 @@ export function parseCollectShipmentInput(value: unknown): CollectCoupangShipmen
           : syncMode === "new_only"
             ? "new_only"
             : undefined,
+  };
+}
+
+export function parseRefreshShipmentWorksheetInput(
+  value: unknown,
+): RefreshCoupangShipmentWorksheetInput {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const scope = asOptionalString(item.scope);
+
+  return {
+    storeId: asString(item.storeId),
+    scope:
+      scope &&
+      (coupangShipmentWorksheetRefreshScopes as readonly string[]).includes(scope)
+        ? (scope as RefreshCoupangShipmentWorksheetInput["scope"])
+        : "pending_after_collect",
+    shipmentBoxIds: Array.isArray(item.shipmentBoxIds)
+      ? item.shipmentBoxIds
+          .map((entry) => asString(entry))
+          .filter((entry) => entry.trim().length > 0)
+      : [],
   };
 }
 

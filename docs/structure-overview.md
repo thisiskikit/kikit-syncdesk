@@ -80,9 +80,23 @@ docs/
 
 출고 화면의 구현 중심은 여전히 쿠팡 배송/송장 feature이지만, 화면 위계는 운영 데스크 기준으로 다시 짰고 render/controller 책임도 2차 분리했습니다.
 
+### 출고 실행 파이프라인
+- `POST /api/coupang/shipments/collect`
+  - 1차 수집만 담당합니다.
+  - 범위: 주문 목록 조회, 클레임 병합, worksheet 반영, sync summary 기록
+- `POST /api/coupang/shipments/worksheet/refresh`
+  - 후속 보강만 담당합니다.
+  - scope:
+    - `pending_after_collect`
+    - `shipment_boxes`
+    - `customer_service`
+- `결제완료 -> 상품준비중`
+  - 선행 `수집 누락 audit`와 `prepare_ready resolve`는 유지합니다.
+  - 성공 후 전체 `incremental collect`를 다시 기다리지 않고, 성공 행을 먼저 낙관 반영한 뒤 `shipment_boxes` scope refresh를 비동기로 붙입니다.
+
 ### 현재 출고 화면 계층
 1. `page.tsx`
-   - 상태, query, action coordinator
+  - 상태, query, action coordinator
 2. `fulfillment-shell.tsx`
    - 페이지 slot 조립
 3. `fulfillment-toolbar.tsx`
@@ -169,6 +183,8 @@ docs/
   - 출고 판단 탭, 요약, 현재 적용 조건, 세부 필터
 - `shipment-selection-action-bar.tsx`
   - 혼합 선택 요약과 실행 CTA
+- `shipment-prepare-flow.ts`
+  - prepare 대상 계산, 결과 피드백, 낙관 반영 helper
 - `shipment-worksheet-panel.tsx`
   - 작업 화면 카드 shell, 빈 상태, 페이지네이션
 - `shipment-archive-panel.tsx`
@@ -177,6 +193,10 @@ docs/
   - 출고 판단 우선의 얇은 상세 패널
 - `client/src/lib/ops-handoff-links.ts`
   - 출고 / CS / 작업센터 사이의 deep-link build/parse와 operation payload 기반 handoff 문맥 추출
+- `server/services/coupang/shipment-worksheet-service.ts`
+  - collect 1차 반영과 refresh 후속 보강 분리
+- `server/http/handlers/coupang/shipments.ts`
+  - collect / worksheet refresh tracked operation 핸들러
 
 ## 5. 작업센터 구조
 

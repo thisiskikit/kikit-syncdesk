@@ -2,6 +2,42 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-14 / 출고 수집-후속 보강 분리
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `shared/operations.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.ts`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+  - `docs/current-status.md`
+  - `docs/structure-overview.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `collectShipmentWorksheet()`는 더 이상 자동 `상품준비중(markPreparing)`과 주문 상세/상품 상세/CS 상태 보강을 함께 수행하지 않습니다.
+  - collect 응답은 worksheet 1차 반영을 우선 돌려주고, `syncSummary.completedPhases / pendingPhases / warningPhases`로 후속 보강 상태를 함께 기록합니다.
+  - `/api/coupang/shipments/worksheet/refresh`를 추가해 `pending_after_collect`, `shipment_boxes`, `customer_service` scope 기준 후속 보강을 분리했습니다.
+  - 출고 화면은 collect 성공 직후 화면을 먼저 갱신하고, pending phase가 있으면 refresh를 non-blocking으로 이어서 호출합니다.
+  - `결제완료 -> 상품준비중`은 성공 후 `incremental collect`를 다시 기다리지 않고, 성공 행을 먼저 `INSTRUCT`로 낙관 반영한 뒤 targeted refresh를 비동기로 붙입니다.
+  - refresh 후속 단계는 작업센터 operation에 `출고 후속 보강` action으로 남고, 경고가 있어도 선행 collect / prepare 성공 자체를 되돌리지는 않습니다.
+- 이유:
+  - 기존 출고 수집과 준비중 처리 체감 지연의 큰 원인이 `첫 응답 경로에 상세 보강/재수집을 함께 묶어 둔 구조`였기 때문입니다.
+- 남은 점:
+  - 브라우저에서 collect 직후 pending phase 표시와 background refresh 체감은 아직 직접 클릭 검증하지 못했습니다.
+  - true background worker나 queue는 아직 도입하지 않았고, 현재는 클라이언트가 후속 refresh를 non-blocking으로 시작하는 구조입니다.
+- 검증:
+  - `npm run check`
+  - `npm exec vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `npm exec vitest run --root . client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+
 ## 2026-04-14 / 상품준비중 선행 차단 제거
 
 - 변경 유형:
@@ -16,6 +52,7 @@
   - `docs/change-log.md`
 - 변경 내용:
   - `결제완료 -> 상품준비중` 실행 전에 보던 `수집 누락 audit`는 유지하되, 누락 주문이 있어도 현재 worksheet에서 처리 가능한 주문은 계속 `상품준비중`으로 전달하도록 바꿨습니다.
+  - `수집 누락 audit`는 7일 초과 범위를 받으면 내부적으로 7일 단위 요청으로 나눠 계속 확인하도록 바꿨습니다.
   - 결과 피드백에는 기존 실패 항목과 함께 `수집 누락` 상세를 같이 남기고, audit 다이얼로그도 계속 열 수 있게 유지했습니다.
   - `결제완료` 건수가 0일 때 버튼을 아예 막지 않고, 클릭 시 현재 화면 기준으로 왜 처리 대상이 없는지 경고가 뜨도록 바꿨습니다.
   - helper 테스트를 추가해 `누락이 있어도 진행`, `실패 상세 + 누락 상세 동시 표시`를 고정했습니다.

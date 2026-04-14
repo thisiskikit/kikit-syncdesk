@@ -52,7 +52,7 @@ function buildStore() {
   return {
     id: "store-1",
     channel: "coupang" as const,
-    storeName: "테스트 스토어",
+    storeName: "Test Store",
     vendorId: "A0001",
     shipmentPlatformKey: "T",
     credentials: {
@@ -84,15 +84,15 @@ function buildLiveOrder(input: {
     orderedAt: "2026-04-12T09:00:00+09:00",
     paidAt: "2026-04-12T09:00:00+09:00",
     status: input.status,
-    ordererName: "김주문",
-    receiverName: "이수령",
+    ordererName: "Buyer",
+    receiverName: "Receiver",
     receiverSafeNumber: "050-1111-2222",
-    receiverAddress: "서울",
+    receiverAddress: "Seoul",
     receiverPostCode: "12345",
-    productName: input.productName ?? `상품 ${input.shipmentBoxId}`,
-    optionName: "기본",
+    productName: input.productName ?? `Product ${input.shipmentBoxId}`,
+    optionName: "Default",
     sellerProductId: `SP-${input.vendorItemId}`,
-    sellerProductName: input.productName ?? `상품 ${input.shipmentBoxId}`,
+    sellerProductName: input.productName ?? `Product ${input.shipmentBoxId}`,
     vendorItemId: input.vendorItemId,
     externalVendorSku: `SKU-${input.vendorItemId}`,
     quantity: 1,
@@ -135,20 +135,20 @@ function buildWorksheetRow(input: {
     id: input.id,
     sourceKey,
     storeId: "store-1",
-    storeName: "테스트 스토어",
+    storeName: "Test Store",
     orderDateText: "04/12",
     orderDateKey: "20260412",
     quantity: 1,
-    productName: input.productName ?? `상품 ${input.shipmentBoxId}`,
-    optionName: input.queryToken ? `옵션 ${input.queryToken}` : "기본",
+    productName: input.productName ?? `Product ${input.shipmentBoxId}`,
+    optionName: input.queryToken ? `Option ${input.queryToken}` : "Default",
     productOrderNumber: `PO-${input.shipmentBoxId}`,
     collectedPlatform: "coupang",
-    ordererName: "김주문",
+    ordererName: "Buyer",
     contact: "010-1111-2222",
-    receiverName: "이수령",
-    receiverBaseName: "이수령",
+    receiverName: "Receiver",
+    receiverBaseName: "Receiver",
     personalClearanceCode: null,
-    collectedAccountName: "테스트 스토어",
+    collectedAccountName: "Test Store",
     deliveryCompanyCode: "",
     selpickOrderNumber: `O20260412T${input.id.padStart(4, "0")}`,
     invoiceNumber: "",
@@ -157,11 +157,11 @@ function buildWorksheetRow(input: {
     coupangInvoiceUploadedAt: null,
     salePrice: 10000,
     shippingFee: 0,
-    receiverAddress: "서울",
+    receiverAddress: "Seoul",
     deliveryRequest: null,
     buyerPhoneNumber: "010-2222-3333",
     productNumber: "P-1",
-    exposedProductName: input.productName ?? `상품 ${input.shipmentBoxId}`,
+    exposedProductName: input.productName ?? `Product ${input.shipmentBoxId}`,
     productOptionNumber: "OPT-1",
     sellerProductCode: "SELLER-1",
     isOverseas: false,
@@ -213,14 +213,14 @@ function buildLiveResponse(items: CoupangOrderRow[]) {
   return {
     store: {
       id: "store-1",
-      name: "테스트 스토어",
+      name: "Test Store",
       vendorId: "A0001",
     },
     items,
     nextToken: null,
     fetchedAt: "2026-04-12T00:00:00.000Z",
     servedFromFallback: false,
-    message: items.length ? null : "조회된 주문이 없습니다.",
+    message: items.length ? null : "No matching orders.",
     source: "live" as const,
   };
 }
@@ -311,7 +311,7 @@ describe("auditShipmentWorksheetMissing", () => {
       shipmentBoxId: "400",
       orderId: "ORDER-400",
       vendorItemId: "VI-400",
-      productName: "보이는 상품",
+      productName: "Visible Product",
       queryToken: "visible",
     });
     const hiddenRow = buildWorksheetRow({
@@ -319,7 +319,7 @@ describe("auditShipmentWorksheetMissing", () => {
       shipmentBoxId: "401",
       orderId: "ORDER-401",
       vendorItemId: "VI-401",
-      productName: "숨김 상품",
+      productName: "Hidden Product",
       queryToken: "hidden",
     });
     getStoreSheetMock.mockResolvedValue(buildSheet([visibleRow, hiddenRow]));
@@ -331,14 +331,14 @@ describe("auditShipmentWorksheetMissing", () => {
             orderId: "ORDER-400",
             vendorItemId: "VI-400",
             status: "INSTRUCT",
-            productName: "보이는 상품",
+            productName: "Visible Product",
           }),
           buildLiveOrder({
             shipmentBoxId: "401",
             orderId: "ORDER-401",
             vendorItemId: "VI-401",
             status: "INSTRUCT",
-            productName: "숨김 상품",
+            productName: "Hidden Product",
           }),
         ]);
       }
@@ -371,18 +371,32 @@ describe("auditShipmentWorksheetMissing", () => {
     ]);
   });
 
-  it("rejects audit ranges longer than 7 days", async () => {
+  it("splits audit ranges longer than 7 days into multiple live lookups", async () => {
     getStoreSheetMock.mockResolvedValue(buildSheet([]));
+    listOrdersMock.mockResolvedValue(buildLiveResponse([]));
 
-    await expect(
-      auditShipmentWorksheetMissing({
-        storeId: "store-1",
-        createdAtFrom: "2026-04-01",
-        createdAtTo: "2026-04-12",
-        viewQuery: {
-          scope: "dispatch_active",
-        },
-      }),
-    ).rejects.toThrow("누락 검수는 최대 7일 범위까지만 지원합니다.");
+    const result = await auditShipmentWorksheetMissing({
+      storeId: "store-1",
+      createdAtFrom: "2026-04-01",
+      createdAtTo: "2026-04-12",
+      viewQuery: {
+        scope: "dispatch_active",
+      },
+    });
+
+    expect(result.liveCount).toBe(0);
+    expect(listOrdersMock).toHaveBeenCalledTimes(4);
+    expect(
+      listOrdersMock.mock.calls.map(([input]) => ({
+        status: input.status,
+        createdAtFrom: input.createdAtFrom,
+        createdAtTo: input.createdAtTo,
+      })),
+    ).toEqual([
+      { status: "INSTRUCT", createdAtFrom: "2026-04-01", createdAtTo: "2026-04-07" },
+      { status: "INSTRUCT", createdAtFrom: "2026-04-08", createdAtTo: "2026-04-12" },
+      { status: "ACCEPT", createdAtFrom: "2026-04-01", createdAtTo: "2026-04-07" },
+      { status: "ACCEPT", createdAtFrom: "2026-04-08", createdAtTo: "2026-04-12" },
+    ]);
   });
 });

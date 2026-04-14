@@ -36,6 +36,7 @@ import {
   type CoupangShipmentWorksheetBulkResolveResponse,
   type CoupangShipmentWorksheetColumnSourceKey,
   type CoupangShipmentWorksheetDetailResponse,
+  type CoupangShipmentWorksheetRefreshResponse,
   type CoupangShipmentWorksheetRow,
   type CoupangShipmentWorksheetResponse,
   type CoupangShipmentWorksheetSortField,
@@ -123,7 +124,9 @@ import {
   summarizeShipmentWorksheetAuditResult,
 } from "./shipment-audit-missing";
 import {
+  buildOptimisticPrepareRowUpdates,
   buildPrepareAcceptedOrdersFeedback,
+  getSucceededPrepareShipmentBoxIds,
   resolvePrepareAcceptedOrdersPlan,
 } from "./shipment-prepare-flow";
 import {
@@ -3038,10 +3041,22 @@ export default function CoupangShipmentsPage() {
         publishOperation(result.operation);
       }
 
-      await collectWorksheet("incremental", {
-        silent: true,
-        skipBusyState: true,
-      });
+      const succeededShipmentBoxIds = getSucceededPrepareShipmentBoxIds(result);
+      if (succeededShipmentBoxIds.length > 0) {
+        applyWorksheetRowUpdates(
+          buildOptimisticPrepareRowUpdates({
+            rows: effectiveDraftRows,
+            shipmentBoxIds: succeededShipmentBoxIds,
+            updatedAt: new Date().toISOString(),
+          }),
+          { markDirty: false },
+        );
+        void refreshWorksheetInBackground({
+          storeId: filters.selectedStoreId,
+          scope: "shipment_boxes",
+          shipmentBoxIds: succeededShipmentBoxIds,
+        });
+      }
 
       const feedbackState = buildPrepareAcceptedOrdersFeedback({
         auditResponse,
@@ -3100,12 +3115,26 @@ export default function CoupangShipmentsPage() {
     await refetchWorksheetView();
   }
 
-  function applyWorksheetRowUpdates(updates: Map<string, CoupangShipmentWorksheetRow>) {
+  function applyWorksheetRowUpdates(
+    updates: Map<string, CoupangShipmentWorksheetRow>,
+    options?: { markDirty?: boolean },
+  ) {
     if (!updates.size) {
       return;
     }
 
     const changedRows = Array.from(updates.values());
+    const markDirty = options?.markDirty ?? true;
+    setSheetSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextItems = current.items.map((row) => updates.get(row.id) ?? row);
+      return nextItems.some((row, index) => row !== current.items[index])
+        ? { ...current, items: nextItems }
+        : current;
+    });
     setDraftRows((current) =>
       sortShipmentRows(current.map((row) => updates.get(row.id) ?? row), sortColumns, columnConfigs),
     );
@@ -3122,13 +3151,15 @@ export default function CoupangShipmentsPage() {
 
       return changed ? next : current;
     });
-    setDirtyRowsBySourceKey((current) => {
-      const next = { ...current };
-      for (const row of changedRows) {
-        next[row.sourceKey] = row;
-      }
-      return next;
-    });
+    if (markDirty) {
+      setDirtyRowsBySourceKey((current) => {
+        const next = { ...current };
+        for (const row of changedRows) {
+          next[row.sourceKey] = row;
+        }
+        return next;
+      });
+    }
     setQuickCollectFocus((current) =>
       current
         ? {
@@ -3144,13 +3175,70 @@ export default function CoupangShipmentsPage() {
 
       return updates.get(current.id) ?? current;
     });
-    setDirtySourceKeys((current) => {
-      const next = new Set(current);
-      for (const row of changedRows) {
-        next.add(row.sourceKey);
+    if (markDirty) {
+      setDirtySourceKeys((current) => {
+        const next = new Set(current);
+        for (const row of changedRows) {
+          next.add(row.sourceKey);
+        }
+        return next;
+      });
+    }
+  }
+
+  async function refreshWorksheetInBackground(input: {
+    storeId?: string;
+    scope: "pending_after_collect" | "shipment_boxes" | "customer_service";
+    shipmentBoxIds?: string[];
+  }) {
+    const storeId = input.storeId ?? filters.selectedStoreId;
+    if (!storeId || activeTab === "archive") {
+      return null;
+    }
+
+    try {
+      const response = await apiRequestJson<CoupangShipmentWorksheetRefreshResponse>(
+        "POST",
+        "/api/coupang/shipments/worksheet/refresh",
+        {
+          storeId,
+          scope: input.scope,
+          shipmentBoxIds: input.shipmentBoxIds,
+        },
+      );
+
+      if (response.operation) {
+        publishOperation(response.operation);
       }
-      return next;
-    });
+
+      applyWorksheetRowUpdates(
+        new Map(response.items.map((row) => [row.id, row] as const)),
+        { markDirty: false },
+      );
+      await refetchWorksheetView();
+      return response;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? `후속 보강 중 일부 정보를 다시 맞추지 못했습니다. ${error.message}`
+          : "후속 보강 중 일부 정보를 다시 맞추지 못했습니다.";
+
+      setFeedback((current) =>
+        current
+          ? {
+              ...current,
+              type: current.type === "error" ? current.type : "warning",
+              details: [...current.details, message].slice(0, 8),
+            }
+          : {
+              type: "warning",
+              title: "후속 보강 경고",
+              message,
+              details: [],
+            },
+      );
+      return null;
+    }
   }
 
   async function patchWorksheetRows(
@@ -3429,6 +3517,10 @@ export default function CoupangShipmentsPage() {
         },
       );
 
+      if (response.operation) {
+        publishOperation(response.operation);
+      }
+
       setSelectedRowIds(new Set());
       setSelectedRowsById({});
       setDirtySourceKeys(new Set());
@@ -3463,6 +3555,16 @@ export default function CoupangShipmentsPage() {
         }
       } else {
         setQuickCollectFocus(null);
+      }
+
+      if (
+        response.source === "live" &&
+        (response.syncSummary?.pendingPhases?.length ?? 0) > 0
+      ) {
+        void refreshWorksheetInBackground({
+          storeId: requestFilters.selectedStoreId,
+          scope: "pending_after_collect",
+        });
       }
 
       if (!options?.silent) {
