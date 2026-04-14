@@ -2820,8 +2820,7 @@ export default function CoupangShipmentsPage() {
   const prepareActionDisabled =
     !filters.selectedStoreId ||
     isFallback ||
-    busyAction !== null ||
-    (activeSheet?.orderCounts.ACCEPT ?? 0) === 0;
+    busyAction !== null;
   const refreshActionDisabled =
     !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
   const openInvoiceInputDisabled =
