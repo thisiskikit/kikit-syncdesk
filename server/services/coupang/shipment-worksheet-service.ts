@@ -247,6 +247,27 @@ function hasMixedWorksheetOptionName(
   return Boolean(normalizedExposedProductName && normalizedOptionName === normalizedExposedProductName);
 }
 
+function resolveStoredWorksheetOptionName(
+  currentRow: CoupangShipmentWorksheetRow | undefined,
+  productName: string,
+) {
+  if (!currentRow) {
+    return null;
+  }
+
+  if (
+    hasMixedWorksheetOptionName(
+      currentRow.optionName,
+      currentRow.productName,
+      currentRow.exposedProductName,
+    )
+  ) {
+    return null;
+  }
+
+  return normalizeWorksheetOptionName(currentRow.optionName, productName);
+}
+
 function isWorksheetPlaceholderProductName(value: string | null | undefined) {
   const normalized = normalizeWhitespace(value);
   return !normalized || normalized === "주문 상품";
@@ -281,19 +302,31 @@ function createSelpickAllocator(rows: CoupangShipmentWorksheetRow[]) {
   const counters = new Map<string, number>();
 
   for (const row of rows) {
-    const counterKey = `${row.collectedAccountName}|${row.orderDateKey}`;
+    const counterKey = row.collectedAccountName;
     const current = counters.get(counterKey) ?? 0;
     counters.set(counterKey, Math.max(current, extractSequence(row.selpickOrderNumber)));
   }
 
   return {
     next(collectedAccountName: string, orderDateKey: string, platformKey: string) {
-      const counterKey = `${collectedAccountName}|${orderDateKey}`;
+      const counterKey = collectedAccountName;
       const nextSequence = (counters.get(counterKey) ?? 0) + 1;
       counters.set(counterKey, nextSequence);
       return `O${orderDateKey}${platformKey}${String(nextSequence).padStart(4, "0")}`;
     },
   };
+}
+
+function resolveWorksheetOrderDateParts(input: {
+  orderedAt: string | null | undefined;
+  paidAt: string | null | undefined;
+  currentOrderedAtRaw?: string | null;
+  currentCreatedAt?: string | null;
+  nowIso: string;
+}) {
+  return toSeoulDateParts(
+    input.orderedAt ?? input.paidAt ?? input.currentOrderedAtRaw ?? input.currentCreatedAt ?? input.nowIso,
+  );
 }
 
 async function mapWithConcurrency<TItem, TResult>(
@@ -1418,6 +1451,24 @@ function shouldHydrateProductRow(
   return !(normalizeWhitespace(currentRow.productName) && normalizeWhitespace(currentRow.optionName));
 }
 
+function shouldHydrateWorksheetOptionDuringCollect(
+  currentRow: CoupangShipmentWorksheetRow | undefined,
+) {
+  if (!currentRow) {
+    return true;
+  }
+
+  if (!normalizeWhitespace(currentRow.optionName)) {
+    return true;
+  }
+
+  return hasMixedWorksheetOptionName(
+    currentRow.optionName,
+    currentRow.productName,
+    currentRow.exposedProductName,
+  );
+}
+
 function resolveClaimSourceDescriptor(input: {
   storeId: string;
   shipmentBoxId?: string | null;
@@ -1913,7 +1964,13 @@ function buildWorksheetRow(input: {
   const personalClearanceCode = currentRow?.personalClearanceCode ?? null;
   const receiverName = composeReceiverName(receiverBaseName, personalClearanceCode, isOverseas);
   const orderedAtRaw = row.orderedAt ?? row.paidAt ?? currentRow?.orderedAtRaw ?? null;
-  const orderDate = toSeoulDateParts(orderedAtRaw ?? currentRow?.createdAt ?? nowIso);
+  const orderDate = resolveWorksheetOrderDateParts({
+    orderedAt: row.orderedAt,
+    paidAt: row.paidAt,
+    currentOrderedAtRaw: currentRow?.orderedAtRaw,
+    currentCreatedAt: currentRow?.createdAt,
+    nowIso,
+  });
   const preserveDeliveryRequest = hasManualDeliveryRequest(currentRow);
   const refreshedDeliveryRequest = normalizeWhitespace(detail?.parcelPrintMessage);
   const customerServiceIssueState =
@@ -2138,8 +2195,7 @@ function resolveWorksheetOptionName(
   return (
     normalizeWorksheetOptionName(registeredOptionName, productName) ??
     normalizeWorksheetOptionName(detailRow?.optionName, productName) ??
-    normalizeWorksheetOptionName(row.optionName, productName) ??
-    normalizeWorksheetOptionName(currentRow?.optionName, productName) ??
+    resolveStoredWorksheetOptionName(currentRow, productName) ??
     null
   );
 }
@@ -2872,7 +2928,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
 
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
   const claimWarnings: string[] = [];
-  const collectionCandidates = candidateRows
+  const collectionCandidates: ShipmentWorksheetCollectionCandidate[] = candidateRows
     .map((row) => {
       const sourceKey = buildSourceKey(input.storeId, row);
       const currentRow = currentBySourceKey.get(sourceKey);
@@ -3432,19 +3488,87 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
 
   */
+  const optionHydrationCandidates = collectionCandidates.filter((candidate) =>
+    shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow),
+  );
+  const optionDetailByShipmentBoxId = new Map<string, CoupangOrderDetail | null>();
+
+  if (optionHydrationCandidates.length) {
+    const detailTargets = Array.from(
+      new Set(
+        optionHydrationCandidates
+          .map((candidate) => normalizeWhitespace(candidate.row.shipmentBoxId))
+          .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+      ),
+    );
+
+    const detailResults = await mapWithConcurrency(detailTargets, 4, async (shipmentBoxId) => {
+      try {
+        const response = await getOrderDetail({
+          storeId: input.storeId,
+          shipmentBoxId,
+          includeCustomerService: false,
+        });
+
+        return response.source === "live" ? response.item : null;
+      } catch {
+        return null;
+      }
+    });
+
+    detailTargets.forEach((shipmentBoxId, index) => {
+      optionDetailByShipmentBoxId.set(shipmentBoxId, detailResults[index] ?? null);
+    });
+  }
+
+  const collectProductDetailPromiseBySellerProductId = new Map<
+    string,
+    Promise<Awaited<ReturnType<typeof getProductDetail>> | null>
+  >();
+  const getCollectProductDetailCached = (row: CoupangOrderRow) => {
+    if (!row.sellerProductId) {
+      return Promise.resolve(null);
+    }
+
+    const cached = collectProductDetailPromiseBySellerProductId.get(row.sellerProductId);
+    if (cached) {
+      return cached;
+    }
+
+    const nextPromise = getProductDetail({
+      storeId: input.storeId,
+      sellerProductId: row.sellerProductId,
+    })
+      .then((response) => (response?.source === "live" && response.item ? response : null))
+      .catch(() => null);
+
+    collectProductDetailPromiseBySellerProductId.set(row.sellerProductId, nextPromise);
+    return nextPromise;
+  };
+
   const fetchedRows = await mapWithConcurrency(collectionCandidates, 4, async (candidate) =>
     buildWorksheetRow({
       store,
       row: candidate.row,
       currentRow: candidate.currentRow,
       nowIso: now,
-      detail: null,
-      productDetail: null,
+      detail: shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow)
+        ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
+        : null,
+      productDetail: shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow)
+        ? await getCollectProductDetailCached(candidate.row)
+        : null,
       selpickOrderNumber:
         candidate.currentRow?.selpickOrderNumber ??
         selpickAllocator.next(
           store.storeName,
-          candidate.currentRow?.orderDateKey ?? toSeoulDateParts(now).key,
+          resolveWorksheetOrderDateParts({
+            orderedAt: candidate.row.orderedAt,
+            paidAt: candidate.row.paidAt,
+            currentOrderedAtRaw: candidate.currentRow?.orderedAtRaw,
+            currentCreatedAt: candidate.currentRow?.createdAt,
+            nowIso: now,
+          }).key,
           platformKey.key,
         ),
     }),

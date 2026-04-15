@@ -2,6 +2,49 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-15 / 출고 옵션명 컬럼 실제 옵션값 기준 고정
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `옵션명` 컬럼은 더 이상 주문 목록 응답의 노출 옵션 문자열을 사용하지 않고, `product detail.itemName -> order detail.optionName -> 기존 정상 optionName` 우선순위로만 채우도록 고정했습니다.
+  - collect 단계에서 신규 행, 빈 `optionName`, 노출값과 섞인 `optionName`만 골라 최소 `order detail / product detail` 조회를 수행해, 수집 직후부터 옵션값이 실제 기준으로 맞춰지게 했습니다.
+  - 실제 옵션값을 collect 시점에 가져오지 못하면 기존 정상 `optionName`은 유지하고, 기존 값도 없으면 `null`로 둡니다.
+  - 회귀 테스트를 추가해 신규 collect 즉시 등록 옵션값 반영, collect 실패 시 빈값 유지, 혼합된 기존 옵션값 교정을 고정했습니다.
+- 이유:
+  - 최근 collect/refresh 분리 이후 같은 워크시트 안에서 어떤 행은 노출 옵션 문자열, 어떤 행은 실제 옵션값이 들어가 일관성이 깨지고 있었기 때문입니다.
+- 남은 점:
+  - 브라우저에서 실제 빠른 수집 직후 여러 주문 행의 옵션 컬럼이 시각적으로 일관된지까지는 아직 직접 확인하지 못했습니다.
+- 검증:
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `npm run check`
+
+## 2026-04-15 / 셀픽주문번호 연속 증가 고정
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 추가 수집으로 새 주문이 들어올 때 `셀픽주문번호`의 마지막 4자리 시퀀스가 날짜별로 다시 시작되지 않고, 기존 워크시트의 마지막 번호 다음 값으로 계속 증가하도록 allocator 기준을 바꿨습니다.
+  - 새 주문의 번호 prefix 날짜는 수집 시각이 아니라 실제 주문 시각 기준 `orderDateKey`를 사용하도록 맞췄습니다.
+  - 회귀 테스트를 추가해 기존 최대 번호가 `0009`일 때 다음 날짜 신규 주문도 `0010`을 받는 동작을 고정했습니다.
+- 이유:
+  - 추가 수집 시 `셀픽주문번호`가 다시 초기화되면 송장 작업과 주문 추적 문맥이 끊겨 운영 혼선이 생기기 때문입니다.
+- 남은 점:
+  - 실제 운영 데이터에서 여러 스토어를 동시에 수집하는 동시성 충돌은 아직 직접 검증하지 못했습니다.
+- 검증:
+  - `npm exec vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `npm run check`
+
 ## 2026-04-14 / 출고 컬럼 설정 복귀 경로 수정
 
 - 변경 유형:
