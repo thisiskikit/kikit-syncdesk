@@ -1159,9 +1159,15 @@ function buildShipmentWorksheetRefreshResponse(
   };
 }
 
-async function refreshShipmentWorksheetRows(input: RefreshCoupangShipmentWorksheetInput) {
+async function refreshShipmentWorksheetRows(
+  input: RefreshCoupangShipmentWorksheetInput & {
+    currentSheet?: WorksheetStoreSheet;
+    persistToStore?: boolean;
+  },
+) {
   const store = await getStoreOrThrow(input.storeId);
-  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const currentSheet =
+    input.currentSheet ?? (await coupangShipmentWorksheetStore.getStoreSheet(input.storeId));
   const now = new Date().toISOString();
   const syncPlan = buildReadCustomerServiceSyncPlan(currentSheet);
   const refreshTargets = resolveShipmentWorksheetRefreshTargets({
@@ -1395,15 +1401,25 @@ async function refreshShipmentWorksheetRows(input: RefreshCoupangShipmentWorkshe
       : null,
     customerServiceRefresh.message,
   ]);
-  const nextSheet = await coupangShipmentWorksheetStore.setStoreSheet({
-    storeId: input.storeId,
-    items: mergeWorksheetRowsBySourceKey(currentSheet.items, finalRows),
-    collectedAt: currentSheet.collectedAt,
-    source: currentSheet.source,
-    message: nextMessage,
-    syncState: currentSheet.syncState ?? createEmptySyncState(),
-    syncSummary: nextSyncSummary,
-  });
+  const mergedRows = mergeWorksheetRowsBySourceKey(currentSheet.items, finalRows);
+  const nextSheet =
+    input.persistToStore === false
+      ? {
+          ...currentSheet,
+          items: mergedRows,
+          message: nextMessage,
+          syncSummary: nextSyncSummary,
+          updatedAt: new Date().toISOString(),
+        }
+      : await coupangShipmentWorksheetStore.setStoreSheet({
+          storeId: input.storeId,
+          items: mergedRows,
+          collectedAt: currentSheet.collectedAt,
+          source: currentSheet.source,
+          message: nextMessage,
+          syncState: currentSheet.syncState ?? createEmptySyncState(),
+          syncSummary: nextSyncSummary,
+        });
 
   return buildShipmentWorksheetRefreshResponse(store, nextSheet, {
     scope: input.scope,
@@ -2721,8 +2737,11 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     };
   }
 
+  const worksheetRows = buildWorksheetRows(sheetForResolve);
+  let rowsForResolve = worksheetRows;
+
   if (input.mode === "prepare_ready" || input.mode === "invoice_ready") {
-    const { filteredRows } = resolveShipmentWorksheetFilteredRows(buildWorksheetRows(sheetForResolve), {
+    const { filteredRows } = resolveShipmentWorksheetFilteredRows(worksheetRows, {
       ...input.viewQuery,
       storeId: input.storeId,
     });
@@ -2740,15 +2759,16 @@ export async function resolveShipmentWorksheetBulkRows(input: {
         storeId: input.storeId,
         scope: "shipment_boxes",
         shipmentBoxIds,
+        currentSheet: sheetForResolve,
+        persistToStore: false,
       });
-      sheetForResolve = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
       refreshMessage = normalizeLegacyWorksheetMessage(refreshResult.message ?? sheetForResolve.message);
-      didRefreshTargetRows = true;
+      rowsForResolve = mergeWorksheetRowsBySourceKey(worksheetRows, refreshResult.items);
+      didRefreshTargetRows = refreshResult.refreshedCount > 0;
     }
   }
 
-  const worksheetRows = buildWorksheetRows(sheetForResolve);
-  const { filteredRows } = resolveShipmentWorksheetFilteredRows(worksheetRows, {
+  const { filteredRows } = resolveShipmentWorksheetFilteredRows(rowsForResolve, {
     ...input.viewQuery,
     storeId: input.storeId,
   });
@@ -2756,7 +2776,6 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     filteredRows,
     input.mode,
   );
-  let rowsForResolve = worksheetRows;
 
   if (!didRefreshTargetRows && customerServiceTargetRows.length > 0) {
     const refreshed = await refreshWorksheetCustomerServiceStatuses({
@@ -2766,7 +2785,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
       forceRefresh: false,
     });
     const refreshedRowsById = new Map(refreshed.rows.map((row) => [row.id, row] as const));
-    rowsForResolve = worksheetRows.map((row) => refreshedRowsById.get(row.id) ?? row);
+    rowsForResolve = rowsForResolve.map((row) => refreshedRowsById.get(row.id) ?? row);
     refreshMessage = normalizeLegacyWorksheetMessage(refreshed.message ?? sheetForResolve.message);
   }
 

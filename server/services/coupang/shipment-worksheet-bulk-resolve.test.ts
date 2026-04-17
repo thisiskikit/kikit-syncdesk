@@ -334,7 +334,7 @@ describe("resolveShipmentWorksheetBulkRows", () => {
     });
     expect(result.matchedCount).toBe(1);
     expect(result.resolvedCount).toBe(1);
-    expect(setStoreSheetMock).toHaveBeenCalled();
+    expect(setStoreSheetMock).not.toHaveBeenCalled();
   });
 
   it("drops stale ACCEPT rows from prepare_ready when live status is already INSTRUCT", async () => {
@@ -380,7 +380,7 @@ describe("resolveShipmentWorksheetBulkRows", () => {
     expect(result.blockedItems).toHaveLength(0);
     expect(result.matchedCount).toBe(0);
     expect(result.resolvedCount).toBe(0);
-    expect(setStoreSheetMock).toHaveBeenCalled();
+    expect(setStoreSheetMock).not.toHaveBeenCalled();
   });
 
   it("refreshes customer service only for invoice-ready candidate rows", async () => {
