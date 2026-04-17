@@ -801,6 +801,165 @@ function createMissingInvoiceResult(input: {
   });
 }
 
+const COUPANG_INVOICE_LIVE_CONFIRMED_MESSAGE =
+  "쿠팡 live 조회에서 동일 송장이 이미 반영된 것으로 확인되었습니다.";
+
+type LiveInvoiceSnapshot = {
+  shipmentBoxId: string | null;
+  orderId: string | null;
+  status: string | null;
+  deliveryCompanyCode: string | null;
+  invoiceNumber: string | null;
+};
+
+async function fetchLiveInvoiceSnapshot(
+  store: StoredCoupangStore,
+  target: Pick<CoupangInvoiceTarget, "shipmentBoxId">,
+): Promise<LiveInvoiceSnapshot | null> {
+  try {
+    const payload = await requestOrderByShipmentBoxId(store, target.shipmentBoxId);
+    const shipment = Array.isArray(payload.data)
+      ? asObject(payload.data[0])
+      : asObject(payload.data);
+
+    if (!shipment) {
+      return null;
+    }
+
+    return {
+      shipmentBoxId: asString(shipment.shipmentBoxId),
+      orderId: asString(shipment.orderId),
+      status: normalizeText(asString(shipment.status)),
+      deliveryCompanyCode: normalizeText(asString(shipment.deliveryCompanyCode)),
+      invoiceNumber: normalizeText(asString(shipment.invoiceNumber)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLiveInvoiceAppliedToTarget(input: {
+  target: Pick<CoupangInvoiceTarget, "deliveryCompanyCode" | "invoiceNumber">;
+  snapshot: LiveInvoiceSnapshot | null;
+}) {
+  if (!input.snapshot) {
+    return false;
+  }
+
+  const targetInvoiceNumber = normalizeText(input.target.invoiceNumber);
+  const targetDeliveryCompanyCode = normalizeText(input.target.deliveryCompanyCode);
+  const liveInvoiceNumber = normalizeText(input.snapshot.invoiceNumber);
+  const liveDeliveryCompanyCode = normalizeText(input.snapshot.deliveryCompanyCode);
+
+  if (!targetInvoiceNumber || !liveInvoiceNumber || targetInvoiceNumber !== liveInvoiceNumber) {
+    return false;
+  }
+
+  if (
+    liveDeliveryCompanyCode &&
+    targetDeliveryCompanyCode &&
+    liveDeliveryCompanyCode !== targetDeliveryCompanyCode
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+async function reconcileInvoiceResultsWithLiveState(input: {
+  store: StoredCoupangStore;
+  targets: CoupangInvoiceTarget[];
+  results: CoupangActionItemResult[];
+}) {
+  const targetByGroupKey = new Map(
+    input.targets.map((target) => [
+      buildInvoiceWorksheetGroupKey({
+        shipmentBoxId: target.shipmentBoxId,
+        orderId: target.orderId,
+      }),
+      target,
+    ]),
+  );
+
+  const candidates = input.results
+    .filter((result) => result.status !== "succeeded")
+    .map((result) => ({
+      result,
+      target:
+        result.shipmentBoxId && result.orderId
+          ? targetByGroupKey.get(
+              buildInvoiceWorksheetGroupKey({
+                shipmentBoxId: result.shipmentBoxId,
+                orderId: result.orderId,
+              }),
+            ) ?? null
+          : null,
+    }))
+    .filter(
+      (
+        item,
+      ): item is {
+        result: CoupangActionItemResult;
+        target: CoupangInvoiceTarget;
+      } => Boolean(item.target),
+    );
+
+  if (!candidates.length) {
+    return input.results;
+  }
+
+  const confirmedGroups = new Map<string, CoupangActionItemResult>();
+  const confirmedAt = new Date().toISOString();
+  const snapshots = await mapWithConcurrency(candidates, ACTION_CONCURRENCY, async (candidate) => ({
+    candidate,
+    snapshot: await fetchLiveInvoiceSnapshot(input.store, candidate.target),
+  }));
+
+  for (const { candidate, snapshot } of snapshots) {
+    if (
+      !isLiveInvoiceAppliedToTarget({
+        target: candidate.target,
+        snapshot,
+      })
+    ) {
+      continue;
+    }
+
+    confirmedGroups.set(
+      buildInvoiceWorksheetGroupKey({
+        shipmentBoxId: candidate.target.shipmentBoxId,
+        orderId: candidate.target.orderId,
+      }),
+      {
+        ...candidate.result,
+        status: "succeeded",
+        retryRequired: false,
+        message: COUPANG_INVOICE_LIVE_CONFIRMED_MESSAGE,
+        appliedAt: confirmedAt,
+      },
+    );
+  }
+
+  if (!confirmedGroups.size) {
+    return input.results;
+  }
+
+  return input.results.map((result) => {
+    if (!result.shipmentBoxId || !result.orderId) {
+      return result;
+    }
+
+    return (
+      confirmedGroups.get(
+        buildInvoiceWorksheetGroupKey({
+          shipmentBoxId: result.shipmentBoxId,
+          orderId: result.orderId,
+        }),
+      ) ?? result
+    );
+  });
+}
+
 function isRetryableOrderSheetLookupError(error: unknown) {
   if (!error || typeof error !== "object") {
     return false;
@@ -2885,7 +3044,13 @@ async function submitInvoiceAction(input: {
   let response: CoupangBatchActionResponse;
 
   try {
-    response = buildActionResponse(await requestBatch(input.items));
+    response = buildActionResponse(
+      await reconcileInvoiceResultsWithLiveState({
+        store,
+        targets: input.items,
+        results: await requestBatch(input.items),
+      }),
+    );
     await patchInvoiceWorksheetMatches({
       storeId: input.storeId,
       mode: input.mode,
@@ -2921,7 +3086,13 @@ async function submitInvoiceAction(input: {
       ACTION_CONCURRENCY,
       async (item) => requestSingleInvoice(item),
     );
-    response = buildActionResponse(fallbackItems);
+    response = buildActionResponse(
+      await reconcileInvoiceResultsWithLiveState({
+        store,
+        targets: input.items,
+        results: fallbackItems,
+      }),
+    );
     await patchInvoiceWorksheetMatches({
       storeId: input.storeId,
       mode: input.mode,

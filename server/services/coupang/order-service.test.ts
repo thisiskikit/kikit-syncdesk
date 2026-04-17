@@ -24,7 +24,13 @@ vi.mock("./shipment-worksheet-store", () => ({
   },
 }));
 
-import { getOrderCustomerServiceSummary, listOrders, markPreparing, uploadInvoice } from "./order-service";
+import {
+  getOrderCustomerServiceSummary,
+  listOrders,
+  markPreparing,
+  updateInvoice,
+  uploadInvoice,
+} from "./order-service";
 
 const ALL_ORDER_STATUSES = [
   "ACCEPT",
@@ -1189,7 +1195,7 @@ describe("coupang order service", () => {
       ],
     });
 
-    expect(requestCoupangJsonMock).toHaveBeenCalledTimes(3);
+    expect(requestCoupangJsonMock).toHaveBeenCalledTimes(4);
     expect(result.summary.total).toBe(2);
     expect(result.summary.succeededCount).toBe(1);
     expect(result.summary.failedCount).toBe(1);
@@ -1210,6 +1216,7 @@ describe("coupang order service", () => {
     expect((requestCoupangJsonMock.mock.calls[0]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":102');
     expect((requestCoupangJsonMock.mock.calls[1]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":101');
     expect((requestCoupangJsonMock.mock.calls[2]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":102');
+    expect((requestCoupangJsonMock.mock.calls[3]?.[0] as MockApiInput).path).toContain("/ordersheets/102");
   });
 
   it("retries invoice items that are missing from the batch response", async () => {
@@ -1323,6 +1330,86 @@ describe("coupang order service", () => {
     });
     expect(patchRowsMock.mock.calls[1]?.[0].items[0]).toMatchObject({
       invoiceTransmissionMessage: "uploaded",
+    });
+  });
+
+  it("treats ambiguous invoice update warnings as succeeded when live detail already matches", async () => {
+    requestCoupangJsonMock
+      .mockResolvedValueOnce({
+        data: {
+          responseList: [
+            {
+              shipmentBoxId: "101",
+              succeed: false,
+              retryRequired: true,
+              resultCode: "UNDEFINED_ERROR_OCCUR",
+              resultMessage: "temporary warning",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          shipmentBoxId: "101",
+          orderId: "202",
+          orderedAt: "2026-03-24T09:00:00+09:00",
+          paidAt: "2026-03-24T09:00:00+09:00",
+          status: "FINAL_DELIVERY",
+          deliveryCompanyCode: null,
+          invoiceNumber: "INV-100",
+          orderer: {
+            name: "Kim",
+          },
+          receiver: {
+            name: "Lee",
+            safeNumber: "050-1234-5678",
+            addr1: "Seoul",
+            postCode: "05510",
+          },
+          orderItems: [
+            {
+              vendorItemId: "303",
+              vendorItemName: "Matched Item",
+              sellerProductId: "P-303",
+              sellerProductName: "Matched Item",
+              shippingCount: 1,
+              salesPrice: 10000,
+            },
+          ],
+        },
+      });
+
+    const result = await updateInvoice({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "101",
+          orderId: "202",
+          vendorItemId: "303",
+          deliveryCompanyCode: "HYUNDAI",
+          invoiceNumber: "INV-100",
+        },
+      ],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "101",
+      orderId: "202",
+      vendorItemId: "303",
+      status: "succeeded",
+      retryRequired: false,
+      message: "쿠팡 live 조회에서 동일 송장이 이미 반영된 것으로 확인되었습니다.",
+    });
+    expect(patchRowsMock.mock.calls[1]?.[0]).toMatchObject({
+      storeId: "store-1",
+      items: [
+        expect.objectContaining({
+          sourceKey: "store-1:101:303",
+          invoiceTransmissionStatus: "succeeded",
+          invoiceTransmissionMessage:
+            "쿠팡 live 조회에서 동일 송장이 이미 반영된 것으로 확인되었습니다.",
+        }),
+      ],
     });
   });
 
