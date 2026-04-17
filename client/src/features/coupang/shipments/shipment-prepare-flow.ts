@@ -4,6 +4,7 @@ import type {
   CoupangShipmentWorksheetBulkResolveResponse,
   CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { canAttemptInvoiceRow } from "@/lib/coupang-shipment-quick-filters";
 import { formatShipmentWorksheetCustomerServiceLabel } from "@/lib/coupang-customer-service";
 import {
   formatCoupangOrderStatusLabel,
@@ -118,6 +119,12 @@ export function getSucceededPrepareShipmentBoxIds(result: CoupangBatchActionResp
         )
         .map((item) => item.shipmentBoxId),
     ),
+  );
+}
+
+export function resolveInvoiceAutoPrepareRows(rows: readonly CoupangShipmentWorksheetRow[]) {
+  return rows.filter(
+    (row) => row.availableActions.includes("markPreparing") && canAttemptInvoiceRow(row),
   );
 }
 

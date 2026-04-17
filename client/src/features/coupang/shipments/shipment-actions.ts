@@ -7,6 +7,7 @@
   type CoupangShipmentWorksheetRow,
   type PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
+import { resolveCoupangInvoiceTransmissionBlockReason } from "@shared/coupang-invoice";
 import { isSameInvoicePayload, normalizeInvoiceField } from "@/lib/coupang-shipment-quick-filters";
 
 export type InvoiceTransmissionMode = "upload" | "update";
@@ -218,6 +219,15 @@ export function validateInvoiceRow(row: CoupangShipmentWorksheetRow) {
   }
   if (!row.invoiceNumber.trim()) {
     return "송장번호를 입력해 주세요.";
+  }
+
+  const blockedReason = resolveCoupangInvoiceTransmissionBlockReason({
+    deliveryCompanyCode: row.deliveryCompanyCode,
+    invoiceNumber: row.invoiceNumber,
+    storeName: row.storeName,
+  });
+  if (blockedReason) {
+    return blockedReason;
   }
 
   return null;

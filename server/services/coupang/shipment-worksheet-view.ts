@@ -13,6 +13,7 @@ import {
   type CoupangShipmentWorksheetViewResponse,
   type CoupangShipmentWorksheetViewScope,
 } from "@shared/coupang";
+import { resolveCoupangInvoiceTransmissionBlockReason } from "@shared/coupang-invoice";
 
 type WorksheetViewCounts = Pick<
   CoupangShipmentWorksheetViewResponse,
@@ -203,6 +204,11 @@ function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
     hasInvoicePayload(row) &&
     row.invoiceTransmissionStatus !== "pending" &&
     !hasAppliedInvoiceTransmission(row) &&
+    !resolveCoupangInvoiceTransmissionBlockReason({
+      deliveryCompanyCode: row.deliveryCompanyCode,
+      invoiceNumber: row.invoiceNumber,
+      storeName: row.storeName,
+    }) &&
     !hasCustomerServiceIssue(row) &&
     (row.availableActions.includes("uploadInvoice") || row.availableActions.includes("updateInvoice"))
   );

@@ -32,6 +32,7 @@ import {
   type CoupangSettlementRow,
   type CoupangSimpleListResponse,
 } from "@shared/coupang";
+import { resolveCoupangInvoiceTransmissionBlockReason } from "@shared/coupang-invoice";
 import {
   buildCoupangCustomerServiceIssueState,
   coupangSettingsStore,
@@ -798,6 +799,53 @@ function createMissingInvoiceResult(input: {
     message: input.attemptedRetry
       ? "송장 전송 응답이 누락되어 개별 재시도했지만 결과를 확인하지 못했습니다."
       : "송장 전송 응답에서 결과가 누락되었습니다.",
+  });
+}
+
+function createBlockedInvoiceResult(input: {
+  action: "uploadInvoice" | "updateInvoice";
+  item: CoupangInvoiceTarget;
+  message: string;
+}): CoupangActionItemResult {
+  return createActionItem({
+    action: input.action,
+    targetId: input.item.shipmentBoxId,
+    shipmentBoxId: input.item.shipmentBoxId,
+    orderId: input.item.orderId,
+    vendorItemId: input.item.vendorItemId,
+    status: "failed",
+    retryRequired: false,
+    message: input.message,
+  });
+}
+
+function buildInvoiceTargetResultMap(
+  targets: CoupangInvoiceTarget[],
+  results: CoupangActionItemResult[],
+) {
+  const resultByGroupKey = new Map<string, CoupangActionItemResult>();
+
+  for (const result of results) {
+    if (!result.shipmentBoxId || !result.orderId) {
+      continue;
+    }
+
+    resultByGroupKey.set(
+      buildInvoiceWorksheetGroupKey({
+        shipmentBoxId: result.shipmentBoxId,
+        orderId: result.orderId,
+      }),
+      result,
+    );
+  }
+
+  return targets.map((target) => {
+    const groupKey = buildInvoiceWorksheetGroupKey({
+      shipmentBoxId: target.shipmentBoxId,
+      orderId: target.orderId,
+    });
+
+    return resultByGroupKey.get(groupKey) ?? null;
   });
 }
 
@@ -2951,6 +2999,46 @@ async function submitInvoiceAction(input: {
 
   const action = input.mode === "upload" ? "uploadInvoice" : "updateInvoice";
   const worksheetMatches = await findInvoiceWorksheetMatches(input.storeId, input.items);
+  const blockedGroupKeys = new Set<string>();
+  const blockedResults: CoupangActionItemResult[] = [];
+  const validItems: CoupangInvoiceTarget[] = [];
+
+  for (const item of input.items) {
+    const blockedReason = resolveCoupangInvoiceTransmissionBlockReason({
+      deliveryCompanyCode: item.deliveryCompanyCode,
+      invoiceNumber: item.invoiceNumber,
+      storeName: store.storeName,
+    });
+
+    if (blockedReason) {
+      blockedGroupKeys.add(
+        buildInvoiceWorksheetGroupKey({
+          shipmentBoxId: item.shipmentBoxId,
+          orderId: item.orderId,
+        }),
+      );
+      blockedResults.push(
+        createBlockedInvoiceResult({
+          action,
+          item,
+          message: blockedReason,
+        }),
+      );
+      continue;
+    }
+
+    validItems.push(item);
+  }
+
+  const validWorksheetMatches = worksheetMatches.filter(
+    (match) =>
+      !blockedGroupKeys.has(
+        buildInvoiceWorksheetGroupKey({
+          shipmentBoxId: match.target.shipmentBoxId,
+          orderId: match.target.orderId,
+        }),
+      ),
+  );
   const requestBatchOnce = async (items: CoupangInvoiceTarget[]) => {
     const payload = await requestCoupangJson({
       credentials: {
@@ -3027,12 +3115,50 @@ async function submitInvoiceAction(input: {
         }),
     );
   };
+  const buildOrderedResponse = (validResults: CoupangActionItemResult[]) =>
+    buildActionResponse(
+      buildInvoiceTargetResultMap(input.items, [...validResults, ...blockedResults]).map(
+        (result, index) =>
+          result ??
+          createMissingInvoiceResult({
+            action,
+            item: input.items[index],
+            attemptedRetry: false,
+          }),
+      ),
+    );
+  const buildPatchState = (response: CoupangBatchActionResponse, target: CoupangInvoiceTarget) => {
+    const [result] = buildInvoiceTargetResultMap([target], response.items);
+    const invoiceTransmissionStatus =
+      result?.status === "succeeded" ? ("succeeded" as const) : ("failed" as const);
+
+    return {
+      invoiceTransmissionStatus,
+      invoiceTransmissionMessage: result?.message ?? "송장 전송 결과를 확인하지 못했습니다.",
+      invoiceTransmissionAt: response.completedAt,
+      invoiceAppliedAt:
+        result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
+    };
+  };
+
+  if (!validItems.length) {
+    const response = buildOrderedResponse([]);
+
+    await patchInvoiceWorksheetMatches({
+      storeId: input.storeId,
+      mode: input.mode,
+      matches: worksheetMatches,
+      resolveState: (target) => buildPatchState(response, target),
+    });
+
+    return response;
+  }
 
   const transmissionStartedAt = new Date().toISOString();
   await patchInvoiceWorksheetMatches({
     storeId: input.storeId,
     mode: input.mode,
-    matches: worksheetMatches,
+    matches: validWorksheetMatches,
     resolveState: () => ({
       invoiceTransmissionStatus: "pending",
       invoiceTransmissionMessage: null,
@@ -3044,52 +3170,31 @@ async function submitInvoiceAction(input: {
   let response: CoupangBatchActionResponse;
 
   try {
-    response = buildActionResponse(
+    response = buildOrderedResponse(
       await reconcileInvoiceResultsWithLiveState({
         store,
-        targets: input.items,
-        results: await requestBatch(input.items),
+        targets: validItems,
+        results: await requestBatch(validItems),
       }),
     );
     await patchInvoiceWorksheetMatches({
       storeId: input.storeId,
       mode: input.mode,
       matches: worksheetMatches,
-      resolveState: (target) => {
-        const result =
-          response.items.find(
-            (item) =>
-              buildInvoiceWorksheetGroupKey({
-                shipmentBoxId: item.shipmentBoxId,
-                orderId: item.orderId,
-              }) ===
-              buildInvoiceWorksheetGroupKey({
-                shipmentBoxId: target.shipmentBoxId,
-                orderId: target.orderId,
-              }),
-          ) ?? null;
-
-        return {
-          invoiceTransmissionStatus: result?.status === "succeeded" ? "succeeded" : "failed",
-          invoiceTransmissionMessage: result?.message ?? "송장 전송 결과를 확인하지 못했습니다.",
-          invoiceTransmissionAt: response.completedAt,
-          invoiceAppliedAt:
-            result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
-        };
-      },
+      resolveState: (target) => buildPatchState(response, target),
     });
 
     return response;
   } catch {
     const fallbackItems = await mapWithConcurrency(
-      input.items,
+      validItems,
       ACTION_CONCURRENCY,
       async (item) => requestSingleInvoice(item),
     );
-    response = buildActionResponse(
+    response = buildOrderedResponse(
       await reconcileInvoiceResultsWithLiveState({
         store,
-        targets: input.items,
+        targets: validItems,
         results: fallbackItems,
       }),
     );
@@ -3097,28 +3202,7 @@ async function submitInvoiceAction(input: {
       storeId: input.storeId,
       mode: input.mode,
       matches: worksheetMatches,
-      resolveState: (target) => {
-        const result =
-          response.items.find(
-            (item) =>
-              buildInvoiceWorksheetGroupKey({
-                shipmentBoxId: item.shipmentBoxId,
-                orderId: item.orderId,
-              }) ===
-              buildInvoiceWorksheetGroupKey({
-                shipmentBoxId: target.shipmentBoxId,
-                orderId: target.orderId,
-              }),
-          ) ?? null;
-
-        return {
-          invoiceTransmissionStatus: result?.status === "succeeded" ? "succeeded" : "failed",
-          invoiceTransmissionMessage: result?.message ?? "송장 전송 결과를 확인하지 못했습니다.",
-          invoiceTransmissionAt: response.completedAt,
-          invoiceAppliedAt:
-            result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
-        };
-      },
+      resolveState: (target) => buildPatchState(response, target),
     });
 
     return response;

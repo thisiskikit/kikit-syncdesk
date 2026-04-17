@@ -1413,6 +1413,41 @@ describe("coupang order service", () => {
     });
   });
 
+  it("fails fast without calling Coupang when invoice payload is a placeholder row", async () => {
+    const result = await uploadInvoice({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "101",
+          orderId: "202",
+          vendorItemId: "303",
+          deliveryCompanyCode: "Test Store",
+          invoiceNumber: "CS이관",
+        },
+      ],
+    });
+
+    expect(requestCoupangJsonMock).not.toHaveBeenCalled();
+    expect(result.items[0]).toMatchObject({
+      shipmentBoxId: "101",
+      orderId: "202",
+      vendorItemId: "303",
+      status: "failed",
+      retryRequired: false,
+      message: "CS 이관 표시 행은 실제 송장 전송 대상이 아닙니다.",
+    });
+    expect(patchRowsMock.mock.calls[0]?.[0]).toMatchObject({
+      storeId: "store-1",
+      items: [
+        expect.objectContaining({
+          sourceKey: "store-1:101:303",
+          invoiceTransmissionStatus: "failed",
+          invoiceTransmissionMessage: "CS 이관 표시 행은 실제 송장 전송 대상이 아닙니다.",
+        }),
+      ],
+    });
+  });
+
   it("splits prepare requests into 50-item batches", async () => {
     requestCoupangJsonMock
       .mockResolvedValueOnce({

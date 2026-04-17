@@ -96,6 +96,8 @@ docs/
   - batch 응답에서 일부 결과가 빠지면 누락된 `shipmentBoxId`만 개별 재시도해 worksheet 최종 상태를 보정합니다.
   - `invoice_ready` resolve는 전송 직전 후보 `shipmentBoxId`를 한 번 더 `shipment_boxes` refresh로 재수화해 stale worksheet 상태를 바로잡습니다.
   - 송장 입력 모드의 상단 일괄 전송 버튼은 현재 페이지에 송장 payload가 남아 있으면 stale `availableActions`만으로 시작을 막지 않고, 실제 전송 가능 여부는 위 refresh 이후에 다시 확정합니다.
+  - 같은 버튼은 `ACCEPT` 상태지만 송장 payload가 이미 들어간 행을 먼저 `markPreparing`으로 자동 처리한 뒤 이어서 송장을 전송합니다.
+  - `CS이관` placeholder, 스토어명 오입력 같은 비정상 payload는 클라이언트 후보 계산과 서버 전송 단계에서 모두 제외합니다.
   - `updateInvoice` 경고가 와도 live 상세에 같은 송장번호가 이미 반영돼 있으면 서버가 이를 성공으로 승격해 ambiguous warning을 worksheet 실패로 남기지 않습니다.
 - `결제완료 -> 상품준비중`
   - 선행 `수집 누락 audit`와 `prepare_ready resolve`는 유지합니다.

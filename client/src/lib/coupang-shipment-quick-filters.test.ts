@@ -169,6 +169,18 @@ describe("invoice transmission quick filters", () => {
     expect(canAttemptInvoiceRow(claimRow)).toBe(false);
     expect(canSendInvoiceRow(claimRow)).toBe(false);
   });
+
+  it("excludes placeholder invoice rows that contain a store name or CS marker", () => {
+    const placeholderRow = createRow({
+      storeName: "쿠팡_올케이팝",
+      deliveryCompanyCode: "쿠팡_올케이팝",
+      invoiceNumber: "CS이관",
+      availableActions: ["uploadInvoice"],
+    });
+
+    expect(canAttemptInvoiceRow(placeholderRow)).toBe(false);
+    expect(canSendInvoiceRow(placeholderRow)).toBe(false);
+  });
 });
 
 describe("buildShipmentQuickFilterResult", () => {

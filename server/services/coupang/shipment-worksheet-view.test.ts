@@ -219,6 +219,41 @@ describe("shipment worksheet view", () => {
     expect(resolved.resolvedCount).toBe(1);
   });
 
+  it("excludes placeholder invoice rows from invoice-ready resolution", () => {
+    const rows = [
+      buildRow({
+        id: "placeholder",
+        status: "INSTRUCT",
+        storeName: "쿠팡_올케이팝",
+        deliveryCompanyCode: "쿠팡_올케이팝",
+        invoiceNumber: "CS이관",
+        availableActions: ["uploadInvoice"],
+      }),
+      buildRow({
+        id: "valid",
+        status: "INSTRUCT",
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645330736",
+        availableActions: ["uploadInvoice"],
+      }),
+    ];
+
+    const resolved = resolveShipmentWorksheetRows(
+      rows,
+      {
+        scope: "all",
+        page: 1,
+        pageSize: 50,
+      },
+      "invoice_ready",
+    );
+
+    expect(resolved.items.map((row) => row.id)).toEqual(["valid"]);
+    expect(resolved.blockedItems).toHaveLength(0);
+    expect(resolved.matchedCount).toBe(2);
+    expect(resolved.resolvedCount).toBe(1);
+  });
+
   it("resolves prepare-ready rows from the current view query", () => {
     const rows = [
       buildRow({

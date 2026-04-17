@@ -2,6 +2,7 @@ import {
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { resolveCoupangInvoiceTransmissionBlockReason } from "@shared/coupang-invoice";
 import { hasCoupangCustomerServiceIssue } from "@/lib/coupang-customer-service";
 import { resolveCoupangDisplayOrderStatus } from "@/lib/coupang-order-status";
 
@@ -143,6 +144,11 @@ export function canAttemptInvoiceRow(row: CoupangShipmentWorksheetRow) {
     hasInvoicePayload(row) &&
     row.invoiceTransmissionStatus !== "pending" &&
     !hasAppliedInvoiceTransmission(row) &&
+    !resolveCoupangInvoiceTransmissionBlockReason({
+      deliveryCompanyCode: row.deliveryCompanyCode,
+      invoiceNumber: row.invoiceNumber,
+      storeName: row.storeName,
+    }) &&
     !hasCoupangCustomerServiceIssue({
       summary: row.customerServiceIssueSummary,
       count: row.customerServiceIssueCount,

@@ -128,6 +128,7 @@ import {
   buildOptimisticPrepareRowUpdates,
   buildPrepareAcceptedOrdersFeedback,
   getSucceededPrepareShipmentBoxIds,
+  resolveInvoiceAutoPrepareRows,
   resolvePrepareAcceptedOrdersPlan,
 } from "./shipment-prepare-flow";
 import {
@@ -3983,6 +3984,58 @@ export default function CoupangShipmentsPage() {
       scope === "selected"
         ? selectedRows.map((row) => refreshedSelectedRowById.get(row.id) ?? row)
         : [];
+    let autoPreparedSummary: string | null = null;
+    let autoPreparedFailureDetails: string[] = [];
+
+    if (scope === "ready") {
+      const prepareResolvedRows = await resolveWorksheetBulkRows("prepare_ready");
+      const autoPrepareRows = resolveInvoiceAutoPrepareRows(prepareResolvedRows?.items ?? []);
+
+      if (autoPrepareRows.length > 0) {
+        const prepareResult = await apiRequestJson<CoupangBatchActionResponse>(
+          "POST",
+          "/api/coupang/orders/prepare",
+          {
+            storeId: filters.selectedStoreId,
+            items: autoPrepareRows.map(
+              (row) =>
+                ({
+                  shipmentBoxId: row.shipmentBoxId,
+                  orderId: row.orderId,
+                  productName: row.productName,
+                }) satisfies CoupangPrepareTarget,
+            ),
+          },
+        );
+
+        if (prepareResult.operation) {
+          publishOperation(prepareResult.operation);
+        }
+
+        autoPreparedFailureDetails = buildFailureDetails(prepareResult);
+        if (prepareResult.summary.succeededCount > 0) {
+          autoPreparedSummary = `상품준비중 ${prepareResult.summary.succeededCount}건 자동 처리`;
+        }
+
+        const succeededPrepareShipmentBoxIds = getSucceededPrepareShipmentBoxIds(prepareResult);
+        if (succeededPrepareShipmentBoxIds.length > 0) {
+          applyWorksheetRowUpdates(
+            buildOptimisticPrepareRowUpdates({
+              rows: effectiveDraftRows,
+              shipmentBoxIds: succeededPrepareShipmentBoxIds,
+              updatedAt: new Date().toISOString(),
+            }),
+            { markDirty: false },
+          );
+          await refreshWorksheetInBackground({
+            storeId: filters.selectedStoreId,
+            scope: "shipment_boxes",
+            shipmentBoxIds: succeededPrepareShipmentBoxIds,
+          });
+        }
+      }
+    }
+
     const resolvedRows =
       scope === "selected" ? null : await resolveWorksheetBulkRows("invoice_ready");
     const blockedDecisionRows =
@@ -4012,7 +4065,11 @@ export default function CoupangShipmentsPage() {
             : resolvedRows?.matchedCount
               ? "클레임 또는 현재 상태 때문에 전송 가능한 송장 행이 없습니다."
               : "전송할 신규/실패 송장 행이 없습니다. 이미 완료된 행은 값을 수정하면 다시 전송할 수 있습니다.",
-        details: [...blockedDecisionDetails, ...blockedClaimDetails],
+        details: [
+          ...blockedDecisionDetails,
+          ...autoPreparedFailureDetails,
+          ...blockedClaimDetails,
+        ].slice(0, 8),
       });
       return;
     }
@@ -4209,19 +4266,28 @@ export default function CoupangShipmentsPage() {
       await refetchWorksheetView();
 
       const mergedShipmentRowCount = transmissionRows.length - invoiceTransmissionGroups.length;
-      const summaryBase =
-        mergedShipmentRowCount > 0
-          ? `${buildResultSummary(combined)} / 합배송 ${mergedShipmentRowCount}행 묶음 처리`
-          : buildResultSummary(combined);
+      const summaryBaseParts = [buildResultSummary(combined)];
+      if (autoPreparedSummary) {
+        summaryBaseParts.push(autoPreparedSummary);
+      }
+      if (mergedShipmentRowCount > 0) {
+        summaryBaseParts.push(`합배송 ${mergedShipmentRowCount}행 묶음 처리`);
+      }
+      const summaryBase = summaryBaseParts.join(" / ");
       const summary =
         skippedRowCount > 0 || blockedDecisionRows.length > 0
           ? `${summaryBase}${skippedRowCount > 0 ? ` / 오류 ${skippedRowCount}행 건너뜀` : ""}${blockedDecisionRows.length > 0 ? ` / 확인 필요 ${blockedDecisionRows.length}행 자동 제외` : ""}`
           : summaryBase;
-      const detailLines = [...buildFailureDetails(combined), ...validationErrors].slice(0, 8);
+      const detailLines = [
+        ...autoPreparedFailureDetails,
+        ...buildFailureDetails(combined),
+        ...validationErrors,
+      ].slice(0, 8);
       setFeedback({
         type:
           blockedDecisionRows.length > 0 ||
           blockedClaimDetails.length > 0 ||
+          autoPreparedFailureDetails.length > 0 ||
           validationErrors.length > 0 ||
           combined.summary.failedCount > 0 ||
           combined.summary.warningCount > 0 ||
@@ -4249,6 +4315,8 @@ export default function CoupangShipmentsPage() {
       finishLocalOperation(localToastId, {
         status:
           blockedDecisionRows.length > 0 ||
+          blockedClaimDetails.length > 0 ||
+          autoPreparedFailureDetails.length > 0 ||
           validationErrors.length > 0 ||
           combined.summary.failedCount > 0 ||
           combined.summary.warningCount > 0 ||

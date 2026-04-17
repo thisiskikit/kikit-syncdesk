@@ -92,6 +92,8 @@
 - `invoice_ready` / `prepare_ready` bulk resolve는 전송·처리 직전에 후보 `shipmentBoxId`를 `shipment_boxes` refresh로 다시 맞춰 stale `orderStatus`/`vendorItemId` 때문에 정상 건이 빠지지 않게 합니다.
 - 선택 송장 전송도 클릭 시점에 선택 `shipmentBoxId`를 먼저 refresh한 뒤 최신 행 스냅샷으로 검증/전송하고, 성공 건은 다시 `shipment_boxes` refresh를 붙여 화면 상태를 따라갑니다.
 - 송장 입력 모드의 상단 `송장 전송하기` 버튼은 현재 페이지에 송장 payload가 남아 있으면 stale `availableActions` 때문에 시작 자체를 막지 않고, 실제 전송 가능 여부는 직전 refresh + bulk resolve에서 다시 판정합니다.
+- 송장 입력 모드의 상단 `송장 전송하기`는 현재 페이지의 `상품준비중(ACCEPT)` 행 중 송장 payload가 이미 입력된 건을 먼저 `상품준비중 처리`로 자동 전환한 뒤 이어서 송장을 전송합니다.
+- `CS이관` 같은 placeholder 값이나 스토어명이 택배사 칸에 들어간 행은 송장 전송 대상에서 즉시 제외하고, 서버도 쿠팡 호출 전에 같은 규칙으로 fail-fast 처리합니다.
 - 쿠팡 `updateInvoice`가 `retryRequired=true / UNDEFINED_ERROR_OCCUR`를 반환해도, 직후 live 상세에서 같은 송장번호가 이미 보이면 서버가 이를 멱등 성공으로 승격해 worksheet 실패 상태를 남기지 않습니다.
 - Naver 발송은 이미 발송된 주문 응답을 멱등 성공으로 처리해 불필요한 실패 누적을 줄입니다.
 - worksheet 읽기(`getShipmentWorksheet`, `worksheet/view`, bulk resolve)는 CS 요약 캐시를 존중하고, 조회 시마다 강제 live 클레임 재조회나 전체 worksheet 재저장을 수행하지 않습니다.

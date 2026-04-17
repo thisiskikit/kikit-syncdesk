@@ -9,6 +9,7 @@ import {
   buildOptimisticPrepareRowUpdates,
   buildPrepareAcceptedOrdersFeedback,
   getSucceededPrepareShipmentBoxIds,
+  resolveInvoiceAutoPrepareRows,
   resolvePrepareAcceptedOrdersPlan,
 } from "./shipment-prepare-flow";
 
@@ -223,6 +224,45 @@ describe("shipment prepare flow helpers", () => {
     });
 
     expect(shipmentBoxIds).toEqual(["BOX-row-1"]);
+  });
+
+  it("selects only invoice-ready prepare rows for automatic prepare-before-send flow", () => {
+    const autoPrepareRows = resolveInvoiceAutoPrepareRows([
+      createRow({
+        id: "prepare-with-invoice",
+        shipmentBoxId: "BOX-row-1",
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645330736",
+        availableActions: ["markPreparing"],
+      }),
+      createRow({
+        id: "prepare-without-invoice",
+        shipmentBoxId: "BOX-row-2",
+        availableActions: ["markPreparing"],
+      }),
+      createRow({
+        id: "already-uploadable",
+        shipmentBoxId: "BOX-row-3",
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645330737",
+        availableActions: ["uploadInvoice"],
+        orderStatus: "INSTRUCT",
+      }),
+      createRow({
+        id: "claim-blocked",
+        shipmentBoxId: "BOX-row-4",
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645330738",
+        availableActions: ["markPreparing"],
+        customerServiceIssueCount: 1,
+        customerServiceIssueSummary: "출고중지 요청 1건",
+        customerServiceIssueBreakdown: [
+          { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+        ],
+      }),
+    ]);
+
+    expect(autoPrepareRows.map((row) => row.id)).toEqual(["prepare-with-invoice"]);
   });
 
   it("builds optimistic row updates for succeeded prepare rows only", () => {
