@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requestCoupangJsonMock, getStoreMock } = vi.hoisted(() => ({
+const { requestCoupangJsonMock, getStoreMock, getStoreSheetMock, patchRowsMock } = vi.hoisted(() => ({
   requestCoupangJsonMock: vi.fn(),
   getStoreMock: vi.fn(),
+  getStoreSheetMock: vi.fn(),
+  patchRowsMock: vi.fn(),
 }));
 
 vi.mock("./api-client", () => ({
@@ -12,6 +14,13 @@ vi.mock("./api-client", () => ({
 vi.mock("./settings-store", () => ({
   coupangSettingsStore: {
     getStore: getStoreMock,
+  },
+}));
+
+vi.mock("./shipment-worksheet-store", () => ({
+  coupangShipmentWorksheetStore: {
+    getStoreSheet: getStoreSheetMock,
+    patchRows: patchRowsMock,
   },
 }));
 
@@ -243,6 +252,25 @@ describe("coupang order service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        {
+          sourceKey: "store-1:101:303",
+          shipmentBoxId: "101",
+          orderId: "202",
+        },
+        {
+          sourceKey: "store-1:102:304",
+          shipmentBoxId: "102",
+          orderId: "203",
+        },
+      ],
+    });
+    patchRowsMock.mockResolvedValue({
+      sheet: null,
+      missingKeys: [],
+      touchedSourceKeys: [],
+    });
   });
 
   it("keeps the single-status lookup path when a status filter is provided", async () => {
@@ -1182,6 +1210,120 @@ describe("coupang order service", () => {
     expect((requestCoupangJsonMock.mock.calls[0]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":102');
     expect((requestCoupangJsonMock.mock.calls[1]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":101');
     expect((requestCoupangJsonMock.mock.calls[2]?.[0] as MockApiInput).body).toContain('"shipmentBoxId":102');
+  });
+
+  it("retries invoice items that are missing from the batch response", async () => {
+    requestCoupangJsonMock
+      .mockResolvedValueOnce({
+        data: {
+          responseList: [
+            {
+              shipmentBoxId: "101",
+              succeed: true,
+              retryRequired: false,
+              resultCode: "OK",
+              resultMessage: "uploaded",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          responseList: [
+            {
+              shipmentBoxId: "102",
+              succeed: true,
+              retryRequired: false,
+              resultCode: "OK",
+              resultMessage: "uploaded-after-retry",
+            },
+          ],
+        },
+      });
+
+    const result = await uploadInvoice({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "101",
+          orderId: "202",
+          vendorItemId: "303",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "INV-100",
+        },
+        {
+          shipmentBoxId: "102",
+          orderId: "203",
+          vendorItemId: "304",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "INV-101",
+        },
+      ],
+    });
+
+    expect(requestCoupangJsonMock).toHaveBeenCalledTimes(2);
+    expect(result.summary.succeededCount).toBe(2);
+    expect(result.items[1]).toMatchObject({
+      shipmentBoxId: "102",
+      status: "succeeded",
+      message: "uploaded-after-retry",
+    });
+  });
+
+  it("updates worksheet transmission state on the server before and after invoice upload", async () => {
+    requestCoupangJsonMock.mockResolvedValue({
+      data: {
+        responseList: [
+          {
+            shipmentBoxId: "101",
+            succeed: true,
+            retryRequired: false,
+            resultCode: "OK",
+            resultMessage: "uploaded",
+          },
+        ],
+      },
+    });
+
+    await uploadInvoice({
+      storeId: "store-1",
+      items: [
+        {
+          shipmentBoxId: "101",
+          orderId: "202",
+          vendorItemId: "303",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "INV-100",
+        },
+      ],
+    });
+
+    expect(patchRowsMock).toHaveBeenCalledTimes(2);
+    expect(patchRowsMock.mock.calls[0]?.[0]).toMatchObject({
+      storeId: "store-1",
+      items: [
+        expect.objectContaining({
+          sourceKey: "store-1:101:303",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "INV-100",
+          invoiceTransmissionStatus: "pending",
+          invoiceTransmissionMessage: null,
+          invoiceAppliedAt: null,
+        }),
+      ],
+    });
+    expect(patchRowsMock.mock.calls[1]?.[0]).toMatchObject({
+      storeId: "store-1",
+      items: [
+        expect.objectContaining({
+          sourceKey: "store-1:101:303",
+          invoiceTransmissionStatus: "succeeded",
+        }),
+      ],
+    });
+    expect(patchRowsMock.mock.calls[1]?.[0].items[0]).toMatchObject({
+      invoiceTransmissionMessage: "uploaded",
+    });
   });
 
   it("splits prepare requests into 50-item batches", async () => {

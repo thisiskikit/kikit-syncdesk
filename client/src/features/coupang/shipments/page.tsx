@@ -29,7 +29,6 @@ import {
   type CoupangReturnRow,
   type CoupangShipmentArchiveRow,
   type CoupangShipmentArchiveViewResponse,
-  type CoupangShipmentInvoiceTransmissionStatus,
   type CoupangShipmentWorksheetAuditMissingResponse,
   type CoupangShipmentWorksheetInvoiceInputApplyResponse,
   type CoupangShipmentWorksheetInvoiceInputApplyRow,
@@ -3589,6 +3588,21 @@ export default function CoupangShipmentsPage() {
         });
       }
 
+      let autoAuditResponse: CoupangShipmentWorksheetAuditMissingResponse | null = null;
+      if (syncMode === "new_only" && response.syncSummary?.autoAuditRecommended) {
+        try {
+          autoAuditResponse = await requestShipmentAuditMissingForCurrentFilters();
+          if (autoAuditResponse) {
+            setAuditResult(autoAuditResponse);
+            if (autoAuditResponse.missingCount > 0 || autoAuditResponse.hiddenCount > 0) {
+              setIsAuditDialogOpen(true);
+            }
+          }
+        } catch {
+          autoAuditResponse = null;
+        }
+      }
+
       if (!options?.silent) {
         const modeLabel =
           response.syncSummary?.mode === "full"
@@ -3610,7 +3624,12 @@ export default function CoupangShipmentsPage() {
                 ? "배송 시트 전체 재수집 완료"
                 : "신규 주문 빠른 수집 완료",
           message: response.message ? `${summary} ${response.message}` : summary,
-          details: [],
+          details: [
+            ...(response.syncSummary?.failedStatuses?.length
+              ? [`실패한 주문 상태 조회: ${response.syncSummary.failedStatuses.join(", ")}`]
+              : []),
+            ...(autoAuditResponse ? buildShipmentWorksheetAuditDetails(autoAuditResponse) : []),
+          ].slice(0, 8),
         });
       }
 
@@ -4087,15 +4106,20 @@ export default function CoupangShipmentsPage() {
     setFeedback(null);
 
     try {
-      await patchWorksheetRows(
-        transmissionRows.map((row) =>
-          buildWorksheetPatchItem(row, {
-            invoiceTransmissionStatus: "pending",
-            invoiceTransmissionMessage: null,
-            invoiceTransmissionAt: transmissionStartedAt,
-            invoiceAppliedAt: null,
-          }),
+      applyWorksheetRowUpdates(
+        new Map(
+          transmissionRows.map((row) => [
+            row.id,
+            {
+              ...row,
+              invoiceTransmissionStatus: "pending" as const,
+              invoiceTransmissionMessage: null,
+              invoiceTransmissionAt: transmissionStartedAt,
+              invoiceAppliedAt: null,
+            },
+          ]),
         ),
+        { markDirty: false },
       );
 
       const results: CoupangBatchActionResponse[] = [];
@@ -4131,91 +4155,12 @@ export default function CoupangShipmentsPage() {
       }
 
       const rowByInvoiceIdentity = mapRowsByInvoiceIdentity(transmissionRows);
-      const rowsByTransmissionGroupKey = new Map(
-        invoiceTransmissionGroups.map((group) => [group.key, group.rows] as const),
-      );
       const combined = combineBatchResults(
         results.map((result) =>
           normalizeRepeatedInvoiceBatchResult(result, rowByInvoiceIdentity, previousRowBySourceKey),
         ),
       );
-      const transmissionStateBySourceKey = new Map<
-        string,
-        {
-          status: CoupangShipmentInvoiceTransmissionStatus;
-          message: string | null;
-          appliedAt: string | null;
-          transmissionAt: string;
-        }
-      >();
-
-      for (const item of combined.items) {
-        if (!item.shipmentBoxId || !item.orderId) {
-          continue;
-        }
-
-        const groupRows = rowsByTransmissionGroupKey.get(
-          buildInvoiceTransmissionGroupKey({
-            shipmentBoxId: item.shipmentBoxId,
-            orderId: item.orderId,
-          }),
-        );
-        if (!groupRows?.length) {
-          continue;
-        }
-
-        const nextState = {
-          status: item.status === "succeeded" ? "succeeded" : "failed",
-          message: item.message || null,
-          appliedAt: item.status === "succeeded" ? item.appliedAt ?? combined.completedAt : null,
-          transmissionAt: combined.completedAt,
-        } satisfies {
-          status: CoupangShipmentInvoiceTransmissionStatus;
-          message: string | null;
-          appliedAt: string | null;
-          transmissionAt: string;
-        };
-
-        for (const row of groupRows) {
-          transmissionStateBySourceKey.set(row.sourceKey, nextState);
-        }
-      }
-
-      for (const row of transmissionRows) {
-        if (transmissionStateBySourceKey.has(row.sourceKey)) {
-          continue;
-        }
-
-        const previousRow = previousRowBySourceKey.get(row.sourceKey);
-        if (shouldPreserveSucceededInvoiceState(row, previousRow)) {
-          transmissionStateBySourceKey.set(row.sourceKey, {
-            status: "succeeded",
-            message: resolveRepeatedInvoiceMessage(previousRow),
-            appliedAt: previousRow?.invoiceAppliedAt ?? combined.completedAt,
-            transmissionAt: combined.completedAt,
-          });
-          continue;
-        }
-
-        transmissionStateBySourceKey.set(row.sourceKey, {
-          status: "failed",
-          message: "전송 결과를 확인하지 못했습니다.",
-          appliedAt: null,
-          transmissionAt: combined.completedAt,
-        });
-      }
-
-      await patchWorksheetRows(
-        transmissionRows.map((row) => {
-          const state = transmissionStateBySourceKey.get(row.sourceKey);
-          return buildWorksheetPatchItem(row, {
-            invoiceTransmissionStatus: state?.status ?? "failed",
-            invoiceTransmissionMessage: state?.message ?? null,
-            invoiceTransmissionAt: state?.transmissionAt ?? combined.completedAt,
-            invoiceAppliedAt: state?.appliedAt ?? null,
-          });
-        }),
-      );
+      await refetchWorksheetView();
 
       const mergedShipmentRowCount = transmissionRows.length - invoiceTransmissionGroups.length;
       const summaryBase =
@@ -4258,28 +4203,32 @@ export default function CoupangShipmentsPage() {
       const failedAt = new Date().toISOString();
 
       try {
-        await patchWorksheetRows(
-          transmissionRows.map((row) => {
-            const previousRow = previousRowBySourceKey.get(row.sourceKey);
-            if (shouldPreserveSucceededInvoiceState(row, previousRow)) {
-              return buildWorksheetPatchItem(row, {
-                invoiceTransmissionStatus: "succeeded",
-                invoiceTransmissionMessage: resolveRepeatedInvoiceMessage(previousRow),
-                invoiceTransmissionAt: previousRow?.invoiceTransmissionAt ?? failedAt,
-                invoiceAppliedAt: previousRow?.invoiceAppliedAt ?? failedAt,
-              });
-            }
-
-            return buildWorksheetPatchItem(row, {
-              invoiceTransmissionStatus: "failed",
-              invoiceTransmissionMessage: message,
-              invoiceTransmissionAt: failedAt,
-              invoiceAppliedAt: null,
-            });
-          }),
-        );
+        await refetchWorksheetView();
       } catch {
-        // Ignore secondary patch failures and surface the original error below.
+        const recoveryUpdates = new Map<string, CoupangShipmentWorksheetRow>();
+        for (const row of transmissionRows) {
+          const previousRow = previousRowBySourceKey.get(row.sourceKey);
+          if (shouldPreserveSucceededInvoiceState(row, previousRow)) {
+            recoveryUpdates.set(row.id, {
+              ...row,
+              invoiceTransmissionStatus: "succeeded",
+              invoiceTransmissionMessage: resolveRepeatedInvoiceMessage(previousRow),
+              invoiceTransmissionAt: previousRow?.invoiceTransmissionAt ?? failedAt,
+              invoiceAppliedAt: previousRow?.invoiceAppliedAt ?? failedAt,
+            });
+            continue;
+          }
+
+          recoveryUpdates.set(row.id, {
+            ...row,
+            invoiceTransmissionStatus: "failed",
+            invoiceTransmissionMessage: message,
+            invoiceTransmissionAt: failedAt,
+            invoiceAppliedAt: null,
+          });
+        }
+
+        applyWorksheetRowUpdates(recoveryUpdates, { markDirty: false });
       }
 
       setFeedback({

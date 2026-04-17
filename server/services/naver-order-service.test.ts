@@ -26,7 +26,7 @@ vi.mock("./logs/service", () => ({
   recordExternalRequestEvent: vi.fn(async () => undefined),
 }));
 
-import { getOrderDetail } from "./naver-order-service";
+import { dispatchOrders, getOrderDetail } from "./naver-order-service";
 
 describe("getOrderDetail", () => {
   beforeEach(() => {
@@ -120,5 +120,54 @@ describe("getOrderDetail", () => {
       claimReason: "단순변심",
       claimDetailReason: "색상이 예상과 다름",
     });
+  });
+});
+
+describe("dispatchOrders", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("treats already dispatched responses as succeeded", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: "ALREADY_DISPATCHED",
+          message: "이미 발송 처리된 주문입니다.",
+        }),
+        {
+          status: 400,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+
+    const result = await dispatchOrders({
+      storeId: "store-1",
+      items: [
+        {
+          productOrderId: "3001",
+          deliveryMethod: "DELIVERY",
+          courierCode: "CJGLS",
+          trackingNumber: "1234567890",
+          dispatchDate: "2026-03-29T10:00:00+09:00",
+        },
+      ],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      action: "dispatch",
+      status: "succeeded",
+      message: "이미 발송 처리된 주문입니다.",
+    });
+    expect(result.summary.succeededCount).toBe(1);
+    expect(result.summary.failedCount).toBe(0);
   });
 });

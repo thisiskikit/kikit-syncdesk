@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import {
   COUPANG_INVOICE_ALREADY_PROCESSED_MESSAGE,
   isCoupangInvoiceAlreadyProcessedResult,
@@ -426,6 +426,11 @@ function normalizeSyncSummary(
     warningPhases: Array.isArray(value.warningPhases)
       ? value.warningPhases.filter((item): item is CoupangShipmentWorksheetSyncSummary["warningPhases"][number] => typeof item === "string")
       : [],
+    degraded: value.degraded === true,
+    failedStatuses: Array.isArray(value.failedStatuses)
+      ? value.failedStatuses.filter((item): item is string => typeof item === "string")
+      : [],
+    autoAuditRecommended: value.autoAuditRecommended === true,
   } satisfies CoupangShipmentWorksheetSyncSummary;
 }
 
@@ -751,41 +756,43 @@ export class CoupangShipmentWorksheetStore {
     const timestamp = new Date();
     const sheetId = `sheet:${input.storeId}`;
 
-    await database
-      .insert(coupangShipmentSheets)
-      .values({
-        id: sheetId,
-        storeId: input.storeId,
-        collectedAt: toDateOrNull(nextEntry.collectedAt),
-        source: nextEntry.source,
-        message: nextEntry.message,
-        syncStateJson: nextEntry.syncState,
-        syncSummaryJson: nextEntry.syncSummary,
-        updatedAt: timestamp,
-      })
-      .onConflictDoUpdate({
-        target: coupangShipmentSheets.storeId,
-        set: {
+    await database.transaction(async (tx) => {
+      await tx
+        .insert(coupangShipmentSheets)
+        .values({
+          id: sheetId,
+          storeId: input.storeId,
           collectedAt: toDateOrNull(nextEntry.collectedAt),
           source: nextEntry.source,
           message: nextEntry.message,
           syncStateJson: nextEntry.syncState,
           syncSummaryJson: nextEntry.syncSummary,
           updatedAt: timestamp,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: coupangShipmentSheets.storeId,
+          set: {
+            collectedAt: toDateOrNull(nextEntry.collectedAt),
+            source: nextEntry.source,
+            message: nextEntry.message,
+            syncStateJson: nextEntry.syncState,
+            syncSummaryJson: nextEntry.syncSummary,
+            updatedAt: timestamp,
+          },
+        });
 
-    await database
-      .delete(coupangShipmentRows)
-      .where(eq(coupangShipmentRows.storeId, input.storeId));
+      await tx
+        .delete(coupangShipmentRows)
+        .where(eq(coupangShipmentRows.storeId, input.storeId));
 
-    if (nextEntry.items.length) {
-      await database.insert(coupangShipmentRows).values(
-        nextEntry.items.map((item, index) =>
-          buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId: input.storeId }),
-        ),
-      );
-    }
+      if (nextEntry.items.length) {
+        await tx.insert(coupangShipmentRows).values(
+          nextEntry.items.map((item, index) =>
+            buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId: input.storeId }),
+          ),
+        );
+      }
+    });
 
     return normalizeStoreEntry({
       ...nextEntry,
@@ -937,90 +944,252 @@ export class CoupangShipmentWorksheetStore {
   }
 
   async patchRows(input: { storeId: string; items: PatchCoupangShipmentWorksheetItemInput[] }) {
-    const current = await this.getStoreSheet(input.storeId);
-    const rows = [...current.items];
-    const rowIndexBySourceKey = new Map(rows.map((row, index) => [row.sourceKey, index] as const));
-    const rowIndexBySelpickOrderNumber = new Map(
-      rows.map((row, index) => [row.selpickOrderNumber, index] as const),
-    );
-    const missingKeys: string[] = [];
-    const touchedSourceKeys: string[] = [];
-
-    for (const patch of input.items) {
-      const index =
-        (patch.sourceKey ? rowIndexBySourceKey.get(patch.sourceKey) : undefined) ??
-        (patch.selpickOrderNumber
-          ? rowIndexBySelpickOrderNumber.get(patch.selpickOrderNumber)
-          : undefined);
-
-      if (index === undefined) {
-        missingKeys.push(
-          patch.sourceKey ??
-            patch.selpickOrderNumber ??
-            `patch-${missingKeys.length + touchedSourceKeys.length + 1}`,
-        );
-        continue;
-      }
-
-      const existingRow = rows[index];
-      const nextRow: CoupangShipmentWorksheetRow = {
-        ...existingRow,
-        receiverName:
-          patch.receiverName !== undefined
-            ? patch.receiverName ?? existingRow.receiverName
-            : existingRow.receiverName,
-        receiverBaseName:
-          patch.receiverBaseName !== undefined
-            ? patch.receiverBaseName
-            : existingRow.receiverBaseName,
-        personalClearanceCode:
-          patch.personalClearanceCode !== undefined
-            ? patch.personalClearanceCode
-            : existingRow.personalClearanceCode,
-        deliveryCompanyCode:
-          patch.deliveryCompanyCode !== undefined
-            ? (patch.deliveryCompanyCode ?? "").trim()
-            : existingRow.deliveryCompanyCode,
-        invoiceNumber:
-          patch.invoiceNumber !== undefined
-            ? (patch.invoiceNumber ?? "").trim()
-            : existingRow.invoiceNumber,
-        deliveryRequest:
-          patch.deliveryRequest !== undefined ? patch.deliveryRequest : existingRow.deliveryRequest,
-        invoiceTransmissionStatus:
-          patch.invoiceTransmissionStatus !== undefined
-            ? patch.invoiceTransmissionStatus
-            : existingRow.invoiceTransmissionStatus,
-        invoiceTransmissionMessage:
-          patch.invoiceTransmissionMessage !== undefined
-            ? patch.invoiceTransmissionMessage
-            : existingRow.invoiceTransmissionMessage,
-        invoiceTransmissionAt:
-          patch.invoiceTransmissionAt !== undefined
-            ? patch.invoiceTransmissionAt
-            : existingRow.invoiceTransmissionAt,
-        exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : existingRow.exportedAt,
-        invoiceAppliedAt:
-          patch.invoiceAppliedAt !== undefined ? patch.invoiceAppliedAt : existingRow.invoiceAppliedAt,
-        updatedAt: new Date().toISOString(),
+    if (!input.items.length) {
+      return {
+        sheet: await this.getStoreSheet(input.storeId),
+        missingKeys: [],
+        touchedSourceKeys: [],
       };
-
-      rows[index] = nextRow;
-      touchedSourceKeys.push(nextRow.sourceKey);
     }
 
-    const sheet = await this.setStoreSheet({
-      storeId: input.storeId,
-      items: rows,
-      collectedAt: current.collectedAt,
-      source: current.source,
-      message: current.message,
-      syncState: current.syncState,
-      syncSummary: current.syncSummary,
+    if (this.legacyMode) {
+      const current = await this.getStoreSheet(input.storeId);
+      const rows = [...current.items];
+      const rowIndexBySourceKey = new Map(rows.map((row, index) => [row.sourceKey, index] as const));
+      const rowIndexBySelpickOrderNumber = new Map(
+        rows.map((row, index) => [row.selpickOrderNumber, index] as const),
+      );
+      const missingKeys: string[] = [];
+      const touchedSourceKeys: string[] = [];
+
+      for (const patch of input.items) {
+        const index =
+          (patch.sourceKey ? rowIndexBySourceKey.get(patch.sourceKey) : undefined) ??
+          (patch.selpickOrderNumber
+            ? rowIndexBySelpickOrderNumber.get(patch.selpickOrderNumber)
+            : undefined);
+
+        if (index === undefined) {
+          missingKeys.push(
+            patch.sourceKey ??
+              patch.selpickOrderNumber ??
+              `patch-${missingKeys.length + touchedSourceKeys.length + 1}`,
+          );
+          continue;
+        }
+
+        const existingRow = rows[index];
+        const nextRow: CoupangShipmentWorksheetRow = {
+          ...existingRow,
+          receiverName:
+            patch.receiverName !== undefined
+              ? patch.receiverName ?? existingRow.receiverName
+              : existingRow.receiverName,
+          receiverBaseName:
+            patch.receiverBaseName !== undefined
+              ? patch.receiverBaseName
+              : existingRow.receiverBaseName,
+          personalClearanceCode:
+            patch.personalClearanceCode !== undefined
+              ? patch.personalClearanceCode
+              : existingRow.personalClearanceCode,
+          deliveryCompanyCode:
+            patch.deliveryCompanyCode !== undefined
+              ? (patch.deliveryCompanyCode ?? "").trim()
+              : existingRow.deliveryCompanyCode,
+          invoiceNumber:
+            patch.invoiceNumber !== undefined
+              ? (patch.invoiceNumber ?? "").trim()
+              : existingRow.invoiceNumber,
+          deliveryRequest:
+            patch.deliveryRequest !== undefined ? patch.deliveryRequest : existingRow.deliveryRequest,
+          invoiceTransmissionStatus:
+            patch.invoiceTransmissionStatus !== undefined
+              ? patch.invoiceTransmissionStatus
+              : existingRow.invoiceTransmissionStatus,
+          invoiceTransmissionMessage:
+            patch.invoiceTransmissionMessage !== undefined
+              ? patch.invoiceTransmissionMessage
+              : existingRow.invoiceTransmissionMessage,
+          invoiceTransmissionAt:
+            patch.invoiceTransmissionAt !== undefined
+              ? patch.invoiceTransmissionAt
+              : existingRow.invoiceTransmissionAt,
+          exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : existingRow.exportedAt,
+          invoiceAppliedAt:
+            patch.invoiceAppliedAt !== undefined
+              ? patch.invoiceAppliedAt
+              : existingRow.invoiceAppliedAt,
+          updatedAt: new Date().toISOString(),
+        };
+
+        rows[index] = nextRow;
+        touchedSourceKeys.push(nextRow.sourceKey);
+      }
+
+      const sheet = await this.setStoreSheet({
+        storeId: input.storeId,
+        items: rows,
+        collectedAt: current.collectedAt,
+        source: current.source,
+        message: current.message,
+        syncState: current.syncState,
+        syncSummary: current.syncSummary,
+      });
+
+      return {
+        sheet,
+        missingKeys,
+        touchedSourceKeys,
+      };
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const sourceKeys = Array.from(
+      new Set(
+        input.items
+          .map((item) => item.sourceKey?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const selpickOrderNumbers = Array.from(
+      new Set(
+        input.items
+          .map((item) => item.selpickOrderNumber?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const lookupConditions = [
+      sourceKeys.length ? inArray(coupangShipmentRows.sourceKey, sourceKeys) : null,
+      selpickOrderNumbers.length
+        ? inArray(coupangShipmentRows.selpickOrderNumber, selpickOrderNumbers)
+        : null,
+    ].filter((value): value is NonNullable<typeof value> => value !== null);
+
+    if (!lookupConditions.length) {
+      return {
+        sheet: await this.getStoreSheet(input.storeId),
+        missingKeys: input.items.map(
+          (item, index) => item.sourceKey ?? item.selpickOrderNumber ?? `patch-${index + 1}`,
+        ),
+        touchedSourceKeys: [],
+      };
+    }
+
+    const existingRows = await database
+      .select()
+      .from(coupangShipmentRows)
+      .where(
+        and(
+          eq(coupangShipmentRows.storeId, input.storeId),
+          or(...lookupConditions),
+        ),
+      );
+
+    const existingRowsBySourceKey = new Map(
+      existingRows.map((row) => [row.sourceKey, row] as const),
+    );
+    const existingRowsBySelpickOrderNumber = new Map(
+      existingRows.map((row) => [row.selpickOrderNumber, row] as const),
+    );
+    const timestamp = new Date();
+    const touchedSourceKeys: string[] = [];
+    const missingKeys: string[] = [];
+
+    await database.transaction(async (tx) => {
+      for (const patch of input.items) {
+        const databaseRow =
+          (patch.sourceKey ? existingRowsBySourceKey.get(patch.sourceKey) : undefined) ??
+          (patch.selpickOrderNumber
+            ? existingRowsBySelpickOrderNumber.get(patch.selpickOrderNumber)
+            : undefined);
+
+        if (!databaseRow) {
+          missingKeys.push(
+            patch.sourceKey ??
+              patch.selpickOrderNumber ??
+              `patch-${missingKeys.length + touchedSourceKeys.length + 1}`,
+          );
+          continue;
+        }
+
+        const existingRow = restoreWorksheetRowFromDatabaseRow(databaseRow);
+        const nextRow: CoupangShipmentWorksheetRow = {
+          ...existingRow,
+          receiverName:
+            patch.receiverName !== undefined
+              ? patch.receiverName ?? existingRow.receiverName
+              : existingRow.receiverName,
+          receiverBaseName:
+            patch.receiverBaseName !== undefined
+              ? patch.receiverBaseName
+              : existingRow.receiverBaseName,
+          personalClearanceCode:
+            patch.personalClearanceCode !== undefined
+              ? patch.personalClearanceCode
+              : existingRow.personalClearanceCode,
+          deliveryCompanyCode:
+            patch.deliveryCompanyCode !== undefined
+              ? (patch.deliveryCompanyCode ?? "").trim()
+              : existingRow.deliveryCompanyCode,
+          invoiceNumber:
+            patch.invoiceNumber !== undefined
+              ? (patch.invoiceNumber ?? "").trim()
+              : existingRow.invoiceNumber,
+          deliveryRequest:
+            patch.deliveryRequest !== undefined ? patch.deliveryRequest : existingRow.deliveryRequest,
+          invoiceTransmissionStatus:
+            patch.invoiceTransmissionStatus !== undefined
+              ? patch.invoiceTransmissionStatus
+              : existingRow.invoiceTransmissionStatus,
+          invoiceTransmissionMessage:
+            patch.invoiceTransmissionMessage !== undefined
+              ? patch.invoiceTransmissionMessage
+              : existingRow.invoiceTransmissionMessage,
+          invoiceTransmissionAt:
+            patch.invoiceTransmissionAt !== undefined
+              ? patch.invoiceTransmissionAt
+              : existingRow.invoiceTransmissionAt,
+          exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : existingRow.exportedAt,
+          invoiceAppliedAt:
+            patch.invoiceAppliedAt !== undefined
+              ? patch.invoiceAppliedAt
+              : existingRow.invoiceAppliedAt,
+          updatedAt: timestamp.toISOString(),
+        };
+
+        await tx
+          .update(coupangShipmentRows)
+          .set({
+            receiverName: nextRow.receiverName,
+            receiverBaseName: nextRow.receiverBaseName,
+            personalClearanceCode: nextRow.personalClearanceCode,
+            deliveryCompanyCode: nextRow.deliveryCompanyCode,
+            invoiceNumber: nextRow.invoiceNumber,
+            invoiceTransmissionStatus: nextRow.invoiceTransmissionStatus,
+            invoiceTransmissionMessage: nextRow.invoiceTransmissionMessage,
+            invoiceTransmissionAt: toDateOrNull(nextRow.invoiceTransmissionAt),
+            invoiceAppliedAt: toDateOrNull(nextRow.invoiceAppliedAt),
+            exportedAt: toDateOrNull(nextRow.exportedAt),
+            rowDataJson: buildCompactWorksheetRowData(nextRow),
+            updatedAt: timestamp,
+          })
+          .where(eq(coupangShipmentRows.id, databaseRow.id));
+
+        touchedSourceKeys.push(nextRow.sourceKey);
+      }
+
+      if (touchedSourceKeys.length) {
+        await tx
+          .update(coupangShipmentSheets)
+          .set({ updatedAt: timestamp })
+          .where(eq(coupangShipmentSheets.storeId, input.storeId));
+      }
     });
 
     return {
-      sheet,
+      sheet: await this.getStoreSheet(input.storeId),
       missingKeys,
       touchedSourceKeys,
     };

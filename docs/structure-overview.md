@@ -1,6 +1,6 @@
 ﻿# Structure Overview
 
-- 스냅샷 날짜: 2026-04-13
+- 스냅샷 날짜: 2026-04-17
 - 목적: 현재 KIKIT SyncDesk가 어떤 top-level 구조와 화면 책임을 가지는지 설명합니다.
 
 ## 1. 최상위 구조
@@ -84,12 +84,16 @@ docs/
 - `POST /api/coupang/shipments/collect`
   - 1차 수집만 담당합니다.
   - 범위: 주문 목록 조회, 클레임 병합, worksheet 반영, sync summary 기록
+  - `new_only` 빠른 수집은 일부 상태 조회 실패를 `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 남기고, 화면은 후속 누락 audit로 이어집니다.
 - `POST /api/coupang/shipments/worksheet/refresh`
   - 후속 보강만 담당합니다.
   - scope:
     - `pending_after_collect`
     - `shipment_boxes`
     - `customer_service`
+- `POST /api/coupang/shipments/invoices/upload|update`
+  - 서버가 worksheet 전송 상태를 먼저 `pending`으로 기록한 뒤 쿠팡 API를 호출합니다.
+  - batch 응답에서 일부 결과가 빠지면 누락된 `shipmentBoxId`만 개별 재시도해 worksheet 최종 상태를 보정합니다.
 - `결제완료 -> 상품준비중`
   - 선행 `수집 누락 audit`와 `prepare_ready resolve`는 유지합니다.
   - 성공 후 전체 `incremental collect`를 다시 기다리지 않고, 성공 행을 먼저 낙관 반영한 뒤 `shipment_boxes` scope refresh를 비동기로 붙입니다.
@@ -195,6 +199,8 @@ docs/
   - 출고 / CS / 작업센터 사이의 deep-link build/parse와 operation payload 기반 handoff 문맥 추출
 - `server/services/coupang/shipment-worksheet-service.ts`
   - collect 1차 반영과 refresh 후속 보강 분리
+- `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - DB 모드 worksheet 저장과 부분 row patch를 트랜잭션으로 처리
 - `server/http/handlers/coupang/shipments.ts`
   - collect / worksheet refresh tracked operation 핸들러
 

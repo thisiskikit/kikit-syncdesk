@@ -1156,6 +1156,9 @@ export interface CoupangShipmentWorksheetSyncSummary {
   completedPhases: CoupangShipmentWorksheetSyncPhase[];
   pendingPhases: CoupangShipmentWorksheetSyncPhase[];
   warningPhases: CoupangShipmentWorksheetSyncPhase[];
+  degraded?: boolean;
+  failedStatuses?: string[];
+  autoAuditRecommended?: boolean;
 }
 
 export interface CoupangShipmentWorksheetResponse {

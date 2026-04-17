@@ -1,6 +1,6 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-14
+- 스냅샷 날짜: 2026-04-17
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
@@ -79,6 +79,7 @@
 - `빠른 수집 / 전체 수집 / 증분 수집`은 1차로 `주문 목록 조회 + 클레임 병합 + worksheet 반영`까지만 완료하고 응답합니다.
 - 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 후속 단계로 분리됐고, collect 성공 직후 클라이언트가 non-blocking으로 이어서 호출합니다.
 - collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 `지금 끝난 단계`와 `이어질 보강 단계`를 함께 기록합니다.
+- `빠른 수집(new_only)`에서 일부 주문 상태 조회만 실패해도 전체 수집을 즉시 실패로 돌리지 않고, `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 부분 실패를 남긴 뒤 화면 경고와 누락 audit로 이어집니다.
 - 새로 추가된 주문의 `셀픽주문번호`는 기존 워크시트의 마지막 번호 다음 값으로 계속 증가하며, 추가 수집 시 날짜가 바뀌어도 다시 `0001`부터 시작하지 않습니다.
 - `옵션명` 컬럼은 collect 직후부터 `실제 옵션값` 기준으로 맞추고, 주문 목록의 노출 옵션 문자열은 `옵션명`에 다시 쓰지 않습니다.
 - 실제 옵션값을 collect 시점에 못 가져오면 기존 정상 `optionName`은 유지하고, 기존 값도 없으면 빈값으로 둡니다.
@@ -86,6 +87,9 @@
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
 - 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
+- 송장 업로드/수정은 서버가 worksheet 전송 상태를 `pending -> succeeded/failed`로 직접 기록하고, 클라이언트는 로컬 pending 표시 후 재조회만 수행합니다.
+- 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
+- Naver 발송은 이미 발송된 주문 응답을 멱등 성공으로 처리해 불필요한 실패 누적을 줄입니다.
 
 ### 보관함
 - `보관함`은 읽기 전용 archive 조회 화면입니다.
@@ -212,6 +216,7 @@
 
 ### 통과
 - `npm run check`
+- `npm test -- server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-service.test.ts server/services/naver-order-service.test.ts`
 - `npm exec vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
 - `npm exec vitest run --root . client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
 - `npm exec vitest run --root . client/src/lib/ops-handoff-links.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts client/src/pages/operation-center-recovery.test.ts`

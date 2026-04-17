@@ -20,6 +20,7 @@ import {
   type CoupangOrderDetailResponse,
   type CoupangOrderListResponse,
   type CoupangOrderRow,
+  type CoupangShipmentWorksheetRow,
   type CoupangPrepareTarget,
   type CoupangReturnActionTarget,
   type CoupangReturnCollectionInvoiceTarget,
@@ -43,6 +44,8 @@ import {
   getSampleCoupangSettlements,
   requestCoupangJson,
 } from "../../../infra/coupang/order-deps";
+import { coupangShipmentWorksheetStore } from "../../../services/coupang/shipment-worksheet-store";
+import { recordSystemErrorEvent } from "../../../services/logs/service";
 
 type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsStore.getStore>>>;
 type LooseObject = Record<string, unknown>;
@@ -679,6 +682,123 @@ function buildActionResponse(items: CoupangActionItemResult[]): CoupangBatchActi
     summary: summarizeActionItems(items),
     completedAt: new Date().toISOString(),
   };
+}
+
+function buildInvoiceWorksheetGroupKey(input: {
+  shipmentBoxId: string | null | undefined;
+  orderId: string | null | undefined;
+}) {
+  return `${input.shipmentBoxId?.trim() ?? ""}|${input.orderId?.trim() ?? ""}`;
+}
+
+type InvoiceWorksheetMatch = {
+  target: CoupangInvoiceTarget;
+  rows: CoupangShipmentWorksheetRow[];
+};
+
+async function findInvoiceWorksheetMatches(
+  storeId: string,
+  items: CoupangInvoiceTarget[],
+): Promise<InvoiceWorksheetMatch[]> {
+  const sheet = await coupangShipmentWorksheetStore.getStoreSheet(storeId);
+  const rowsByGroupKey = new Map<string, CoupangShipmentWorksheetRow[]>();
+
+  for (const row of sheet.items) {
+    const groupKey = buildInvoiceWorksheetGroupKey({
+      shipmentBoxId: row.shipmentBoxId,
+      orderId: row.orderId,
+    });
+    const existing = rowsByGroupKey.get(groupKey);
+    if (existing) {
+      existing.push(row);
+      continue;
+    }
+
+    rowsByGroupKey.set(groupKey, [row]);
+  }
+
+  return items
+    .map((target) => ({
+      target,
+      rows:
+        rowsByGroupKey.get(
+          buildInvoiceWorksheetGroupKey({
+            shipmentBoxId: target.shipmentBoxId,
+            orderId: target.orderId,
+          }),
+        ) ?? [],
+    }))
+    .filter((match) => match.rows.length > 0);
+}
+
+async function patchInvoiceWorksheetMatches(input: {
+  storeId: string;
+  mode: "upload" | "update";
+  matches: InvoiceWorksheetMatch[];
+  resolveState: (
+    target: CoupangInvoiceTarget,
+  ) => {
+    invoiceTransmissionStatus: "pending" | "succeeded" | "failed";
+    invoiceTransmissionMessage: string | null;
+    invoiceTransmissionAt: string | null;
+    invoiceAppliedAt: string | null;
+  };
+}) {
+  if (!input.matches.length) {
+    return;
+  }
+
+  const patchItems = input.matches.flatMap(({ target, rows }) => {
+    const state = input.resolveState(target);
+    return rows.map((row) => ({
+      sourceKey: row.sourceKey,
+      deliveryCompanyCode: target.deliveryCompanyCode.trim(),
+      invoiceNumber: target.invoiceNumber.trim(),
+      ...state,
+    }));
+  });
+
+  if (!patchItems.length) {
+    return;
+  }
+
+  try {
+    await coupangShipmentWorksheetStore.patchRows({
+      storeId: input.storeId,
+      items: patchItems,
+    });
+  } catch (error) {
+    void recordSystemErrorEvent({
+      source: "coupang.invoice.worksheet-patch",
+      channel: "coupang",
+      error,
+      meta: {
+        phase: "invoice_transmission",
+        mode: input.mode,
+        storeId: input.storeId,
+        patchItemCount: patchItems.length,
+      },
+    });
+  }
+}
+
+function createMissingInvoiceResult(input: {
+  action: "uploadInvoice" | "updateInvoice";
+  item: CoupangInvoiceTarget;
+  attemptedRetry: boolean;
+}): CoupangActionItemResult {
+  return createActionItem({
+    action: input.action,
+    targetId: input.item.shipmentBoxId,
+    shipmentBoxId: input.item.shipmentBoxId,
+    orderId: input.item.orderId,
+    vendorItemId: input.item.vendorItemId,
+    status: "failed",
+    retryRequired: false,
+    message: input.attemptedRetry
+      ? "송장 전송 응답이 누락되어 개별 재시도했지만 결과를 확인하지 못했습니다."
+      : "송장 전송 응답에서 결과가 누락되었습니다.",
+  });
 }
 
 function isRetryableOrderSheetLookupError(error: unknown) {
@@ -2671,7 +2791,8 @@ async function submitInvoiceAction(input: {
       : `/v2/providers/openapi/apis/api/v4/vendors/${encodeURIComponent(store.vendorId)}/orders/updateInvoices`;
 
   const action = input.mode === "upload" ? "uploadInvoice" : "updateInvoice";
-  const requestBatch = async (items: CoupangInvoiceTarget[]) => {
+  const worksheetMatches = await findInvoiceWorksheetMatches(input.storeId, input.items);
+  const requestBatchOnce = async (items: CoupangInvoiceTarget[]) => {
     const payload = await requestCoupangJson({
       credentials: {
         accessKey: store.credentials.accessKey,
@@ -2694,45 +2815,142 @@ async function submitInvoiceAction(input: {
       vendorItemIdByShipmentBox,
     });
   };
+  const requestSingleInvoice = async (item: CoupangInvoiceTarget) => {
+    try {
+      const [result] = await requestBatchOnce([item]);
+      return result ?? createMissingInvoiceResult({ action, item, attemptedRetry: true });
+    } catch (error) {
+      return createActionItem({
+        action,
+        targetId: item.shipmentBoxId,
+        shipmentBoxId: item.shipmentBoxId,
+        orderId: item.orderId,
+        vendorItemId: item.vendorItemId,
+        status: "failed",
+        retryRequired: false,
+        message: getActionMessage(
+          error,
+          input.mode === "upload" ? "송장 업로드에 실패했습니다." : "송장 수정에 실패했습니다.",
+        ),
+      });
+    }
+  };
+  const requestBatch = async (items: CoupangInvoiceTarget[]) => {
+    const results = await requestBatchOnce(items);
+    const resultByShipmentBoxId = new Map(
+      results
+        .filter((item) => item.shipmentBoxId)
+        .map((item) => [item.shipmentBoxId as string, item] as const),
+    );
+    const missingItems = items.filter((item) => !resultByShipmentBoxId.has(item.shipmentBoxId));
+
+    if (missingItems.length) {
+      const recoveredResults = await mapWithConcurrency(
+        missingItems,
+        ACTION_CONCURRENCY,
+        requestSingleInvoice,
+      );
+
+      for (const result of recoveredResults) {
+        if (result.shipmentBoxId) {
+          resultByShipmentBoxId.set(result.shipmentBoxId, result);
+        }
+      }
+    }
+
+    return items.map(
+      (item) =>
+        resultByShipmentBoxId.get(item.shipmentBoxId) ??
+        createMissingInvoiceResult({
+          action,
+          item,
+          attemptedRetry: false,
+        }),
+    );
+  };
+
+  const transmissionStartedAt = new Date().toISOString();
+  await patchInvoiceWorksheetMatches({
+    storeId: input.storeId,
+    mode: input.mode,
+    matches: worksheetMatches,
+    resolveState: () => ({
+      invoiceTransmissionStatus: "pending",
+      invoiceTransmissionMessage: null,
+      invoiceTransmissionAt: transmissionStartedAt,
+      invoiceAppliedAt: null,
+    }),
+  });
+
+  let response: CoupangBatchActionResponse;
 
   try {
-    return buildActionResponse(await requestBatch(input.items));
-  } catch {
-    const items = await mapWithConcurrency(input.items, ACTION_CONCURRENCY, async (item) => {
-      try {
-        const [result] = await requestBatch([item]);
-        if (result) {
-          return result;
-        }
+    response = buildActionResponse(await requestBatch(input.items));
+    await patchInvoiceWorksheetMatches({
+      storeId: input.storeId,
+      mode: input.mode,
+      matches: worksheetMatches,
+      resolveState: (target) => {
+        const result =
+          response.items.find(
+            (item) =>
+              buildInvoiceWorksheetGroupKey({
+                shipmentBoxId: item.shipmentBoxId,
+                orderId: item.orderId,
+              }) ===
+              buildInvoiceWorksheetGroupKey({
+                shipmentBoxId: target.shipmentBoxId,
+                orderId: target.orderId,
+              }),
+          ) ?? null;
 
-        return createActionItem({
-          action,
-          targetId: item.shipmentBoxId,
-          shipmentBoxId: item.shipmentBoxId,
-          orderId: item.orderId,
-          vendorItemId: item.vendorItemId,
-          status: "failed",
-          retryRequired: false,
-          message: "송장 전송 결과를 확인하지 못했습니다.",
-        });
-      } catch (error) {
-        return createActionItem({
-          action,
-          targetId: item.shipmentBoxId,
-          shipmentBoxId: item.shipmentBoxId,
-          orderId: item.orderId,
-          vendorItemId: item.vendorItemId,
-          status: "failed",
-          retryRequired: false,
-          message: getActionMessage(
-            error,
-            input.mode === "upload" ? "송장 업로드에 실패했습니다." : "송장 수정에 실패했습니다.",
-          ),
-        });
-      }
+        return {
+          invoiceTransmissionStatus: result?.status === "succeeded" ? "succeeded" : "failed",
+          invoiceTransmissionMessage: result?.message ?? "송장 전송 결과를 확인하지 못했습니다.",
+          invoiceTransmissionAt: response.completedAt,
+          invoiceAppliedAt:
+            result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
+        };
+      },
     });
 
-    return buildActionResponse(items);
+    return response;
+  } catch {
+    const fallbackItems = await mapWithConcurrency(
+      input.items,
+      ACTION_CONCURRENCY,
+      async (item) => requestSingleInvoice(item),
+    );
+    response = buildActionResponse(fallbackItems);
+    await patchInvoiceWorksheetMatches({
+      storeId: input.storeId,
+      mode: input.mode,
+      matches: worksheetMatches,
+      resolveState: (target) => {
+        const result =
+          response.items.find(
+            (item) =>
+              buildInvoiceWorksheetGroupKey({
+                shipmentBoxId: item.shipmentBoxId,
+                orderId: item.orderId,
+              }) ===
+              buildInvoiceWorksheetGroupKey({
+                shipmentBoxId: target.shipmentBoxId,
+                orderId: target.orderId,
+              }),
+          ) ?? null;
+
+        return {
+          invoiceTransmissionStatus: result?.status === "succeeded" ? "succeeded" : "failed",
+          invoiceTransmissionMessage: result?.message ?? "송장 전송 결과를 확인하지 못했습니다.",
+          invoiceTransmissionAt: response.completedAt,
+          invoiceAppliedAt:
+            result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
+        };
+      },
+    });
+
+    return response;
   }
 }
 

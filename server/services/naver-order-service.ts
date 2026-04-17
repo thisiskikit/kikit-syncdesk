@@ -12,6 +12,7 @@ import {
 } from "@shared/naver-orders";
 import {
   createNaverRequestContext as createSharedNaverRequestContext,
+  NaverApiError,
   requestNaverJsonWithContext as requestSharedNaverJsonWithContext,
   type NaverRequestContext,
 } from "./naver-api-client";
@@ -449,6 +450,29 @@ function buildFallbackOrderRow(input: {
 
 function getActionResultMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+const NAVER_ALREADY_DISPATCHED_MESSAGE = "이미 발송 처리된 주문입니다.";
+
+function isAlreadyDispatchedError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const detailsText =
+    error instanceof NaverApiError && error.details !== undefined
+      ? JSON.stringify(error.details)
+      : "";
+  const text = `${error.message} ${detailsText}`.toLowerCase();
+
+  return (
+    (text.includes("이미") &&
+      ["발송", "배송", "송장", "dispatch"].some((keyword) => text.includes(keyword))) ||
+    (text.includes("already") &&
+      ["dispatch", "dispatched", "shipment", "tracking"].some((keyword) =>
+        text.includes(keyword),
+      ))
+  );
 }
 
 async function mapWithConcurrency<TItem, TResult>(
@@ -1101,6 +1125,16 @@ export async function dispatchOrders(input: {
           appliedAt: new Date().toISOString(),
         });
       } catch (error) {
+        if (isAlreadyDispatchedError(error)) {
+          return createActionItemResult({
+            target,
+            action: "dispatch",
+            status: "succeeded",
+            message: NAVER_ALREADY_DISPATCHED_MESSAGE,
+            appliedAt: new Date().toISOString(),
+          });
+        }
+
         return createActionItemResult({
           target,
           action: "dispatch",

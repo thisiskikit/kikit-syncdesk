@@ -591,6 +591,7 @@ type ShipmentWorksheetRefreshPhaseState = {
 
 type ShipmentOrderLookupResult = Pick<CoupangOrderListResponse, "items" | "source" | "message"> & {
   hasRequiredFailure?: boolean;
+  failedStatuses?: string[];
 };
 
 function createEmptySyncState(): CoupangShipmentWorksheetSyncState {
@@ -1001,6 +1002,9 @@ async function fetchQuickCollectOrders(input: {
   }
 
   const partialSuccess = succeededStatusCount > 0 && failures.length > 0;
+  const failedStatuses = requiredStatuses.filter((status) =>
+    failures.some((message) => message.startsWith(`${status} `)),
+  );
 
   return {
     items: Array.from(collectedBySourceKey.values()),
@@ -1010,6 +1014,7 @@ async function fetchQuickCollectOrders(input: {
       ...failures,
     ]),
     hasRequiredFailure,
+    failedStatuses,
   } satisfies ShipmentOrderLookupResult;
 }
 
@@ -1834,6 +1839,9 @@ function buildSyncSummary(input: {
   updatedCount: number;
   skippedHydrationCount: number;
   phaseState: ShipmentWorksheetRefreshPhaseState;
+  degraded?: boolean;
+  failedStatuses?: string[];
+  autoAuditRecommended?: boolean;
 }): CoupangShipmentWorksheetSyncSummary {
   return {
     mode: input.plan.mode,
@@ -1850,6 +1858,9 @@ function buildSyncSummary(input: {
     completedPhases: input.phaseState.completedPhases,
     pendingPhases: input.phaseState.pendingPhases,
     warningPhases: input.phaseState.warningPhases,
+    degraded: input.degraded === true,
+    failedStatuses: input.failedStatuses ?? [],
+    autoAuditRecommended: input.autoAuditRecommended === true,
   };
 }
 
@@ -2913,6 +2924,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       completedPhases: [],
       pendingPhases: [],
       warningPhases: ["worksheet_collect"],
+      degraded: false,
+      failedStatuses: [],
+      autoAuditRecommended: false,
     } satisfies CoupangShipmentWorksheetSyncSummary;
 
     return buildWorksheetResponse(
@@ -2943,6 +2957,8 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     })
     .filter((candidate) => !archivedSourceKeys.has(candidate.sourceKey))
     .filter((candidate) => !insertOnlyMode || !candidate.currentRow);
+  const failedStatuses =
+    insertOnlyMode && "failedStatuses" in listResponse ? listResponse.failedStatuses ?? [] : [];
   if (insertOnlyMode && !collectionCandidates.length) {
     const syncState = buildNextSyncState(
       currentSheet.syncState ?? createEmptySyncState(),
@@ -2962,6 +2978,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         hasProductDetailHydration: false,
         hasCustomerServiceRefresh: false,
       }),
+      degraded: failedStatuses.length > 0,
+      failedStatuses,
+      autoAuditRecommended: failedStatuses.length > 0,
     });
     const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
       storeId: input.storeId,
@@ -3616,6 +3635,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     updatedCount,
     skippedHydrationCount,
     phaseState,
+    degraded: failedStatuses.length > 0,
+    failedStatuses,
+    autoAuditRecommended: failedStatuses.length > 0,
   });
   const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
     storeId: input.storeId,
