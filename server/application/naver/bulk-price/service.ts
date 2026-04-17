@@ -136,7 +136,8 @@ type RunController = {
   summaryUpdateChain: Promise<void>;
   summaryPersistTimer: ReturnType<typeof setTimeout> | null;
   summaryPersistPromise: Promise<void>;
-  };
+  completionPromise: Promise<void>;
+};
 
 const RECENT_RUN_CHANGE_LIMIT = 5;
 
@@ -172,6 +173,7 @@ const RECENT_RUN_ITEM_LIMIT = 20;
 const RUN_SUMMARY_PERSIST_DEBOUNCE_MS = 200;
 const NAVER_RESTOCK_QUANTITY = 102;
 const PREVIEW_REFRESH_JOB_TTL_MS = 10 * 60_000;
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "partially_succeeded", "failed", "stopped"]);
 
 const previewCandidateCache = new Map<string, PreviewCandidateCacheEntry>();
 const previewCandidateRequests = new Map<string, Promise<NaverPreviewCandidate[]>>();
@@ -188,6 +190,10 @@ function readPositiveIntegerEnv(name: string, fallback: number) {
   }
 
   return Math.floor(parsed);
+}
+
+function isTerminalRunStatus(status: string) {
+  return TERMINAL_RUN_STATUSES.has(status);
 }
 
 function normalizePresetName(value: string) {
@@ -1804,7 +1810,7 @@ export class NaverBulkPriceService {
   }
 
   async getRunDetail(runId: string) {
-    const detail = await this.deps.store.getRunDetail(runId);
+    let detail = await this.deps.store.getRunDetail(runId);
     if (!detail) {
       throw new ApiRouteError({
         code: "NAVER_BULK_PRICE_RUN_NOT_FOUND",
@@ -1813,17 +1819,41 @@ export class NaverBulkPriceService {
       });
     }
 
+    await this.waitForControllerCompletionIfTerminal(runId, detail.run.status);
+    if (isTerminalRunStatus(detail.run.status)) {
+      detail = await this.deps.store.getRunDetail(runId);
+      if (!detail) {
+        throw new ApiRouteError({
+          code: "NAVER_BULK_PRICE_RUN_NOT_FOUND",
+          message: "NAVER bulk price run not found.",
+          status: 404,
+        });
+      }
+    }
+
     return detail;
   }
 
   async getRunSummary(runId: string): Promise<NaverBulkPriceRunSummaryResponse> {
-    const run = await this.deps.store.getRun(runId);
+    let run = await this.deps.store.getRun(runId);
     if (!run) {
       throw new ApiRouteError({
         code: "NAVER_BULK_PRICE_RUN_NOT_FOUND",
         message: "NAVER bulk price run not found.",
         status: 404,
       });
+    }
+
+    await this.waitForControllerCompletionIfTerminal(runId, run.status);
+    if (isTerminalRunStatus(run.status)) {
+      run = await this.deps.store.getRun(runId);
+      if (!run) {
+        throw new ApiRouteError({
+          code: "NAVER_BULK_PRICE_RUN_NOT_FOUND",
+          message: "NAVER bulk price run not found.",
+          status: 404,
+        });
+      }
     }
 
     return {
@@ -1838,7 +1868,7 @@ export class NaverBulkPriceService {
     includeItems?: boolean;
     includeLatestRecords?: boolean;
   }) {
-    const detail = await this.deps.store.getRunDetail(input.runId, {
+    let detail = await this.deps.store.getRunDetail(input.runId, {
       rowKeys: input.rowKeys,
       includeItems: input.includeItems,
       includeLatestRecords: input.includeLatestRecords,
@@ -1849,6 +1879,22 @@ export class NaverBulkPriceService {
         message: "NAVER bulk price run not found.",
         status: 404,
       });
+    }
+
+    await this.waitForControllerCompletionIfTerminal(input.runId, detail.run.status);
+    if (isTerminalRunStatus(detail.run.status)) {
+      detail = await this.deps.store.getRunDetail(input.runId, {
+        rowKeys: input.rowKeys,
+        includeItems: input.includeItems,
+        includeLatestRecords: input.includeLatestRecords,
+      });
+      if (!detail) {
+        throw new ApiRouteError({
+          code: "NAVER_BULK_PRICE_RUN_NOT_FOUND",
+          message: "NAVER bulk price run not found.",
+          status: 404,
+        });
+      }
     }
 
     return detail;
@@ -2299,6 +2345,19 @@ export class NaverBulkPriceService {
     invalidateNaverPreviewCandidateCache(storeId);
   }
 
+  private async waitForControllerCompletionIfTerminal(runId: string, status: string) {
+    if (!isTerminalRunStatus(status)) {
+      return;
+    }
+
+    const controller = this.controllers.get(runId);
+    if (!controller) {
+      return;
+    }
+
+    await controller.completionPromise;
+  }
+
   private startRunProcessing(runId: string) {
     if (this.controllers.has(runId)) {
       return;
@@ -2314,16 +2373,19 @@ export class NaverBulkPriceService {
       summaryUpdateChain: Promise.resolve(),
       summaryPersistTimer: null,
       summaryPersistPromise: Promise.resolve(),
+      completionPromise: Promise.resolve(),
     };
     this.controllers.set(runId, controller);
-    void this.processRun(controller).finally(() => {
-      this.controllers.delete(runId);
-      void this.deps.store.getRun(runId).then((run) => {
-        if (run?.status === "queued" && !this.controllers.has(runId)) {
-          this.startRunProcessing(runId);
-        }
+    controller.completionPromise = this.processRun(controller)
+      .catch(() => undefined)
+      .finally(() => {
+        this.controllers.delete(runId);
+        void this.deps.store.getRun(runId).then((run) => {
+          if (run?.status === "queued" && !this.controllers.has(runId)) {
+            this.startRunProcessing(runId);
+          }
+        });
       });
-    });
   }
 
   private async processRun(controller: RunController) {

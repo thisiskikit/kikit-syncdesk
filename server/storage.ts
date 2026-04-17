@@ -1,5 +1,6 @@
 import "./load-env";
 import { randomUUID } from "crypto";
+import { and, asc, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import type {
@@ -29,6 +30,174 @@ const pool = process.env.DATABASE_URL
 
 export const db = pool ? drizzle(pool, { schema }) : null;
 
+let ensurePersistentStorageTablesPromise: Promise<void> | null = null;
+
+const persistentStorageCreateStatements = [
+  `
+    CREATE TABLE IF NOT EXISTS channel_products (
+      id uuid PRIMARY KEY,
+      channel text NOT NULL,
+      channel_product_id text NOT NULL,
+      seller_product_code text,
+      product_name text NOT NULL,
+      product_status text,
+      raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      last_synced_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS channel_products_channel_product_uidx
+    ON channel_products (channel, channel_product_id)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS channel_options (
+      id uuid PRIMARY KEY,
+      product_id uuid NOT NULL REFERENCES channel_products(id),
+      channel text NOT NULL,
+      channel_product_id text NOT NULL,
+      channel_option_id text NOT NULL,
+      option_name text NOT NULL,
+      price integer NOT NULL DEFAULT 0,
+      stock_quantity integer NOT NULL DEFAULT 0,
+      sale_status text NOT NULL DEFAULT 'on_sale',
+      sold_out_status text NOT NULL DEFAULT 'in_stock',
+      raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      last_synced_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS channel_options_channel_option_uidx
+    ON channel_options (channel, channel_option_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS channel_options_channel_product_idx
+    ON channel_options (channel, channel_product_id)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS sku_channel_mappings (
+      id uuid PRIMARY KEY,
+      channel text NOT NULL,
+      master_sku text,
+      option_sku text,
+      channel_product_id text NOT NULL,
+      channel_option_id text NOT NULL,
+      mapping_source text NOT NULL DEFAULT 'sync',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS sku_channel_mappings_channel_option_uidx
+    ON sku_channel_mappings (channel, channel_option_id)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS sku_channel_mappings_option_sku_idx
+    ON sku_channel_mappings (channel, option_sku)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS catalog_sync_runs (
+      id uuid PRIMARY KEY,
+      channel text NOT NULL,
+      status text NOT NULL DEFAULT 'queued',
+      summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      error_text text,
+      started_at timestamptz,
+      finished_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS catalog_sync_runs_created_idx
+    ON catalog_sync_runs (created_at)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS control_drafts (
+      id uuid PRIMARY KEY,
+      source text NOT NULL DEFAULT 'manual',
+      status text NOT NULL DEFAULT 'draft',
+      note text,
+      csv_file_name text,
+      created_by text NOT NULL DEFAULT 'system',
+      summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS control_draft_items (
+      id uuid PRIMARY KEY,
+      draft_id uuid NOT NULL REFERENCES control_drafts(id) ON DELETE CASCADE,
+      channel text NOT NULL,
+      master_sku text,
+      option_sku text,
+      channel_product_id text,
+      channel_option_id text,
+      requested_patch_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      current_snapshot_json jsonb,
+      validation_status text NOT NULL DEFAULT 'pending',
+      validation_messages_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS control_draft_items_draft_created_idx
+    ON control_draft_items (draft_id, created_at)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS execution_runs (
+      id uuid PRIMARY KEY,
+      draft_id uuid NOT NULL REFERENCES control_drafts(id),
+      retry_of_run_id uuid,
+      status text NOT NULL DEFAULT 'queued',
+      created_by text NOT NULL DEFAULT 'system',
+      summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      error_text text,
+      started_at timestamptz,
+      finished_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS execution_runs_created_idx
+    ON execution_runs (created_at)
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS execution_items (
+      id uuid PRIMARY KEY,
+      run_id uuid NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+      draft_item_id uuid,
+      channel text NOT NULL,
+      master_sku text,
+      option_sku text,
+      channel_product_id text NOT NULL,
+      channel_option_id text NOT NULL,
+      requested_patch_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      before_snapshot_json jsonb,
+      after_snapshot_json jsonb,
+      status text NOT NULL DEFAULT 'pending',
+      attempt_count integer NOT NULL DEFAULT 0,
+      error_code text,
+      error_message text,
+      adapter_response_json jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS execution_items_run_created_idx
+    ON execution_items (run_id, created_at)
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS execution_items_run_status_idx
+    ON execution_items (run_id, status, created_at)
+  `,
+];
+
 function now() {
   return new Date();
 }
@@ -39,6 +208,36 @@ function assignDefined<T extends object>(target: T, patch: Partial<T>) {
       target[key] = value;
     }
   }
+}
+
+function buildBatchTimestamps(length: number) {
+  const base = Date.now();
+  return Array.from({ length }, (_, index) => new Date(base + index));
+}
+
+function omitUndefined<T extends Record<string, unknown>>(input: T) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
+
+async function ensurePersistentStorageTables() {
+  if (!db) {
+    return;
+  }
+
+  if (!ensurePersistentStorageTablesPromise) {
+    ensurePersistentStorageTablesPromise = (async () => {
+      for (const statement of persistentStorageCreateStatements) {
+        await db.execute(sql.raw(statement));
+      }
+    })().catch((error) => {
+      ensurePersistentStorageTablesPromise = null;
+      throw error;
+    });
+  }
+
+  await ensurePersistentStorageTablesPromise;
 }
 
 function buildCatalogChannelProductKey(channel: string, channelProductId: string) {
@@ -114,6 +313,60 @@ type CatalogOptionCacheEntry = {
   row: CatalogOptionRow;
   searchText: string;
 };
+
+type CatalogOptionJoinedRow = {
+  option: ChannelOption;
+  product: ChannelProduct;
+  mapping: SkuChannelMapping | null;
+};
+
+function normalizeRecord(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+
+  return input as Record<string, unknown>;
+}
+
+function mapCatalogOptionJoinedRowToRow(input: CatalogOptionJoinedRow): CatalogOptionRow {
+  return {
+    id: input.option.id,
+    channel: input.option.channel as CatalogOptionRow["channel"],
+    channelProductId: input.option.channelProductId,
+    channelOptionId: input.option.channelOptionId,
+    sellerProductCode: input.product.sellerProductCode ?? null,
+    productName: input.product.productName,
+    optionName: input.option.optionName,
+    price: input.option.price,
+    stockQuantity: input.option.stockQuantity,
+    saleStatus: input.option.saleStatus as CatalogOptionRow["saleStatus"],
+    soldOutStatus: input.option.soldOutStatus as CatalogOptionRow["soldOutStatus"],
+    masterSku: input.mapping?.masterSku ?? null,
+    optionSku: input.mapping?.optionSku ?? null,
+    mappingSource: input.mapping?.mappingSource ?? null,
+    syncedAt: input.option.lastSyncedAt.toISOString(),
+  };
+}
+
+function mapExecutionItemToResult(item: ExecutionItem): ExecutionItemResult {
+  return {
+    id: item.id,
+    runId: item.runId,
+    draftItemId: item.draftItemId,
+    channel: item.channel as ExecutionItemResult["channel"],
+    masterSku: item.masterSku,
+    optionSku: item.optionSku,
+    channelProductId: item.channelProductId,
+    channelOptionId: item.channelOptionId,
+    status: item.status as ExecutionItemResult["status"],
+    errorCode: item.errorCode,
+    errorMessage: item.errorMessage,
+    beforeSnapshotJson: normalizeRecord(item.beforeSnapshotJson),
+    afterSnapshotJson: normalizeRecord(item.afterSnapshotJson),
+    adapterResponseJson: normalizeRecord(item.adapterResponseJson),
+    requestedPatchJson: item.requestedPatchJson as ControlPatch,
+  };
+}
 
 export interface Storage {
   listCatalogOptions(filters: CatalogSearchQuery): Promise<{
@@ -859,4 +1112,664 @@ export class IndexedMemoryStorage implements Storage {
   }
 }
 
-export const storage: Storage = new IndexedMemoryStorage();
+export class DatabaseStorage implements Storage {
+  private async getDatabase() {
+    if (!db) {
+      throw new Error("DATABASE_URL required for persistent storage");
+    }
+
+    await ensurePersistentStorageTables();
+    return db;
+  }
+
+  private buildCatalogSelect(database: NonNullable<typeof db>) {
+    return database
+      .select({
+        option: schema.channelOptions,
+        product: schema.channelProducts,
+        mapping: schema.skuChannelMappings,
+      })
+      .from(schema.channelOptions)
+      .innerJoin(schema.channelProducts, eq(schema.channelOptions.productId, schema.channelProducts.id))
+      .leftJoin(
+        schema.skuChannelMappings,
+        and(
+          eq(schema.skuChannelMappings.channel, schema.channelOptions.channel),
+          eq(schema.skuChannelMappings.channelOptionId, schema.channelOptions.channelOptionId),
+        ),
+      );
+  }
+
+  private buildCatalogWhere(filters: CatalogSearchQuery) {
+    const conditions: SQL<unknown>[] = [];
+
+    if (filters.channel && filters.channel !== "all") {
+      conditions.push(eq(schema.channelOptions.channel, filters.channel));
+    }
+
+    if (filters.mapped === "mapped") {
+      conditions.push(
+        sql`${schema.skuChannelMappings.optionSku} is not null and ${schema.skuChannelMappings.optionSku} <> ''`,
+      );
+    } else if (filters.mapped === "unmapped") {
+      conditions.push(
+        sql`(${schema.skuChannelMappings.optionSku} is null or ${schema.skuChannelMappings.optionSku} = '')`,
+      );
+    }
+
+    const q = String(filters.q || "").trim();
+    if (q) {
+      const likeTerm = `%${q}%`;
+      conditions.push(
+        or(
+          ilike(schema.channelProducts.productName, likeTerm),
+          ilike(schema.channelOptions.optionName, likeTerm),
+          ilike(schema.channelProducts.sellerProductCode, likeTerm),
+          ilike(schema.channelOptions.channelProductId, likeTerm),
+          ilike(schema.channelOptions.channelOptionId, likeTerm),
+          ilike(schema.skuChannelMappings.masterSku, likeTerm),
+          ilike(schema.skuChannelMappings.optionSku, likeTerm),
+        )!,
+      );
+    }
+
+    if (conditions.length === 0) {
+      return undefined;
+    }
+
+    if (conditions.length === 1) {
+      return conditions[0];
+    }
+
+    return and(...conditions);
+  }
+
+  async listCatalogOptions(filters: CatalogSearchQuery) {
+    const database = await this.getDatabase();
+    const limit = Math.max(1, Math.min(filters.limit || 50, 200));
+    const offset = Math.max(0, filters.offset || 0);
+    const whereClause = this.buildCatalogWhere(filters);
+
+    const totalQuery = database
+      .select({
+        total: sql<number>`count(*)::int`,
+      })
+      .from(schema.channelOptions)
+      .innerJoin(schema.channelProducts, eq(schema.channelOptions.productId, schema.channelProducts.id))
+      .leftJoin(
+        schema.skuChannelMappings,
+        and(
+          eq(schema.skuChannelMappings.channel, schema.channelOptions.channel),
+          eq(schema.skuChannelMappings.channelOptionId, schema.channelOptions.channelOptionId),
+        ),
+      );
+
+    const totalRows = await (whereClause ? totalQuery.where(whereClause) : totalQuery);
+
+    const filteredRowsQuery = whereClause
+      ? this.buildCatalogSelect(database).where(whereClause)
+      : this.buildCatalogSelect(database);
+
+    const rows = await filteredRowsQuery
+      .orderBy(asc(schema.channelOptions.createdAt), asc(schema.channelOptions.channelOptionId))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      items: rows.map((row) =>
+        mapCatalogOptionJoinedRowToRow({
+          option: row.option,
+          product: row.product,
+          mapping: row.mapping,
+        }),
+      ),
+      total: Number(totalRows[0]?.total ?? 0),
+      limit,
+      offset,
+    };
+  }
+
+  async findCatalogOptionTarget(input: {
+    channel: string;
+    optionSku?: string | null;
+    channelOptionId?: string | null;
+  }) {
+    const database = await this.getDatabase();
+
+    if (input.optionSku) {
+      const rows = await database
+        .select({
+          option: schema.channelOptions,
+          product: schema.channelProducts,
+          mapping: schema.skuChannelMappings,
+        })
+        .from(schema.skuChannelMappings)
+        .innerJoin(
+          schema.channelOptions,
+          and(
+            eq(schema.channelOptions.channel, schema.skuChannelMappings.channel),
+            eq(schema.channelOptions.channelOptionId, schema.skuChannelMappings.channelOptionId),
+          ),
+        )
+        .innerJoin(schema.channelProducts, eq(schema.channelOptions.productId, schema.channelProducts.id))
+        .where(
+          and(
+            eq(schema.skuChannelMappings.channel, input.channel),
+            eq(schema.skuChannelMappings.optionSku, input.optionSku),
+          ),
+        )
+        .orderBy(desc(schema.skuChannelMappings.updatedAt))
+        .limit(1);
+
+      const row = rows[0];
+      if (row) {
+        return mapCatalogOptionJoinedRowToRow({
+          option: row.option,
+          product: row.product,
+          mapping: row.mapping,
+        });
+      }
+    }
+
+    if (!input.channelOptionId) {
+      return null;
+    }
+
+    return this.findCatalogOptionByKey({
+      channel: input.channel,
+      channelOptionId: input.channelOptionId,
+    });
+  }
+
+  async findCatalogOptionByKey(input: { channel: string; channelOptionId: string }) {
+    const database = await this.getDatabase();
+    const rows = await this.buildCatalogSelect(database)
+      .where(
+        and(
+          eq(schema.channelOptions.channel, input.channel),
+          eq(schema.channelOptions.channelOptionId, input.channelOptionId),
+        ),
+      )
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return mapCatalogOptionJoinedRowToRow({
+      option: row.option,
+      product: row.product,
+      mapping: row.mapping,
+    });
+  }
+
+  async listCatalogOptionsByChannelProduct(input: {
+    channel: ChannelCode;
+    channelProductId: string;
+  }) {
+    const database = await this.getDatabase();
+    const rows = await this.buildCatalogSelect(database)
+      .where(
+        and(
+          eq(schema.channelOptions.channel, input.channel),
+          eq(schema.channelOptions.channelProductId, input.channelProductId),
+        ),
+      )
+      .orderBy(
+        asc(schema.channelProducts.productName),
+        asc(schema.channelOptions.optionName),
+        asc(schema.channelOptions.channelOptionId),
+      );
+
+    return rows.map((row) =>
+      mapCatalogOptionJoinedRowToRow({
+        option: row.option,
+        product: row.product,
+        mapping: row.mapping,
+      }),
+    );
+  }
+
+  async upsertCatalog(products: NormalizedChannelProduct[]) {
+    const database = await this.getDatabase();
+    const syncedAt = now();
+    let productCount = 0;
+    let optionCount = 0;
+    let mappingCount = 0;
+
+    await database.transaction(async (tx) => {
+      for (const product of products) {
+        const [storedProduct] = await tx
+          .insert(schema.channelProducts)
+          .values({
+            id: randomUUID(),
+            channel: product.channel,
+            channelProductId: product.channelProductId,
+            sellerProductCode: product.sellerProductCode,
+            productName: product.productName,
+            productStatus: product.productStatus,
+            rawJson: product.rawJson,
+            lastSyncedAt: syncedAt,
+            createdAt: syncedAt,
+            updatedAt: syncedAt,
+          })
+          .onConflictDoUpdate({
+            target: [schema.channelProducts.channel, schema.channelProducts.channelProductId],
+            set: {
+              sellerProductCode: product.sellerProductCode,
+              productName: product.productName,
+              productStatus: product.productStatus,
+              rawJson: product.rawJson,
+              lastSyncedAt: syncedAt,
+              updatedAt: syncedAt,
+            },
+          })
+          .returning();
+
+        productCount += 1;
+
+        for (const option of product.options) {
+          await tx
+            .insert(schema.channelOptions)
+            .values({
+              id: randomUUID(),
+              productId: storedProduct.id,
+              channel: product.channel,
+              channelProductId: product.channelProductId,
+              channelOptionId: option.channelOptionId,
+              optionName: option.optionName,
+              price: option.price,
+              stockQuantity: option.stockQuantity,
+              saleStatus: option.saleStatus,
+              soldOutStatus: option.soldOutStatus,
+              rawJson: option.rawJson,
+              lastSyncedAt: syncedAt,
+              createdAt: syncedAt,
+              updatedAt: syncedAt,
+            })
+            .onConflictDoUpdate({
+              target: [schema.channelOptions.channel, schema.channelOptions.channelOptionId],
+              set: {
+                productId: storedProduct.id,
+                channelProductId: product.channelProductId,
+                optionName: option.optionName,
+                price: option.price,
+                stockQuantity: option.stockQuantity,
+                saleStatus: option.saleStatus,
+                soldOutStatus: option.soldOutStatus,
+                rawJson: option.rawJson,
+                lastSyncedAt: syncedAt,
+                updatedAt: syncedAt,
+              },
+            });
+
+          optionCount += 1;
+
+          if (option.masterSku || option.optionSku) {
+            await tx
+              .insert(schema.skuChannelMappings)
+              .values({
+                id: randomUUID(),
+                channel: product.channel,
+                masterSku: option.masterSku ?? null,
+                optionSku: option.optionSku ?? null,
+                channelProductId: product.channelProductId,
+                channelOptionId: option.channelOptionId,
+                mappingSource: "sync",
+                createdAt: syncedAt,
+                updatedAt: syncedAt,
+              })
+              .onConflictDoUpdate({
+                target: [schema.skuChannelMappings.channel, schema.skuChannelMappings.channelOptionId],
+                set: {
+                  masterSku: option.masterSku ?? null,
+                  optionSku: option.optionSku ?? null,
+                  channelProductId: product.channelProductId,
+                  mappingSource: "sync",
+                  updatedAt: syncedAt,
+                },
+              });
+
+            mappingCount += 1;
+          }
+        }
+      }
+    });
+
+    return { productCount, optionCount, mappingCount };
+  }
+
+  async createSyncRun(channel: string) {
+    const database = await this.getDatabase();
+    const [run] = await database
+      .insert(schema.catalogSyncRuns)
+      .values({
+        id: randomUUID(),
+        channel,
+        status: "queued",
+        summaryJson: {},
+        errorText: null,
+        startedAt: null,
+        finishedAt: null,
+        createdAt: now(),
+      })
+      .returning();
+
+    return run;
+  }
+
+  async updateSyncRun(
+    id: string,
+    patch: Partial<
+      Pick<CatalogSyncRun, "status" | "summaryJson" | "errorText" | "startedAt" | "finishedAt">
+    >,
+  ) {
+    const database = await this.getDatabase();
+    const [run] = await database
+      .update(schema.catalogSyncRuns)
+      .set(
+        omitUndefined({
+          status: patch.status,
+          summaryJson: patch.summaryJson,
+          errorText: patch.errorText,
+          startedAt: patch.startedAt,
+          finishedAt: patch.finishedAt,
+        }) as Partial<typeof schema.catalogSyncRuns.$inferInsert>,
+      )
+      .where(eq(schema.catalogSyncRuns.id, id))
+      .returning();
+
+    return run;
+  }
+
+  async listSyncRuns() {
+    const database = await this.getDatabase();
+    return database
+      .select()
+      .from(schema.catalogSyncRuns)
+      .orderBy(desc(schema.catalogSyncRuns.createdAt), desc(schema.catalogSyncRuns.id));
+  }
+
+  async createDraft(input: CreateDraftInput) {
+    const database = await this.getDatabase();
+    const timestamp = now();
+    const [draft] = await database
+      .insert(schema.controlDrafts)
+      .values({
+        id: randomUUID(),
+        source: input.source,
+        status: input.status,
+        note: input.note ?? null,
+        csvFileName: input.csvFileName ?? null,
+        createdBy: input.createdBy,
+        summaryJson: input.summaryJson,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .returning();
+
+    return draft;
+  }
+
+  async getDraft(id: string) {
+    const database = await this.getDatabase();
+    const rows = await database
+      .select()
+      .from(schema.controlDrafts)
+      .where(eq(schema.controlDrafts.id, id))
+      .limit(1);
+
+    return rows[0];
+  }
+
+  async listDraftItems(draftId: string) {
+    const database = await this.getDatabase();
+    return database
+      .select()
+      .from(schema.controlDraftItems)
+      .where(eq(schema.controlDraftItems.draftId, draftId))
+      .orderBy(asc(schema.controlDraftItems.createdAt), asc(schema.controlDraftItems.id));
+  }
+
+  async addDraftItems(draftId: string, items: DraftItemInput[]) {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const database = await this.getDatabase();
+    const timestamps = buildBatchTimestamps(items.length);
+    return database
+      .insert(schema.controlDraftItems)
+      .values(
+        items.map((item, index) => ({
+          id: randomUUID(),
+          draftId,
+          channel: item.channel,
+          masterSku: item.masterSku ?? null,
+          optionSku: item.optionSku ?? null,
+          channelProductId: item.channelProductId ?? null,
+          channelOptionId: item.channelOptionId ?? null,
+          requestedPatchJson: item.requestedPatch,
+          currentSnapshotJson: null,
+          validationStatus: "pending",
+          validationMessagesJson: [],
+          createdAt: timestamps[index],
+          updatedAt: timestamps[index],
+        })),
+      )
+      .returning();
+  }
+
+  async updateDraft(
+    id: string,
+    patch: Partial<Pick<ControlDraft, "status" | "summaryJson" | "csvFileName" | "note">>,
+  ) {
+    const database = await this.getDatabase();
+    const [draft] = await database
+      .update(schema.controlDrafts)
+      .set(
+        omitUndefined({
+          status: patch.status,
+          summaryJson: patch.summaryJson,
+          csvFileName: patch.csvFileName,
+          note: patch.note,
+          updatedAt: now(),
+        }) as Partial<typeof schema.controlDrafts.$inferInsert>,
+      )
+      .where(eq(schema.controlDrafts.id, id))
+      .returning();
+
+    return draft;
+  }
+
+  async updateDraftItem(draftItemId: string, patch: DraftItemPatch) {
+    const [item] = await this.updateDraftItemsBatch([{ id: draftItemId, patch }]);
+    return item;
+  }
+
+  async updateDraftItemsBatch(items: UpdateDraftItemBatchInput[]) {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const database = await this.getDatabase();
+    return database.transaction(async (tx) => {
+      const updatedItems: ControlDraftItem[] = [];
+
+      for (const item of items) {
+        const [updated] = await tx
+          .update(schema.controlDraftItems)
+          .set(
+            omitUndefined({
+              masterSku: item.patch.masterSku,
+              optionSku: item.patch.optionSku,
+              channelProductId: item.patch.channelProductId,
+              channelOptionId: item.patch.channelOptionId,
+              requestedPatchJson: item.patch.requestedPatchJson,
+              currentSnapshotJson: item.patch.currentSnapshotJson,
+              validationStatus: item.patch.validationStatus,
+              validationMessagesJson: item.patch.validationMessagesJson,
+              updatedAt: now(),
+            }) as Partial<typeof schema.controlDraftItems.$inferInsert>,
+          )
+          .where(eq(schema.controlDraftItems.id, item.id))
+          .returning();
+
+        if (updated) {
+          updatedItems.push(updated);
+        }
+      }
+
+      return updatedItems;
+    });
+  }
+
+  async createExecutionRun(input: CreateExecutionRunInput) {
+    const database = await this.getDatabase();
+    const [run] = await database
+      .insert(schema.executionRuns)
+      .values({
+        id: randomUUID(),
+        draftId: input.draftId,
+        retryOfRunId: input.retryOfRunId ?? null,
+        status: input.status,
+        createdBy: input.createdBy,
+        summaryJson: input.summaryJson,
+        errorText: input.errorText ?? null,
+        startedAt: input.startedAt ?? null,
+        finishedAt: input.finishedAt ?? null,
+        createdAt: now(),
+      })
+      .returning();
+
+    return run;
+  }
+
+  async updateExecutionRun(
+    id: string,
+    patch: Partial<
+      Pick<ExecutionRun, "status" | "summaryJson" | "errorText" | "startedAt" | "finishedAt">
+    >,
+  ) {
+    const database = await this.getDatabase();
+    const [run] = await database
+      .update(schema.executionRuns)
+      .set(
+        omitUndefined({
+          status: patch.status,
+          summaryJson: patch.summaryJson,
+          errorText: patch.errorText,
+          startedAt: patch.startedAt,
+          finishedAt: patch.finishedAt,
+        }) as Partial<typeof schema.executionRuns.$inferInsert>,
+      )
+      .where(eq(schema.executionRuns.id, id))
+      .returning();
+
+    return run;
+  }
+
+  async listExecutionRuns() {
+    const database = await this.getDatabase();
+    return database
+      .select()
+      .from(schema.executionRuns)
+      .orderBy(desc(schema.executionRuns.createdAt), desc(schema.executionRuns.id));
+  }
+
+  async createExecutionItem(input: CreateExecutionItemInput) {
+    const [item] = await this.createExecutionItemsBatch([input]);
+    return item;
+  }
+
+  async createExecutionItemsBatch(inputs: CreateExecutionItemInput[]) {
+    if (inputs.length === 0) {
+      return [];
+    }
+
+    const database = await this.getDatabase();
+    const timestamps = buildBatchTimestamps(inputs.length);
+    return database
+      .insert(schema.executionItems)
+      .values(
+        inputs.map((input, index) => ({
+          id: randomUUID(),
+          runId: input.runId,
+          draftItemId: input.draftItemId ?? null,
+          channel: input.channel,
+          masterSku: input.masterSku ?? null,
+          optionSku: input.optionSku ?? null,
+          channelProductId: input.channelProductId,
+          channelOptionId: input.channelOptionId,
+          requestedPatchJson: input.requestedPatchJson,
+          beforeSnapshotJson: input.beforeSnapshotJson ?? null,
+          afterSnapshotJson: input.afterSnapshotJson ?? null,
+          status: input.status,
+          attemptCount: input.attemptCount,
+          errorCode: input.errorCode ?? null,
+          errorMessage: input.errorMessage ?? null,
+          adapterResponseJson: input.adapterResponseJson ?? null,
+          createdAt: timestamps[index],
+          updatedAt: timestamps[index],
+        })),
+      )
+      .returning();
+  }
+
+  async listExecutionItems(runId: string) {
+    const database = await this.getDatabase();
+    return database
+      .select()
+      .from(schema.executionItems)
+      .where(eq(schema.executionItems.runId, runId))
+      .orderBy(asc(schema.executionItems.createdAt), asc(schema.executionItems.id));
+  }
+
+  async getExecutionRunDetail(runId: string) {
+    const database = await this.getDatabase();
+    const runs = await database
+      .select()
+      .from(schema.executionRuns)
+      .where(eq(schema.executionRuns.id, runId))
+      .limit(1);
+
+    const run = runs[0];
+    if (!run) {
+      return null;
+    }
+
+    const items = (await this.listExecutionItems(runId)).map(mapExecutionItemToResult);
+    return { run, items };
+  }
+
+  async getFailedExecutionItems(runId: string) {
+    const database = await this.getDatabase();
+    return database
+      .select()
+      .from(schema.executionItems)
+      .where(and(eq(schema.executionItems.runId, runId), eq(schema.executionItems.status, "failed")))
+      .orderBy(asc(schema.executionItems.createdAt), asc(schema.executionItems.id));
+  }
+
+  async reset() {
+    const database = await this.getDatabase();
+    await database.transaction(async (tx) => {
+      await tx.delete(schema.executionItems);
+      await tx.delete(schema.executionRuns);
+      await tx.delete(schema.controlDraftItems);
+      await tx.delete(schema.controlDrafts);
+      await tx.delete(schema.skuChannelMappings);
+      await tx.delete(schema.channelOptions);
+      await tx.delete(schema.channelProducts);
+      await tx.delete(schema.catalogSyncRuns);
+    });
+  }
+}
+
+const shouldUseDatabaseStorage =
+  Boolean(db) && process.env.VITEST !== "true" && process.env.FORCE_MEMORY_STORAGE !== "true";
+
+export const storage: Storage = shouldUseDatabaseStorage
+  ? new DatabaseStorage()
+  : new IndexedMemoryStorage();

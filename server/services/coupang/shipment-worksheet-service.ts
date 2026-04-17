@@ -2403,7 +2403,7 @@ export async function getShipmentWorksheet(storeId: string) {
     storeId,
     rows: currentSheet.items.map(normalizeWorksheetRow),
     syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
-    forceRefresh: true,
+    forceRefresh: false,
   });
   const hasRowChanges = refreshed.rows.some((row, index) =>
     hasWorksheetRowChanged(currentSheet.items[index], row),
@@ -2415,12 +2415,11 @@ export async function getShipmentWorksheet(storeId: string) {
     return buildWorksheetResponse(store, currentSheet, refreshed.message);
   }
 
-  const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+  const sheet = {
     ...currentSheet,
-    storeId,
     items: refreshed.rows,
     message: refreshed.message ?? currentSheet.message,
-  });
+  };
 
   return buildWorksheetResponse(store, sheet, refreshed.message);
 }
@@ -2438,7 +2437,7 @@ export async function getShipmentWorksheetView(
     storeId: query.storeId,
     rows: currentSheet.items.map(normalizeWorksheetRow),
     syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
-    forceRefresh: true,
+    forceRefresh: false,
   });
   const hasRowChanges = refreshed.rows.some((row, index) =>
     hasWorksheetRowChanged(currentSheet.items[index], row),
@@ -2450,12 +2449,11 @@ export async function getShipmentWorksheetView(
     return buildWorksheetViewResponse(store, currentSheet, query, refreshed.message);
   }
 
-  const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+  const sheet = {
     ...currentSheet,
-    storeId: query.storeId,
     items: refreshed.rows,
     message: refreshed.message ?? currentSheet.message,
-  });
+  };
 
   return buildWorksheetViewResponse(store, sheet, query, refreshed.message);
 }
@@ -2687,7 +2685,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     storeId: input.storeId,
     rows: currentSheet.items.map(normalizeWorksheetRow),
     syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
-    forceRefresh: true,
+    forceRefresh: false,
   });
   const resolved = resolveShipmentWorksheetRows(
     buildWorksheetRows({

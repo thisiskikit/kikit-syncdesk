@@ -1646,6 +1646,8 @@ export default function CoupangShipmentsPage() {
     search,
   ]);
 
+  const worksheetViewStaleTimeMs = 30_000;
+
   const worksheetQuery = useQuery({
     queryKey: [
       "/api/coupang/shipments/worksheet/view",
@@ -1676,8 +1678,9 @@ export default function CoupangShipmentsPage() {
         }),
       ),
     enabled: Boolean(filters.selectedStoreId),
-    refetchOnMount: "always",
-    refetchOnWindowFocus: "always",
+    staleTime: worksheetViewStaleTimeMs,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
   const archiveQuery = useQuery({
     queryKey: [

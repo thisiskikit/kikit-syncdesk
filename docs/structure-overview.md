@@ -101,6 +101,7 @@ docs/
 ### 현재 출고 화면 계층
 1. `page.tsx`
   - 상태, query, action coordinator
+  - worksheet query는 짧은 stale window를 두고 mount/focus 자동 refetch를 매번 강제하지 않습니다.
 2. `fulfillment-shell.tsx`
    - 페이지 slot 조립
 3. `fulfillment-toolbar.tsx`
@@ -199,6 +200,7 @@ docs/
   - 출고 / CS / 작업센터 사이의 deep-link build/parse와 operation payload 기반 handoff 문맥 추출
 - `server/services/coupang/shipment-worksheet-service.ts`
   - collect 1차 반영과 refresh 후속 보강 분리
+  - worksheet 읽기 경로는 CS summary cache를 우선 사용하고, 조회 응답 때문에 worksheet 전체를 다시 저장하지 않습니다.
 - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
   - DB 모드 worksheet 저장과 부분 row patch를 트랜잭션으로 처리
 - `server/http/handlers/coupang/shipments.ts`
@@ -285,6 +287,18 @@ docs/
 - 빠른 수집 집중 보기와 작업센터 티켓 상세처럼, 기존 계약에 필요한 필드만 최소 확장했습니다.
   - `shared/coupang.ts`
   - `shared/operations.ts`
+
+### 현재 저장 경로
+- 실행 프로세스는 Cloud Run에서 뜹니다.
+- 운영 상태 저장은 로컬 디스크가 아니라 `DATABASE_URL`이 가리키는 Cloud SQL(Postgres)을 기본 경로로 봅니다.
+- `server/storage.ts`는 아래 데이터를 Postgres에 직접 저장합니다.
+  - channel catalog sync 결과
+  - control draft / draft item
+  - execution run / execution item
+- `server/stores/work-data-*` 계열은 이미 worksheet, 로그, UI state, 채널 설정 등을 DB 우선으로 저장하고, 일부 레거시 JSON/파일은 1회 import 또는 fallback 용도로만 남아 있습니다.
+- 따라서 현재 운영 기준의 권장 구조는 `Cloud Run = 실행`, `Cloud SQL = 상태 저장`, `로컬/attached disk = 레거시 호환 또는 임시 파일`입니다.
+- catalog / draft / execution 관련 테이블과 핵심 조회 인덱스는 첫 접근 시 런타임에서 자동 생성되므로, 새 Cloud SQL 인스턴스에서도 앱 부팅 후 저장소 사용 시 자체적으로 기본 구조를 맞춥니다.
+- 테스트는 `Vitest` 또는 `FORCE_MEMORY_STORAGE=true`일 때만 in-memory storage를 유지해 실DB 오염을 피합니다.
 
 ## 9. 빌드 / 배포 하드닝
 

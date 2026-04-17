@@ -90,6 +90,8 @@
 - 송장 업로드/수정은 서버가 worksheet 전송 상태를 `pending -> succeeded/failed`로 직접 기록하고, 클라이언트는 로컬 pending 표시 후 재조회만 수행합니다.
 - 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
 - Naver 발송은 이미 발송된 주문 응답을 멱등 성공으로 처리해 불필요한 실패 누적을 줄입니다.
+- worksheet 읽기(`getShipmentWorksheet`, `worksheet/view`, bulk resolve)는 CS 요약 캐시를 존중하고, 조회 시마다 강제 live 클레임 재조회나 전체 worksheet 재저장을 수행하지 않습니다.
+- 출고 화면의 worksheet query는 짧은 stale window를 두고 mount/focus 때마다 자동 재조회하지 않도록 완화됐습니다.
 
 ### 보관함
 - `보관함`은 읽기 전용 archive 조회 화면입니다.
@@ -128,6 +130,10 @@
 - 2026-04-13 기준 production build에서 기존 `index` 메인 청크는 약 `1,333.80kB`에서 `72.05kB`로 줄었고, 500k 초과 chunk warning은 사라졌습니다.
 - 남은 빌드 경고는 `node_modules/react-data-grid/lib/styles.css`의 `//# sourceMappingURL=styles.css.map` 코멘트 때문에 발생하는 CSS minify warning입니다.
 - GitHub Actions 워크플로우 이름은 `Cloud Run Prod Deploy`, `Cloud Run Dev Deploy`로 정리했습니다.
+- Cloud Run 배포 경로에서는 Secret Manager의 `DATABASE_URL`을 통해 Cloud SQL에 연결합니다.
+- `server/storage.ts`는 배포 환경에서 `DatabaseStorage`를 사용하므로, 채널 catalog sync 결과, Draft, Execution run/item 이력은 더 이상 메모리 전용이 아닙니다.
+- 위 catalog / draft / execution 테이블과 조회 인덱스는 첫 접근 시 런타임에서 `CREATE TABLE IF NOT EXISTS`로 자동 보장됩니다.
+- Vitest 실행 또는 `FORCE_MEMORY_STORAGE=true`일 때만 이 저장소는 in-memory fallback을 유지해 테스트가 실DB를 건드리지 않도록 막습니다.
 - 배포 후 smoke check와 rollback 포인트는 `docs/deployment/cloud-run-smoke-check.md`에 정리돼 있습니다.
 - 작업 상태 패널과 작업센터 주요 레이블은 현재 한국어로 정리돼 있습니다.
 
@@ -218,6 +224,7 @@
 - `npm run check`
 - `npm test -- server/services/coupang/order-service.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-service.test.ts server/services/naver-order-service.test.ts`
 - `npm exec vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+- `npm test -- server/services/coupang/shipment-worksheet-collection.test.ts`
 - `npm exec vitest run --root . client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
 - `npm exec vitest run --root . client/src/lib/ops-handoff-links.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts client/src/pages/operation-center-recovery.test.ts`
 

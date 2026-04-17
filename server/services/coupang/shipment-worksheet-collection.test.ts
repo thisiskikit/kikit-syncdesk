@@ -916,10 +916,10 @@ describe("coupang shipment worksheet collection", () => {
         storeId: "store-1",
         createdAtFrom: "2026-02-24",
         createdAtTo: "2026-03-26",
-        forceRefresh: true,
+        forceRefresh: false,
       }),
     );
-    expect(setStoreSheetMock).toHaveBeenCalledTimes(1);
+    expect(setStoreSheetMock).not.toHaveBeenCalled();
     expect(result.items[0]).toMatchObject({
       shipmentBoxId: "563",
       customerServiceIssueSummary: "Shipment stop requested 1",
@@ -984,9 +984,10 @@ describe("coupang shipment worksheet collection", () => {
     expect(getOrderCustomerServiceSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeId: "store-1",
-        forceRefresh: true,
+        forceRefresh: false,
       }),
     );
+    expect(setStoreSheetMock).not.toHaveBeenCalled();
     expect(result.items[0]).toMatchObject({
       shipmentBoxId: "564",
       customerServiceIssueSummary: "Return 1",
