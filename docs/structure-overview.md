@@ -101,6 +101,7 @@ docs/
   - `updateInvoice` 경고가 와도 live 상세에 같은 송장번호가 이미 반영돼 있으면 서버가 이를 성공으로 승격해 ambiguous warning을 worksheet 실패로 남기지 않습니다.
 - `결제완료 -> 상품준비중`
   - 선행 `수집 누락 audit`와 `prepare_ready resolve`는 유지합니다.
+  - 단, audit live 조회가 일시 실패해도 현재 worksheet에서 이미 확인 가능한 prepare 대상은 계속 처리하고, audit 실패는 경고로만 남깁니다.
   - `prepare_ready` resolve도 후보 `shipmentBoxId`를 먼저 `shipment_boxes` refresh로 맞춰 이미 `INSTRUCT`로 바뀐 건을 prepare 대상에서 제외합니다.
   - 성공 후 전체 `incremental collect`를 다시 기다리지 않고, 성공 행을 먼저 낙관 반영한 뒤 `shipment_boxes` scope refresh를 비동기로 붙입니다.
 

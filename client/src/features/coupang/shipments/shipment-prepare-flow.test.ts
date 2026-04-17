@@ -157,6 +157,22 @@ describe("shipment prepare flow helpers", () => {
     expect(plan.auditWarningDetails).toEqual(["[누락] ACCEPT / 누락 주문 / 100"]);
   });
 
+  it("keeps prepare submission available when audit fails but resolved rows exist", () => {
+    const plan = resolvePrepareAcceptedOrdersPlan({
+      auditResponse: null,
+      resolvedRows: {
+        items: [createRow()],
+        blockedItems: [],
+      },
+      auditFailureMessage: "live 주문 조회에 실패했습니다.",
+    });
+
+    expect(plan.hasAuditWarnings).toBe(true);
+    expect(plan.shouldSubmitPrepare).toBe(true);
+    expect(plan.targetRows).toHaveLength(1);
+    expect(plan.auditWarningDetails).toEqual(["누락 검수 실패: live 주문 조회에 실패했습니다."]);
+  });
+
   it("combines failed action details with audit warnings in the result feedback", () => {
     const feedback = buildPrepareAcceptedOrdersFeedback({
       auditResponse: createAuditResponse(),
@@ -175,6 +191,44 @@ describe("shipment prepare flow helpers", () => {
         "[누락] ACCEPT / 누락 주문 / 100",
       ]),
     );
+  });
+
+  it("surfaces audit failure as a warning while preserving prepare results", () => {
+    const feedback = buildPrepareAcceptedOrdersFeedback({
+      auditResponse: null,
+      auditFailureMessage: "live 주문 조회에 실패했습니다.",
+      blockedClaimDetails: [],
+      result: {
+        ...createBatchResponse(),
+        items: [
+          {
+            targetId: "BOX-row-1",
+            action: "markPreparing",
+            shipmentBoxId: "BOX-row-1",
+            orderId: "ORDER-row-1",
+            receiptId: null,
+            vendorItemId: null,
+            status: "succeeded",
+            resultCode: null,
+            retryRequired: false,
+            message: null,
+            appliedAt: "2026-04-12T01:00:00.000Z",
+          },
+        ],
+        summary: {
+          total: 1,
+          succeededCount: 1,
+          failedCount: 0,
+          warningCount: 0,
+          skippedCount: 0,
+        },
+      },
+      targetRowCount: 1,
+    });
+
+    expect(feedback.type).toBe("warning");
+    expect(feedback.message).toContain("누락 검수 실패로 현재 worksheet 기준 처리만 진행했습니다.");
+    expect(feedback.details).toContain("누락 검수 실패: live 주문 조회에 실패했습니다.");
   });
 
   it("returns unique shipment boxes that succeeded during prepare", () => {

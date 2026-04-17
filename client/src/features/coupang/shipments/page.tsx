@@ -3015,25 +3015,26 @@ export default function CoupangShipmentsPage() {
     let localToastId: string | null = null;
 
     try {
-      const auditResponse = await requestShipmentAuditMissingForCurrentFilters();
-      if (!auditResponse) {
-        setFeedback({
-          type: "error",
-          title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
-          message:
-            "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uC751\uB2F5\uC744 \uBC1B\uC9C0 \uBABB\uD574 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC\uB97C \uC9C4\uD589\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
-          details: [],
-        });
-        return;
+      let auditResponse: CoupangShipmentWorksheetAuditMissingResponse | null = null;
+      let auditFailureMessage: string | null = null;
+
+      try {
+        auditResponse = await requestShipmentAuditMissingForCurrentFilters();
+      } catch (error) {
+        auditFailureMessage =
+          error instanceof Error
+            ? error.message
+            : "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
       }
 
       const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
       const preparePlan = resolvePrepareAcceptedOrdersPlan({
         auditResponse,
         resolvedRows,
+        auditFailureMessage,
       });
 
-      if (preparePlan.hasAuditWarnings) {
+      if (auditResponse && preparePlan.hasAuditWarnings) {
         setAuditResult(auditResponse);
         setIsAuditDialogOpen(true);
       }
@@ -3099,6 +3100,7 @@ export default function CoupangShipmentsPage() {
         blockedClaimDetails: preparePlan.blockedClaimDetails,
         result,
         targetRowCount: preparePlan.targetRows.length,
+        auditFailureMessage,
       });
 
       setFeedback(feedbackState);

@@ -52,18 +52,27 @@ export function buildPrepareClaimBlockedDetails(rows: PrepareBlockedRow[]) {
 }
 
 export function resolvePrepareAcceptedOrdersPlan(input: {
-  auditResponse: CoupangShipmentWorksheetAuditMissingResponse;
+  auditResponse: CoupangShipmentWorksheetAuditMissingResponse | null;
   resolvedRows: Pick<CoupangShipmentWorksheetBulkResolveResponse, "items" | "blockedItems"> | null;
+  auditFailureMessage?: string | null;
 }) {
   const targetRows = input.resolvedRows?.items ?? [];
   const blockedClaimDetails = buildPrepareClaimBlockedDetails(input.resolvedRows?.blockedItems ?? []);
-  const hasAuditWarnings = hasShipmentPrepareAuditWarnings(input.auditResponse);
-  const auditWarningDetails = hasAuditWarnings
-    ? buildShipmentWorksheetAuditDetails(input.auditResponse, {
-        limit: 8,
-        includeHidden: false,
-      })
+  const auditFailureDetails = input.auditFailureMessage
+    ? [`누락 검수 실패: ${input.auditFailureMessage}`]
     : [];
+  const hasAuditWarnings =
+    Boolean(input.auditFailureMessage) ||
+    (input.auditResponse ? hasShipmentPrepareAuditWarnings(input.auditResponse) : false);
+  const auditWarningDetails = [
+    ...auditFailureDetails,
+    ...(input.auditResponse && hasShipmentPrepareAuditWarnings(input.auditResponse)
+      ? buildShipmentWorksheetAuditDetails(input.auditResponse, {
+          limit: 8,
+          includeHidden: false,
+        })
+      : []),
+  ].slice(0, 8);
 
   return {
     targetRows,
@@ -75,16 +84,23 @@ export function resolvePrepareAcceptedOrdersPlan(input: {
 }
 
 export function buildPrepareAcceptedOrdersFeedback(input: {
-  auditResponse: CoupangShipmentWorksheetAuditMissingResponse;
+  auditResponse: CoupangShipmentWorksheetAuditMissingResponse | null;
   blockedClaimDetails: string[];
   result: CoupangBatchActionResponse;
   targetRowCount: number;
+  auditFailureMessage?: string | null;
 }) {
-  const hasAuditWarnings = hasShipmentPrepareAuditWarnings(input.auditResponse);
+  const auditFailureDetails = input.auditFailureMessage
+    ? [`누락 검수 실패: ${input.auditFailureMessage}`]
+    : [];
+  const hasAuditWarnings =
+    Boolean(input.auditFailureMessage) ||
+    (input.auditResponse ? hasShipmentPrepareAuditWarnings(input.auditResponse) : false);
   const details = [
+    ...auditFailureDetails,
     ...buildFailureDetails(input.result),
     ...input.blockedClaimDetails,
-    ...(hasAuditWarnings
+    ...(input.auditResponse && hasShipmentPrepareAuditWarnings(input.auditResponse)
       ? buildShipmentWorksheetAuditDetails(input.auditResponse, {
           limit: 8,
           includeHidden: false,
@@ -102,7 +118,9 @@ export function buildPrepareAcceptedOrdersFeedback(input: {
   return {
     type: warning ? ("warning" as const) : ("success" as const),
     title: "상품준비중 처리 결과",
-    message: hasAuditWarnings
+    message: input.auditFailureMessage
+      ? `${baseMessage} / 누락 검수 실패로 현재 worksheet 기준 처리만 진행했습니다.`
+      : hasAuditWarnings && input.auditResponse
       ? `${baseMessage} / ${summarizeShipmentPrepareAuditWarning(input.auditResponse)}`
       : baseMessage,
     details,
