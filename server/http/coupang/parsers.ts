@@ -6,6 +6,7 @@ import type {
   ApplyCoupangShipmentWorksheetInvoiceInput,
   CollectCoupangShipmentInput,
   CoupangCancelOrderTarget,
+  CoupangActionKey,
   CoupangCustomerServiceSummaryRequestItem,
   CoupangExchangeConfirmTarget,
   CoupangExchangeInvoiceTarget,
@@ -27,6 +28,25 @@ import type {
 } from "@shared/coupang";
 
 type JsonRecord = Record<string, unknown>;
+const COUPANG_ACTION_KEYS = new Set<string>([
+  "updatePricesBulk",
+  "updateQuantitiesBulk",
+  "updateSaleStatusBulk",
+  "updatePartialProduct",
+  "updateFullProduct",
+  "markPreparing",
+  "uploadInvoice",
+  "updateInvoice",
+  "markShipmentStopped",
+  "markAlreadyShipped",
+  "cancelOrderItem",
+  "approveReturn",
+  "confirmReturnInbound",
+  "uploadReturnCollectionInvoice",
+  "confirmExchangeInbound",
+  "rejectExchange",
+  "uploadExchangeInvoice",
+]);
 
 export function asItemList(value: unknown) {
   return Array.isArray((value as { items?: unknown[] } | null)?.items)
@@ -236,6 +256,21 @@ export function parseShipmentWorksheetPatchItems(
         typeof item.invoiceAppliedAt === "string"
           ? item.invoiceAppliedAt
           : item.invoiceAppliedAt === null
+            ? null
+            : undefined,
+      orderStatus:
+        typeof item.orderStatus === "string"
+          ? item.orderStatus
+          : item.orderStatus === null
+            ? null
+            : undefined,
+      availableActions:
+        Array.isArray(item.availableActions)
+          ? item.availableActions
+              .map((entry) => asString(entry))
+              .filter((entry): entry is CoupangActionKey => COUPANG_ACTION_KEYS.has(entry))
+              .filter((entry) => entry.trim().length > 0)
+          : item.availableActions === null
             ? null
             : undefined,
     };

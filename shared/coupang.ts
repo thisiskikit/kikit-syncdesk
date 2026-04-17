@@ -1427,6 +1427,8 @@ export interface PatchCoupangShipmentWorksheetItemInput {
   invoiceTransmissionAt?: string | null;
   exportedAt?: string | null;
   invoiceAppliedAt?: string | null;
+  orderStatus?: string | null;
+  availableActions?: CoupangActionKey[] | null;
 }
 
 export interface PatchCoupangShipmentWorksheetInput {

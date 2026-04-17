@@ -140,6 +140,32 @@ describe("getFulfillmentDecision", () => {
     expect(unknownDecision.reason).toBe("sync_failure");
   });
 
+  it("does not downgrade shipped or already-applied invoice rows to recheck only because CS is stale", () => {
+    const shippedDecision = getFulfillmentDecision(
+      createRow({
+        orderStatus: "DEPARTURE",
+        customerServiceState: "stale",
+        availableActions: ["updateInvoice"],
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645330736",
+      }),
+    );
+    const appliedDecision = getFulfillmentDecision(
+      createRow({
+        orderStatus: "INSTRUCT",
+        customerServiceState: "stale",
+        availableActions: ["uploadInvoice"],
+        deliveryCompanyCode: "HYUNDAI",
+        invoiceNumber: "257645343082",
+        invoiceTransmissionStatus: "succeeded",
+        invoiceAppliedAt: "2026-04-17T11:10:53.270Z",
+      }),
+    );
+
+    expect(shippedDecision.status).not.toBe("recheck");
+    expect(appliedDecision.status).not.toBe("recheck");
+  });
+
   it("treats missing core fulfillment data as recheck", () => {
     const decision = getFulfillmentDecision(
       createRow({

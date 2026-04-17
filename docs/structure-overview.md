@@ -97,8 +97,10 @@ docs/
 - `invoice_ready` resolve는 전송 직전 후보 `shipmentBoxId`를 한 번 더 `shipment_boxes` refresh로 재수화해 stale worksheet 상태를 바로잡습니다.
 - 같은 bulk resolve는 CS 상태도 전체 worksheet가 아니라 실제 후보 행만 다시 확인하고, `shipment_boxes` refresh 직후 같은 후보를 다시 CS 조회하지 않아 대량 worksheet에서도 `resolve` 단계가 과하게 늘어나지 않도록 줄였습니다.
 - resolve 직전의 `shipment_boxes` refresh 결과는 메모리에서만 합쳐 판정하고, resolve 때문에 전체 worksheet를 다시 저장하지 않습니다. 같은 경로에서 상품 상세 재조회도 생략해 전송 후보 판정만 빠르게 끝내도록 했습니다.
-- 송장 입력 모드의 상단 일괄 전송 버튼은 현재 페이지에 송장 payload가 남아 있으면 stale `availableActions`만으로 시작을 막지 않고, 실제 전송 가능 여부는 위 refresh 이후에 다시 확정합니다.
-  - 같은 버튼은 `ACCEPT` 상태지만 송장 payload가 이미 들어간 행을 먼저 `markPreparing`으로 자동 처리한 뒤 이어서 송장을 전송합니다.
+- 상단 `송장 전송하기` 버튼은 기본 화면/송장 입력 모드 모두 현재 필터 범위의 전송 가능 행을 기준으로 동작하고, 선택 건만 보내는 경로는 선택 action bar로 분리합니다.
+  - 같은 버튼은 stale `availableActions`만으로 시작을 막지 않고, 위 refresh 이후 실제 전송 가능 여부를 다시 확정합니다.
+  - `ACCEPT` 상태지만 송장 payload가 이미 들어간 행은 먼저 `markPreparing`으로 자동 처리한 뒤 이어서 송장을 전송합니다.
+  - 성공 건은 worksheet patch 단계에서 `DEPARTURE` / `updateInvoice`로 먼저 낙관 반영해 직후 화면이 오래 옛 상태로 남지 않게 합니다.
   - `CS이관` placeholder, 스토어명 오입력 같은 비정상 payload는 클라이언트 후보 계산과 서버 전송 단계에서 모두 제외합니다.
   - `updateInvoice` 경고가 와도 live 상세에 같은 송장번호가 이미 반영돼 있으면 서버가 이를 성공으로 승격해 ambiguous warning을 worksheet 실패로 남기지 않습니다.
 - `결제완료 -> 상품준비중`

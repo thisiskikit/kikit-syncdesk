@@ -69,6 +69,10 @@ function hasInvoiceFailure(row: CoupangShipmentWorksheetRow) {
   return row.invoiceTransmissionStatus === "failed";
 }
 
+function hasAppliedInvoiceTransmission(row: CoupangShipmentWorksheetRow) {
+  return Boolean(row.invoiceTransmissionStatus === "succeeded" || row.invoiceAppliedAt);
+}
+
 function hasDataGap(row: CoupangShipmentWorksheetRow) {
   return !row.receiverName?.trim() || !row.receiverAddress?.trim() || !row.productOrderNumber?.trim();
 }
@@ -86,6 +90,20 @@ function hasNonBlockingCustomerServiceImpact(row: CoupangShipmentWorksheetRow) {
 function isShipmentPhase(row: CoupangShipmentWorksheetRow) {
   const normalized = row.orderStatus?.toUpperCase() ?? "";
   return ["DEPARTURE", "DELIVERING", "FINAL_DELIVERY", "NONE_TRACKING"].includes(normalized);
+}
+
+function shouldTreatCustomerServiceSnapshotAsBlockingRecheck(
+  row: CoupangShipmentWorksheetRow,
+) {
+  if (hasAppliedInvoiceTransmission(row)) {
+    return false;
+  }
+
+  if (isShipmentPhase(row)) {
+    return false;
+  }
+
+  return true;
 }
 
 function needsInvoice(row: CoupangShipmentWorksheetRow) {
@@ -150,7 +168,10 @@ export function getFulfillmentDecision(row: CoupangShipmentWorksheetRow): Fulfil
     };
   }
 
-  if (row.customerServiceState === "unknown" || row.customerServiceState === "stale") {
+  if (
+    (row.customerServiceState === "unknown" || row.customerServiceState === "stale") &&
+    shouldTreatCustomerServiceSnapshotAsBlockingRecheck(row)
+  ) {
     return {
       status: "recheck",
       statusLabel: STATUS_LABELS.recheck,

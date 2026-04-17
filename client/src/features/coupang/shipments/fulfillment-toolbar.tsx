@@ -220,7 +220,7 @@ export default function FulfillmentToolbar({
               </div>
             ) : activeTab !== "archive" && selectedInvoiceBlockedRowsCount ? (
               <div className="muted action-disabled-reason">
-                클레임 {selectedInvoiceBlockedRowsCount}건은 송장 전송 대상에서 제외됩니다.
+                선택 송장 전송에서는 클레임 {selectedInvoiceBlockedRowsCount}건이 제외됩니다.
               </div>
             ) : null}
           </div>

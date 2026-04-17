@@ -1020,6 +1020,12 @@ export class CoupangShipmentWorksheetStore {
             patch.invoiceAppliedAt !== undefined
               ? patch.invoiceAppliedAt
               : existingRow.invoiceAppliedAt,
+          orderStatus:
+            patch.orderStatus !== undefined ? patch.orderStatus : existingRow.orderStatus,
+          availableActions:
+            patch.availableActions !== undefined
+              ? patch.availableActions ?? []
+              : existingRow.availableActions,
           updatedAt: new Date().toISOString(),
         };
 
@@ -1156,6 +1162,12 @@ export class CoupangShipmentWorksheetStore {
             patch.invoiceAppliedAt !== undefined
               ? patch.invoiceAppliedAt
               : existingRow.invoiceAppliedAt,
+          orderStatus:
+            patch.orderStatus !== undefined ? patch.orderStatus : existingRow.orderStatus,
+          availableActions:
+            patch.availableActions !== undefined
+              ? patch.availableActions ?? []
+              : existingRow.availableActions,
           updatedAt: timestamp.toISOString(),
         };
 
@@ -1167,6 +1179,7 @@ export class CoupangShipmentWorksheetStore {
             personalClearanceCode: nextRow.personalClearanceCode,
             deliveryCompanyCode: nextRow.deliveryCompanyCode,
             invoiceNumber: nextRow.invoiceNumber,
+            orderStatus: nextRow.orderStatus,
             invoiceTransmissionStatus: nextRow.invoiceTransmissionStatus,
             invoiceTransmissionMessage: nextRow.invoiceTransmissionMessage,
             invoiceTransmissionAt: toDateOrNull(nextRow.invoiceTransmissionAt),

@@ -738,26 +738,28 @@ async function patchInvoiceWorksheetMatches(input: {
   matches: InvoiceWorksheetMatch[];
   resolveState: (
     target: CoupangInvoiceTarget,
+    row: CoupangShipmentWorksheetRow,
   ) => {
     invoiceTransmissionStatus: "pending" | "succeeded" | "failed";
     invoiceTransmissionMessage: string | null;
     invoiceTransmissionAt: string | null;
     invoiceAppliedAt: string | null;
+    orderStatus?: string | null;
+    availableActions?: CoupangActionKey[] | null;
   };
 }) {
   if (!input.matches.length) {
     return;
   }
 
-  const patchItems = input.matches.flatMap(({ target, rows }) => {
-    const state = input.resolveState(target);
-    return rows.map((row) => ({
+  const patchItems = input.matches.flatMap(({ target, rows }) =>
+    rows.map((row) => ({
       sourceKey: row.sourceKey,
       deliveryCompanyCode: target.deliveryCompanyCode.trim(),
       invoiceNumber: target.invoiceNumber.trim(),
-      ...state,
-    }));
-  });
+      ...input.resolveState(target, row),
+    })),
+  );
 
   if (!patchItems.length) {
     return;
@@ -3127,10 +3129,21 @@ async function submitInvoiceAction(input: {
           }),
       ),
     );
-  const buildPatchState = (response: CoupangBatchActionResponse, target: CoupangInvoiceTarget) => {
+  const buildPatchState = (
+    response: CoupangBatchActionResponse,
+    target: CoupangInvoiceTarget,
+    row: CoupangShipmentWorksheetRow,
+  ) => {
     const [result] = buildInvoiceTargetResultMap([target], response.items);
     const invoiceTransmissionStatus =
       result?.status === "succeeded" ? ("succeeded" as const) : ("failed" as const);
+    const currentStatus = normalizeText(row.orderStatus);
+    const shouldAdvanceShipmentStatus =
+      result?.status === "succeeded" &&
+      !["DEPARTURE", "DELIVERING", "FINAL_DELIVERY", "NONE_TRACKING"].includes(
+        currentStatus ?? "",
+      );
+    const optimisticOrderStatus = shouldAdvanceShipmentStatus ? "DEPARTURE" : row.orderStatus;
 
     return {
       invoiceTransmissionStatus,
@@ -3138,6 +3151,13 @@ async function submitInvoiceAction(input: {
       invoiceTransmissionAt: response.completedAt,
       invoiceAppliedAt:
         result?.status === "succeeded" ? result.appliedAt ?? response.completedAt : null,
+      orderStatus: optimisticOrderStatus,
+      availableActions: shouldAdvanceShipmentStatus
+        ? buildOrderAvailableActions({
+            status: optimisticOrderStatus,
+            invoiceNumber: target.invoiceNumber,
+          })
+        : undefined,
     };
   };
 
@@ -3148,7 +3168,7 @@ async function submitInvoiceAction(input: {
       storeId: input.storeId,
       mode: input.mode,
       matches: worksheetMatches,
-      resolveState: (target) => buildPatchState(response, target),
+      resolveState: (target, row) => buildPatchState(response, target, row),
     });
 
     return response;
@@ -3181,7 +3201,7 @@ async function submitInvoiceAction(input: {
       storeId: input.storeId,
       mode: input.mode,
       matches: worksheetMatches,
-      resolveState: (target) => buildPatchState(response, target),
+      resolveState: (target, row) => buildPatchState(response, target, row),
     });
 
     return response;
@@ -3202,7 +3222,7 @@ async function submitInvoiceAction(input: {
       storeId: input.storeId,
       mode: input.mode,
       matches: worksheetMatches,
-      resolveState: (target) => buildPatchState(response, target),
+      resolveState: (target, row) => buildPatchState(response, target, row),
     });
 
     return response;

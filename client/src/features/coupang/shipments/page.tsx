@@ -2838,19 +2838,18 @@ export default function CoupangShipmentsPage() {
     return items;
   }, [feedback, infoBanner, isFallback, syncBanner]);
   const isArchiveTab = activeTab === "archive";
-  const transmitActionLabel = worksheetMode === "invoice" ? "송장 전송하기" : "선택 송장 전송";
+  const transmitActionLabel = "송장 전송하기";
   const transmitActionBusyLabel =
     busyAction === "invoice-transmit" || busyAction === "execute"
       ? "송장 전송 중..."
       : transmitActionLabel;
   const transmitActionDisabled =
-    (worksheetMode === "invoice"
-      ? !(
-          (activeSheet?.invoiceReadyCount ?? 0) ||
-          invoiceReadyRows.length ||
-          invoiceTransmitCandidateRows.length
-        )
-      : !selectedRows.length) ||
+    !filters.selectedStoreId ||
+    !(
+      (activeSheet?.invoiceReadyCount ?? 0) ||
+      invoiceReadyRows.length ||
+      invoiceTransmitCandidateRows.length
+    ) ||
     isFallback ||
     busyAction !== null;
   const selectedTransmitActionDisabled =
@@ -4669,9 +4668,7 @@ export default function CoupangShipmentsPage() {
       onChangeTab={changeWorkspaceTab}
       onQuickCollect={() => void collectWorksheet("new_only")}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
-      onTransmit={() =>
-        void (worksheetMode === "invoice" ? executeInvoiceInputMode() : executeSelectedInvoices())
-      }
+      onTransmit={() => void executeInvoiceInputMode()}
       onOpenInvoiceInput={openInvoiceInputDialog}
       onOpenSelectedExcelExport={() => openExcelSortDialog("selected")}
       onOpenNotExportedExcelExport={() => openExcelSortDialog("notExported")}

@@ -1278,6 +1278,17 @@ describe("coupang order service", () => {
   });
 
   it("updates worksheet transmission state on the server before and after invoice upload", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        {
+          sourceKey: "store-1:101:303",
+          shipmentBoxId: "101",
+          orderId: "202",
+          orderStatus: "INSTRUCT",
+          availableActions: ["uploadInvoice", "cancelOrderItem"],
+        },
+      ],
+    });
     requestCoupangJsonMock.mockResolvedValue({
       data: {
         responseList: [
@@ -1330,6 +1341,8 @@ describe("coupang order service", () => {
     });
     expect(patchRowsMock.mock.calls[1]?.[0].items[0]).toMatchObject({
       invoiceTransmissionMessage: "uploaded",
+      orderStatus: "DEPARTURE",
+      availableActions: ["updateInvoice"],
     });
   });
 

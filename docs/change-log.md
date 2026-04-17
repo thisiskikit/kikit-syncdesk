@@ -2,6 +2,26 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-17 / 송장 전송 대상 해석과 성공 상태 즉시 반영 보강
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-decision.ts`
+  - `server/application/coupang/orders/service.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `docs/current-status.md`
+  - `docs/structure-overview.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 출고 화면 상단 `송장 전송하기` 버튼을 기본 화면에서도 현재 필터 범위의 전송 가능 행 대상으로 동작하게 바꿨습니다. 선택 건 전송은 선택 action bar에서만 유지합니다.
+  - 송장 전송 성공 시 worksheet patch 단계에서 `orderStatus`를 `DEPARTURE`로, `availableActions`를 `updateInvoice` 기준으로 함께 낙관 갱신해 직후 화면이 오래 `INSTRUCT` / `uploadInvoice`로 남는 현상을 줄였습니다.
+  - stale/unknown CS 스냅샷이더라도 이미 송장 반영이 끝났거나 배송 단계로 넘어간 row는 더 이상 `재확인 필요`로만 분류하지 않도록 출고 판단 로직을 완화했습니다.
+- 이유:
+  - 상단 버튼이 사실상 선택 전송처럼 동작해 운영자가 기대한 “현재 조건의 전송 가능 건 일괄 전송”과 어긋나고 있었습니다.
+  - 쿠팡 송장 전송 성공 직후에도 worksheet가 옛 상태를 오래 유지해 실제 전송 여부와 화면 판단이 계속 엇갈리는 문제가 있었습니다.
+
 ## 2026-04-15 / 출고 옵션명 컬럼 실제 옵션값 기준 고정
 
 - 변경 유형:
