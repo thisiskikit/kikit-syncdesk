@@ -382,4 +382,51 @@ describe("resolveShipmentWorksheetBulkRows", () => {
     expect(result.resolvedCount).toBe(0);
     expect(setStoreSheetMock).toHaveBeenCalled();
   });
+
+  it("refreshes customer service only for invoice-ready candidate rows", async () => {
+    state.sheet = buildSheet([
+      buildWorksheetRow({
+        id: "row-invoice",
+        sourceKey: "store-1:SHIP-1:VI-1",
+        shipmentBoxId: "SHIP-1",
+        orderId: "ORDER-1",
+        vendorItemId: "VI-1",
+        availableActions: ["uploadInvoice"],
+        orderStatus: "INSTRUCT",
+      }),
+      buildWorksheetRow({
+        id: "row-ignore",
+        sourceKey: "store-1:SHIP-2:VI-2",
+        shipmentBoxId: "SHIP-2",
+        orderId: "ORDER-2",
+        vendorItemId: "VI-2",
+        deliveryCompanyCode: "",
+        invoiceNumber: "",
+        availableActions: ["cancelOrderItem"],
+        orderStatus: "FINAL_DELIVERY",
+      }),
+    ]);
+    getOrderDetailMock.mockResolvedValue(null);
+
+    const result = await resolveShipmentWorksheetBulkRows({
+      storeId: "store-1",
+      viewQuery: {
+        scope: "all",
+        page: 1,
+        pageSize: 50,
+      },
+      mode: "invoice_ready",
+    });
+
+    const customerServiceCalls = getOrderCustomerServiceSummaryMock.mock.calls.map(
+      ([input]) => input as { items: Array<{ rowKey: string }> },
+    );
+    expect(customerServiceCalls.length).toBeGreaterThan(0);
+    expect(customerServiceCalls.some((call) => call.items.every((item) => item.rowKey === "row-invoice"))).toBe(true);
+    expect(customerServiceCalls.some((call) => call.items.some((item) => item.rowKey === "row-ignore"))).toBe(false);
+    expect(result.matchedCount).toBe(1);
+    expect(result.resolvedCount).toBe(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].id).toBe("row-invoice");
+  });
 });

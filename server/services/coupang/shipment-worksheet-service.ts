@@ -52,6 +52,7 @@ import { recordSystemErrorEvent } from "../logs/service";
 import {
   buildShipmentWorksheetViewData,
   getShipmentWorksheetRowHiddenReason,
+  getShipmentWorksheetBulkResolveTargetRows,
   hasShipmentWorksheetClaimIssue,
   isShipmentWorksheetPostDispatchRow,
   matchesShipmentWorksheetQuery,
@@ -2742,17 +2743,24 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     }
   }
 
+  const worksheetRows = buildWorksheetRows(sheetForResolve);
+  const { filteredRows } = resolveShipmentWorksheetFilteredRows(worksheetRows, {
+    ...input.viewQuery,
+    storeId: input.storeId,
+  });
+  const customerServiceTargetRows = getShipmentWorksheetBulkResolveTargetRows(
+    filteredRows,
+    input.mode,
+  );
   const refreshed = await refreshWorksheetCustomerServiceStatuses({
     storeId: input.storeId,
-    rows: sheetForResolve.items.map(normalizeWorksheetRow),
+    rows: customerServiceTargetRows,
     syncPlan: buildReadCustomerServiceSyncPlan(sheetForResolve),
     forceRefresh: false,
   });
+  const refreshedRowsById = new Map(refreshed.rows.map((row) => [row.id, row] as const));
   const resolved = resolveShipmentWorksheetRows(
-    buildWorksheetRows({
-      ...sheetForResolve,
-      items: refreshed.rows,
-    }),
+    worksheetRows.map((row) => refreshedRowsById.get(row.id) ?? row),
     {
       ...input.viewQuery,
       storeId: input.storeId,

@@ -218,6 +218,26 @@ function canMarkPreparingRow(row: CoupangShipmentWorksheetRow) {
   return row.availableActions.includes("markPreparing") && !hasCustomerServiceIssue(row);
 }
 
+export function getShipmentWorksheetBulkResolveTargetRows(
+  filteredRows: readonly CoupangShipmentWorksheetRow[],
+  mode: CoupangShipmentWorksheetBulkResolveMode,
+) {
+  if (mode === "prepare_ready") {
+    return filteredRows.filter((row) => row.availableActions.includes("markPreparing"));
+  }
+
+  if (mode === "invoice_ready") {
+    return filteredRows.filter(
+      (row) =>
+        hasInvoicePayload(row) &&
+        row.invoiceTransmissionStatus !== "pending" &&
+        !hasAppliedInvoiceTransmission(row),
+    );
+  }
+
+  return filteredRows.filter((row) => !row.exportedAt);
+}
+
 function getInvoiceStatusCardKey(
   row: CoupangShipmentWorksheetRow,
 ): Exclude<CoupangShipmentWorksheetInvoiceStatusCard, "all"> {
@@ -583,38 +603,37 @@ export function resolveShipmentWorksheetRows(
 ): WorksheetResolvedItems {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
   const { filteredRows } = resolveFilteredRows(rows, query);
+  const targetRows = getShipmentWorksheetBulkResolveTargetRows(filteredRows, mode);
 
   if (mode === "prepare_ready") {
-    const prepareCandidates = filteredRows.filter((row) => row.availableActions.includes("markPreparing"));
-    const blockedItems = prepareCandidates.filter((row) => hasCustomerServiceIssue(row));
-    const items = prepareCandidates.filter((row) => canMarkPreparingRow(row));
+    const blockedItems = targetRows.filter((row) => hasCustomerServiceIssue(row));
+    const items = targetRows.filter((row) => canMarkPreparingRow(row));
     return {
       items,
       blockedItems,
-      matchedCount: prepareCandidates.length,
+      matchedCount: targetRows.length,
       resolvedCount: items.length,
     };
   }
 
   if (mode === "invoice_ready") {
-    const blockedItems = filteredRows.filter((row) => hasCustomerServiceIssue(row));
-    const items = filteredRows.filter((row) => canSendInvoiceRow(row));
+    const blockedItems = targetRows.filter((row) => hasCustomerServiceIssue(row));
+    const items = targetRows.filter((row) => canSendInvoiceRow(row));
     return {
       items,
       blockedItems,
-      matchedCount: filteredRows.length,
+      matchedCount: targetRows.length,
       resolvedCount: items.length,
     };
   }
 
-  const notExportedRows = filteredRows.filter((row) => !row.exportedAt);
-  const blockedItems = notExportedRows.filter((row) => hasCustomerServiceIssue(row));
-  const items = notExportedRows.filter((row) => !hasCustomerServiceIssue(row));
+  const blockedItems = targetRows.filter((row) => hasCustomerServiceIssue(row));
+  const items = targetRows.filter((row) => !hasCustomerServiceIssue(row));
 
   return {
     items,
     blockedItems,
-    matchedCount: notExportedRows.length,
+    matchedCount: targetRows.length,
     resolvedCount: items.length,
   };
 }
