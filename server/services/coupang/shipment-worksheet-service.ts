@@ -3760,11 +3760,28 @@ export async function patchShipmentWorksheet(input: PatchCoupangShipmentWorkshee
   );
 }
 
+function buildInvoiceInputApplyMessage(input: {
+  matchedCount: number;
+  issueCount: number;
+  missingKeyCount: number;
+  updatedCount: number;
+}) {
+  if (input.issueCount > 0 || input.missingKeyCount > 0) {
+    return "\uC77C\uBD80 \uC1A1\uC7A5 \uC785\uB825\uC774 \uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC640 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC544 \uAC74\uB108\uB6F0\uC5C8\uC2B5\uB2C8\uB2E4.";
+  }
+
+  if (input.matchedCount > 0 && input.updatedCount === 0) {
+    return "\uC774\uBBF8 \uB3D9\uC77C\uD55C \uC1A1\uC7A5 \uC815\uBCF4\uAC00 \uC785\uB825\uB418\uC5B4 \uC788\uC5B4 \uBCC0\uACBD\uD55C \uB0B4\uC6A9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.";
+  }
+
+  return null;
+}
+
 export async function applyShipmentWorksheetInvoiceInput(
   input: ApplyCoupangShipmentWorksheetInvoiceInput,
 ): Promise<CoupangShipmentWorksheetInvoiceInputApplyResponse> {
   if (!input.rows.length) {
-    throw new Error("반영할 송장 데이터가 없습니다.");
+    throw new Error("\uBC18\uC601\uD560 \uC1A1\uC7A5 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
   }
 
   await getStoreOrThrow(input.storeId);
@@ -3796,7 +3813,9 @@ export async function applyShipmentWorksheetInvoiceInput(
   latestInputBySelpickOrderNumber.forEach((invoiceInput, selpickOrderNumber) => {
     const row = rowBySelpickOrderNumber.get(selpickOrderNumber);
     if (!row) {
-      issues.push(`현재 워크시트에 없는 셀픽주문번호입니다: ${selpickOrderNumber}`);
+      issues.push(
+        `\uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC5D0 \uC5C6\uB294 \uC140\uD53D\uC8FC\uBB38\uBC88\uD638\uC785\uB2C8\uB2E4: ${selpickOrderNumber}`,
+      );
       return;
     }
 
@@ -3826,10 +3845,12 @@ export async function applyShipmentWorksheetInvoiceInput(
       ignoredCount: issues.length,
       issues,
       touchedRowIds: [],
-      message: mergeMessages([
-        currentSheet.message,
-        issues.length ? "일부 셀픽주문번호를 현재 워크시트에서 찾지 못했습니다." : null,
-      ]),
+      message: buildInvoiceInputApplyMessage({
+        matchedCount,
+        issueCount: issues.length,
+        missingKeyCount: 0,
+        updatedCount: 0,
+      }),
     };
   }
 
@@ -3848,21 +3869,17 @@ export async function applyShipmentWorksheetInvoiceInput(
     ignoredCount: issues.length + result.missingKeys.length,
     issues: [
       ...issues,
-      ...result.missingKeys.map((key) => `현재 워크시트에서 반영하지 못한 행입니다: ${key}`),
+      ...result.missingKeys.map(
+        (key) =>
+          `\uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC5D0\uC11C \uBC18\uC601\uD558\uC9C0 \uBABB\uD55C \uD589\uC785\uB2C8\uB2E4: ${key}`,
+      ),
     ],
     touchedRowIds,
-    message: mergeMessages([
-      result.sheet.message,
-      issues.length || result.missingKeys.length
-        ? "일부 송장 입력은 현재 워크시트와 일치하지 않아 건너뛰었습니다."
-        : null,
-    ]),
+    message: buildInvoiceInputApplyMessage({
+      matchedCount,
+      issueCount: issues.length,
+      missingKeyCount: result.missingKeys.length,
+      updatedCount: result.touchedSourceKeys.length,
+    }),
   };
 }
-
-
-
-
-
-
-

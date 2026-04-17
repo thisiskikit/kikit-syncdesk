@@ -256,7 +256,87 @@ describe("applyShipmentWorksheetInvoiceInput", () => {
       touchedRowIds: ["row-1"],
     });
     expect(result.issues).toEqual([
-      "현재 워크시트에 없는 셀픽주문번호입니다: O20260410K9999",
+      "\uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC5D0 \uC5C6\uB294 \uC140\uD53D\uC8FC\uBB38\uBC88\uD638\uC785\uB2C8\uB2E4: O20260410K9999",
     ]);
+  });
+  it("does not leak worksheet-wide CS warning when the same invoice is already applied", async () => {
+    const existingRow = buildRow({
+      id: "row-1",
+      sourceKey: "source-1",
+      selpickOrderNumber: "O20260410K0001",
+      deliveryCompanyCode: "CJ",
+      invoiceNumber: "123456789",
+    });
+    getStoreSheetMock.mockResolvedValue({
+      ...buildSheet([existingRow]),
+      message:
+        "CS/\uD074\uB808\uC784 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD574 \uBAA9\uB85D \uC0C1\uD0DC\uB97C \uAC31\uC2E0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.",
+    });
+
+    const result = await applyShipmentWorksheetInvoiceInput({
+      storeId: "store-1",
+      rows: [
+        {
+          selpickOrderNumber: "O20260410K0001",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "123456789",
+        },
+      ],
+    });
+
+    expect(patchRowsMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      matchedCount: 1,
+      updatedCount: 0,
+      ignoredCount: 0,
+      touchedRowIds: [],
+      issues: [],
+      message:
+        "\uC774\uBBF8 \uB3D9\uC77C\uD55C \uC1A1\uC7A5 \uC815\uBCF4\uAC00 \uC785\uB825\uB418\uC5B4 \uC788\uC5B4 \uBCC0\uACBD\uD55C \uB0B4\uC6A9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+    });
+  });
+
+  it("returns a clean success response even when worksheet status refresh had a warning", async () => {
+    const existingRow = buildRow({
+      id: "row-1",
+      sourceKey: "source-1",
+      selpickOrderNumber: "O20260410K0001",
+    });
+    getStoreSheetMock.mockResolvedValue(buildSheet([existingRow]));
+    patchRowsMock.mockResolvedValue({
+      sheet: {
+        ...buildSheet([
+          {
+            ...existingRow,
+            deliveryCompanyCode: "CJ",
+            invoiceNumber: "123456789",
+          },
+        ]),
+        message:
+          "CS/\uD074\uB808\uC784 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD574 \uBAA9\uB85D \uC0C1\uD0DC\uB97C \uAC31\uC2E0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.",
+      },
+      missingKeys: [],
+      touchedSourceKeys: ["source-1"],
+    });
+
+    const result = await applyShipmentWorksheetInvoiceInput({
+      storeId: "store-1",
+      rows: [
+        {
+          selpickOrderNumber: "O20260410K0001",
+          deliveryCompanyCode: "CJ",
+          invoiceNumber: "123456789",
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      matchedCount: 1,
+      updatedCount: 1,
+      ignoredCount: 0,
+      touchedRowIds: ["row-1"],
+      issues: [],
+      message: null,
+    });
   });
 });
