@@ -3947,11 +3947,43 @@ export default function CoupangShipmentsPage() {
       }
     }
 
+    const selectedShipmentBoxIds =
+      scope === "selected"
+        ? Array.from(
+            new Set(
+              selectedRows
+                .map((row) => row.shipmentBoxId?.trim())
+                .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+            ),
+          )
+        : [];
+    const selectedRefreshResponse =
+      scope === "selected" && selectedShipmentBoxIds.length > 0
+        ? await refreshWorksheetInBackground({
+            storeId: filters.selectedStoreId,
+            scope: "shipment_boxes",
+            shipmentBoxIds: selectedShipmentBoxIds,
+          })
+        : null;
+    const refreshedSelectedRowById = new Map(
+      (selectedRefreshResponse?.items ?? []).map((row) => [row.id, row] as const),
+    );
+    const selectedTransmissionRows =
+      scope === "selected"
+        ? selectedRows.map((row) => refreshedSelectedRowById.get(row.id) ?? row)
+        : [];
     const resolvedRows =
       scope === "selected" ? null : await resolveWorksheetBulkRows("invoice_ready");
-    const blockedDecisionRows = scope === "selected" ? selectedDecisionBlockedRows : [];
-    const blockedDecisionDetails = scope === "selected" ? selectedBlockedDecisionDetails : [];
-    const sourceRows = scope === "selected" ? selectedReadyRows : resolvedRows?.items ?? [];
+    const blockedDecisionRows =
+      scope === "selected"
+        ? selectedTransmissionRows.filter((row) => getFulfillmentDecision(row).shouldBlockBatchActions)
+        : [];
+    const blockedDecisionDetails =
+      scope === "selected" ? buildShipmentBlockedDecisionDetails(blockedDecisionRows) : [];
+    const sourceRows =
+      scope === "selected"
+        ? selectedTransmissionRows.filter((row) => !getFulfillmentDecision(row).shouldBlockBatchActions)
+        : resolvedRows?.items ?? [];
     const blockedClaimRows =
       scope === "selected"
         ? sourceRows.filter((row) => hasShipmentClaimIssue(row))
@@ -4189,6 +4221,20 @@ export default function CoupangShipmentsPage() {
         message: summary,
         details: [...blockedDecisionDetails, ...detailLines, ...blockedClaimDetails].slice(0, 8),
       });
+      const succeededShipmentBoxIds = Array.from(
+        new Set(
+          combined.items
+            .map((item) => (item.status === "succeeded" ? item.shipmentBoxId?.trim() ?? "" : ""))
+            .filter(Boolean),
+        ),
+      );
+      if (succeededShipmentBoxIds.length > 0) {
+        void refreshWorksheetInBackground({
+          storeId: filters.selectedStoreId,
+          scope: "shipment_boxes",
+          shipmentBoxIds: succeededShipmentBoxIds,
+        });
+      }
       finishLocalOperation(localToastId, {
         status:
           blockedDecisionRows.length > 0 ||

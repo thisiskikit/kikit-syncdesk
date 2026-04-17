@@ -457,6 +457,17 @@ function resolveFilteredRows(
   };
 }
 
+export function resolveShipmentWorksheetFilteredRows(
+  rows: readonly CoupangShipmentWorksheetRow[],
+  rawQuery: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
+) {
+  const query = normalizeShipmentWorksheetViewQuery(rawQuery);
+  return {
+    query,
+    ...resolveFilteredRows(rows, query),
+  };
+}
+
 export function getShipmentWorksheetRowHiddenReason(
   row: CoupangShipmentWorksheetRow,
   rawQuery: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,

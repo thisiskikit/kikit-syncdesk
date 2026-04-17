@@ -55,6 +55,7 @@ import {
   hasShipmentWorksheetClaimIssue,
   isShipmentWorksheetPostDispatchRow,
   matchesShipmentWorksheetQuery,
+  resolveShipmentWorksheetFilteredRows,
   resolveShipmentWorksheetRows,
 } from "./shipment-worksheet-view";
 
@@ -415,6 +416,40 @@ function buildWorksheetRows(sheet: WorksheetStoreSheet) {
   return sheet.items.map((row) =>
     decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso),
   );
+}
+
+function hasWorksheetInvoicePayload(
+  row: Pick<CoupangShipmentWorksheetRow, "deliveryCompanyCode" | "invoiceNumber">,
+) {
+  return Boolean(
+    normalizeDeliveryCode(row.deliveryCompanyCode) && normalizeInvoiceNumber(row.invoiceNumber),
+  );
+}
+
+function shouldRehydrateBulkResolveRow(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    "shipmentBoxId" | "availableActions" | "deliveryCompanyCode" | "invoiceNumber" | "invoiceTransmissionStatus"
+  >,
+  mode: CoupangShipmentWorksheetBulkResolveMode,
+) {
+  if (!normalizeWhitespace(row.shipmentBoxId)) {
+    return false;
+  }
+
+  if (mode === "prepare_ready") {
+    return row.availableActions.includes("markPreparing");
+  }
+
+  if (mode === "invoice_ready") {
+    return (
+      hasWorksheetInvoicePayload(row) &&
+      row.invoiceTransmissionStatus !== "pending" &&
+      row.invoiceTransmissionStatus !== "succeeded"
+    );
+  }
+
+  return false;
 }
 
 function buildWorksheetResponse(
@@ -1176,7 +1211,9 @@ async function refreshShipmentWorksheetRows(input: RefreshCoupangShipmentWorkshe
     const detailTargets = Array.from(
       new Set(
         refreshTargets.rows
-          .filter((row) => shouldRefreshWorksheetOrderDetail(row, now))
+          .filter((row) =>
+            input.scope === "shipment_boxes" ? true : shouldRefreshWorksheetOrderDetail(row, now),
+          )
           .map((row) => normalizeWhitespace(row.shipmentBoxId))
           .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
       ),
@@ -1999,7 +2036,7 @@ function buildWorksheetRow(input: {
 
   return {
     id: currentRow?.id ?? buildSourceKey(store.id, row),
-    sourceKey: buildSourceKey(store.id, row),
+    sourceKey: currentRow?.sourceKey ?? buildSourceKey(store.id, row),
     storeId: store.id,
     storeName: store.storeName,
     orderDateText: orderDate.text,
@@ -2666,30 +2703,54 @@ export async function resolveShipmentWorksheetBulkRows(input: {
   mode: CoupangShipmentWorksheetBulkResolveMode;
 }): Promise<CoupangShipmentWorksheetBulkResolveResponse> {
   const store = await getStoreOrThrow(input.storeId);
-  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
-  if (!currentSheet.items.length) {
+  let sheetForResolve = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  if (!sheetForResolve.items.length) {
     return {
       store: asStoreRef(store),
       mode: input.mode,
       items: [],
       blockedItems: [],
       fetchedAt: new Date().toISOString(),
-      message: normalizeLegacyWorksheetMessage(currentSheet.message),
-      source: currentSheet.source,
+      message: normalizeLegacyWorksheetMessage(sheetForResolve.message),
+      source: sheetForResolve.source,
       matchedCount: 0,
       resolvedCount: 0,
     };
   }
 
+  if (input.mode === "prepare_ready" || input.mode === "invoice_ready") {
+    const { filteredRows } = resolveShipmentWorksheetFilteredRows(buildWorksheetRows(sheetForResolve), {
+      ...input.viewQuery,
+      storeId: input.storeId,
+    });
+    const shipmentBoxIds = Array.from(
+      new Set(
+        filteredRows
+          .filter((row) => shouldRehydrateBulkResolveRow(row, input.mode))
+          .map((row) => normalizeWhitespace(row.shipmentBoxId))
+          .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+      ),
+    );
+
+    if (shipmentBoxIds.length > 0) {
+      await refreshShipmentWorksheetRows({
+        storeId: input.storeId,
+        scope: "shipment_boxes",
+        shipmentBoxIds,
+      });
+      sheetForResolve = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+    }
+  }
+
   const refreshed = await refreshWorksheetCustomerServiceStatuses({
     storeId: input.storeId,
-    rows: currentSheet.items.map(normalizeWorksheetRow),
-    syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
+    rows: sheetForResolve.items.map(normalizeWorksheetRow),
+    syncPlan: buildReadCustomerServiceSyncPlan(sheetForResolve),
     forceRefresh: false,
   });
   const resolved = resolveShipmentWorksheetRows(
     buildWorksheetRows({
-      ...currentSheet,
+      ...sheetForResolve,
       items: refreshed.rows,
     }),
     {
@@ -2705,8 +2766,8 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     items: resolved.items,
     blockedItems: resolved.blockedItems,
     fetchedAt: new Date().toISOString(),
-    message: normalizeLegacyWorksheetMessage(refreshed.message ?? currentSheet.message),
-    source: currentSheet.source,
+    message: normalizeLegacyWorksheetMessage(refreshed.message ?? sheetForResolve.message),
+    source: sheetForResolve.source,
     matchedCount: resolved.matchedCount,
     resolvedCount: resolved.resolvedCount,
   };

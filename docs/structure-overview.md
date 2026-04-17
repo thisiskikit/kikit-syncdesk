@@ -94,8 +94,10 @@ docs/
 - `POST /api/coupang/shipments/invoices/upload|update`
   - 서버가 worksheet 전송 상태를 먼저 `pending`으로 기록한 뒤 쿠팡 API를 호출합니다.
   - batch 응답에서 일부 결과가 빠지면 누락된 `shipmentBoxId`만 개별 재시도해 worksheet 최종 상태를 보정합니다.
+  - `invoice_ready` resolve는 전송 직전 후보 `shipmentBoxId`를 한 번 더 `shipment_boxes` refresh로 재수화해 stale worksheet 상태를 바로잡습니다.
 - `결제완료 -> 상품준비중`
   - 선행 `수집 누락 audit`와 `prepare_ready resolve`는 유지합니다.
+  - `prepare_ready` resolve도 후보 `shipmentBoxId`를 먼저 `shipment_boxes` refresh로 맞춰 이미 `INSTRUCT`로 바뀐 건을 prepare 대상에서 제외합니다.
   - 성공 후 전체 `incremental collect`를 다시 기다리지 않고, 성공 행을 먼저 낙관 반영한 뒤 `shipment_boxes` scope refresh를 비동기로 붙입니다.
 
 ### 현재 출고 화면 계층
