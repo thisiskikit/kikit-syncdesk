@@ -92,7 +92,7 @@
 - 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
 - `invoice_ready` / `prepare_ready` bulk resolve는 전송·처리 직전에 후보 `shipmentBoxId`를 `shipment_boxes` refresh로 다시 맞춰 stale `orderStatus`/`vendorItemId` 때문에 정상 건이 빠지지 않게 합니다.
 - 같은 bulk resolve는 CS 상태 재조회도 전체 worksheet가 아니라 실제 `invoice_ready` / `prepare_ready` / `not_exported_download` 후보 행만 대상으로 좁히고, `shipment_boxes` refresh를 이미 돌린 후보에는 CS 재조회를 중복하지 않아 송장 전송 직전 `worksheet/resolve`가 과하게 무거워지지 않게 했습니다.
-- 같은 `worksheet/resolve` 단계의 `shipment_boxes` refresh는 후보 행을 메모리에서만 재수화하고, resolve를 위해 전체 worksheet를 다시 DB에 저장하지 않습니다. 그래서 대량 송장 전송에서도 stale 보정은 유지하면서 Cloud Run 메모리 사용량을 크게 줄입니다.
+- 같은 `worksheet/resolve` 단계의 `shipment_boxes` refresh는 후보 행을 메모리에서만 재수화하고, resolve를 위해 전체 worksheet를 다시 DB에 저장하지 않습니다. 이때 resolve 판단에 필요 없는 상품 상세 재조회도 건너뛰어 대량 송장 전송에서 메모리와 대기 시간을 함께 줄입니다.
 - 선택 송장 전송도 클릭 시점에 선택 `shipmentBoxId`를 먼저 refresh한 뒤 최신 행 스냅샷으로 검증/전송하고, 성공 건은 다시 `shipment_boxes` refresh를 붙여 화면 상태를 따라갑니다.
 - 송장 입력 모드의 상단 `송장 전송하기` 버튼은 현재 페이지에 송장 payload가 남아 있으면 stale `availableActions` 때문에 시작 자체를 막지 않고, 실제 전송 가능 여부는 직전 refresh + bulk resolve에서 다시 판정합니다.
 - 송장 입력 모드의 상단 `송장 전송하기`는 현재 페이지의 `상품준비중(ACCEPT)` 행 중 송장 payload가 이미 입력된 건을 먼저 `상품준비중 처리`로 자동 전환한 뒤 이어서 송장을 전송합니다.

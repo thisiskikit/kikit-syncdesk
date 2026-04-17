@@ -1163,6 +1163,7 @@ async function refreshShipmentWorksheetRows(
   input: RefreshCoupangShipmentWorksheetInput & {
     currentSheet?: WorksheetStoreSheet;
     persistToStore?: boolean;
+    skipProductDetailHydration?: boolean;
   },
 ) {
   const store = await getStoreOrThrow(input.storeId);
@@ -1204,6 +1205,9 @@ async function refreshShipmentWorksheetRows(
   }
 
   const phaseSet = new Set(refreshTargets.phases);
+  if (input.skipProductDetailHydration) {
+    phaseSet.delete("product_detail_hydration");
+  }
   const detailWarnings: string[] = [];
   const productWarnings: string[] = [];
   const detailByShipmentBoxId = new Map<
@@ -1364,12 +1368,13 @@ async function refreshShipmentWorksheetRows(
   const updatedCount = finalRows.filter((row, index) =>
     hasWorksheetRowChanged(refreshTargets.rows[index], row),
   ).length;
+  const activePhases = refreshTargets.phases.filter((phase) => phaseSet.has(phase));
   const warningPhases = uniqueShipmentSyncPhases([
     ...(detailWarnings.length > 0 ? (["order_detail_hydration"] as const) : []),
     ...(productWarnings.length > 0 ? (["product_detail_hydration"] as const) : []),
     ...(customerServiceRefresh.message ? (["customer_service_refresh"] as const) : []),
   ]);
-  const completedPhases = refreshTargets.phases.filter(
+  const completedPhases = activePhases.filter(
     (phase) => !warningPhases.includes(phase),
   );
   const nextSyncSummary =
@@ -2761,6 +2766,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
         shipmentBoxIds,
         currentSheet: sheetForResolve,
         persistToStore: false,
+        skipProductDetailHydration: true,
       });
       refreshMessage = normalizeLegacyWorksheetMessage(refreshResult.message ?? sheetForResolve.message);
       rowsForResolve = mergeWorksheetRowsBySourceKey(worksheetRows, refreshResult.items);
