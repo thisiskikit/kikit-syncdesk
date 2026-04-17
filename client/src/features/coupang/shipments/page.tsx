@@ -46,6 +46,7 @@ import {
 import { useOperations } from "@/components/operation-provider";
 import { StatusBadge } from "@/components/status-badge";
 import {
+  canAttemptInvoiceRow,
   canSendInvoiceRow,
   getInvoiceStatusCardKey,
   isSameInvoicePayload,
@@ -2151,6 +2152,10 @@ export default function CoupangShipmentsPage() {
     () => visibleRows.filter((row) => canSendInvoiceRow(row) && row.invoiceTransmissionStatus !== "pending"),
     [visibleRows],
   );
+  const invoiceTransmitCandidateRows = useMemo(
+    () => visibleRows.filter((row) => canAttemptInvoiceRow(row)),
+    [visibleRows],
+  );
   const detailRow = useMemo(() => {
     if (!detailRowSnapshot) {
       return null;
@@ -2839,10 +2844,16 @@ export default function CoupangShipmentsPage() {
       : transmitActionLabel;
   const transmitActionDisabled =
     (worksheetMode === "invoice"
-      ? !((activeSheet?.invoiceReadyCount ?? 0) || invoiceReadyRows.length)
+      ? !(
+          (activeSheet?.invoiceReadyCount ?? 0) ||
+          invoiceReadyRows.length ||
+          invoiceTransmitCandidateRows.length
+        )
       : !selectedRows.length) ||
     isFallback ||
     busyAction !== null;
+  const selectedTransmitActionDisabled =
+    !selectedReadyRows.length || isFallback || busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const prepareActionDisabled =
     !filters.selectedStoreId ||
@@ -4720,7 +4731,7 @@ export default function CoupangShipmentsPage() {
       selectedReadyRowsCount={selectedReadyRows.length}
       selectedDecisionBlockedRowsCount={selectedDecisionBlockedRows.length}
       blockedDecisionSummary={selectedBlockedDecisionSummary}
-      transmitDisabled={!selectedReadyRows.length || transmitActionDisabled}
+      transmitDisabled={selectedTransmitActionDisabled}
       downloadDisabled={openExcelExportDisabled}
       onTransmit={() => void executeSelectedInvoices()}
       onDownload={() => openExcelSortDialog("selected")}

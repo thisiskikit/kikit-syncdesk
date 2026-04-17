@@ -91,6 +91,7 @@
 - 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
 - `invoice_ready` / `prepare_ready` bulk resolve는 전송·처리 직전에 후보 `shipmentBoxId`를 `shipment_boxes` refresh로 다시 맞춰 stale `orderStatus`/`vendorItemId` 때문에 정상 건이 빠지지 않게 합니다.
 - 선택 송장 전송도 클릭 시점에 선택 `shipmentBoxId`를 먼저 refresh한 뒤 최신 행 스냅샷으로 검증/전송하고, 성공 건은 다시 `shipment_boxes` refresh를 붙여 화면 상태를 따라갑니다.
+- 송장 입력 모드의 상단 `송장 전송하기` 버튼은 현재 페이지에 송장 payload가 남아 있으면 stale `availableActions` 때문에 시작 자체를 막지 않고, 실제 전송 가능 여부는 직전 refresh + bulk resolve에서 다시 판정합니다.
 - Naver 발송은 이미 발송된 주문 응답을 멱등 성공으로 처리해 불필요한 실패 누적을 줄입니다.
 - worksheet 읽기(`getShipmentWorksheet`, `worksheet/view`, bulk resolve)는 CS 요약 캐시를 존중하고, 조회 시마다 강제 live 클레임 재조회나 전체 worksheet 재저장을 수행하지 않습니다.
 - 출고 화면의 worksheet query는 짧은 stale window를 두고 mount/focus 때마다 자동 재조회하지 않도록 완화됐습니다.

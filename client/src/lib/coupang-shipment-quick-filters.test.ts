@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import {
   buildShipmentQuickFilterResult,
+  canAttemptInvoiceRow,
+  canSendInvoiceRow,
   getInvoiceStatusCardKey,
   getOrderStatusCardKey,
   pruneShipmentSelectedRowIds,
@@ -138,6 +140,34 @@ describe("getInvoiceStatusCardKey", () => {
     ).toBe("ready");
 
     expect(getInvoiceStatusCardKey(createRow())).toBe("idle");
+  });
+});
+
+describe("invoice transmission quick filters", () => {
+  it("keeps stale invoice rows as transmission candidates before live actions are refreshed", () => {
+    const staleRow = createRow({
+      deliveryCompanyCode: "HYUNDAI",
+      invoiceNumber: "257645330736",
+      availableActions: ["markPreparing"],
+    });
+
+    expect(canAttemptInvoiceRow(staleRow)).toBe(true);
+    expect(canSendInvoiceRow(staleRow)).toBe(false);
+  });
+
+  it("still excludes claim-affected rows from invoice transmission candidates", () => {
+    const claimRow = createRow({
+      deliveryCompanyCode: "CJ",
+      invoiceNumber: "111",
+      customerServiceIssueSummary: "출고중지 요청 1건",
+      customerServiceIssueCount: 1,
+      customerServiceIssueBreakdown: [
+        { type: "shipment_stop_requested", count: 1, label: "출고중지 요청 1건" },
+      ],
+    });
+
+    expect(canAttemptInvoiceRow(claimRow)).toBe(false);
+    expect(canSendInvoiceRow(claimRow)).toBe(false);
   });
 });
 

@@ -138,7 +138,7 @@ function hasAppliedInvoiceTransmission(
   );
 }
 
-export function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
+export function canAttemptInvoiceRow(row: CoupangShipmentWorksheetRow) {
   return (
     hasInvoicePayload(row) &&
     row.invoiceTransmissionStatus !== "pending" &&
@@ -147,7 +147,13 @@ export function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
       summary: row.customerServiceIssueSummary,
       count: row.customerServiceIssueCount,
       breakdown: row.customerServiceIssueBreakdown,
-    }) &&
+    })
+  );
+}
+
+export function canSendInvoiceRow(row: CoupangShipmentWorksheetRow) {
+  return (
+    canAttemptInvoiceRow(row) &&
     (row.availableActions.includes("uploadInvoice") ||
       row.availableActions.includes("updateInvoice"))
   );
