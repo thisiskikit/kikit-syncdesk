@@ -2,6 +2,21 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-17 / 출고 기본 조회의 live CS 자동 갱신 중단
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `docs/current-status.md`
+  - `docs/structure-overview.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `GET /api/coupang/shipments/worksheet/view`는 이제 저장된 worksheet 스냅샷만 반환하고, 기본 조회 시 live CS 요약 재조회와 worksheet 재계산을 수행하지 않습니다.
+  - live CS 재확인은 `worksheet/refresh`, `shipment_boxes` refresh, `customer_service` refresh, bulk resolve 직전 후보 refresh 같은 explicit 경로에만 남깁니다.
+- 이유:
+  - 출고 화면 기본 진입과 필터 변경마다 live CS 갱신이 붙으면서 응답이 느려지고, 대량 worksheet에서 화면 체감 속도를 악화시키고 있었습니다.
+
 ## 2026-04-17 / 송장 전송 대상 해석과 성공 상태 즉시 반영 보강
 
 - 변경 유형:

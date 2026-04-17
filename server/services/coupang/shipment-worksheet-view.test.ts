@@ -215,7 +215,7 @@ describe("shipment worksheet view", () => {
 
     expect(resolved.items.map((row) => row.id)).toEqual(["1"]);
     expect(resolved.blockedItems.map((row) => row.id)).toEqual(["2"]);
-    expect(resolved.matchedCount).toBe(3);
+    expect(resolved.matchedCount).toBe(2);
     expect(resolved.resolvedCount).toBe(1);
   });
 

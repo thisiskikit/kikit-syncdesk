@@ -100,7 +100,8 @@
 - 송장 전송 성공 건은 worksheet patch 단계에서 `DEPARTURE` / `updateInvoice` 쪽으로 먼저 낙관 반영해, 쿠팡 반영 직후에도 오래 `INSTRUCT` / `uploadInvoice`로 남아 보이지 않게 했습니다.
 - 쿠팡 `updateInvoice`가 `retryRequired=true / UNDEFINED_ERROR_OCCUR`를 반환해도, 직후 live 상세에서 같은 송장번호가 이미 보이면 서버가 이를 멱등 성공으로 승격해 worksheet 실패 상태를 남기지 않습니다.
 - Naver 발송은 이미 발송된 주문 응답을 멱등 성공으로 처리해 불필요한 실패 누적을 줄입니다.
-- worksheet 읽기(`getShipmentWorksheet`, `worksheet/view`, bulk resolve)는 CS 요약 캐시를 존중하고, 조회 시마다 강제 live 클레임 재조회나 전체 worksheet 재저장을 수행하지 않습니다.
+- worksheet 읽기 중 `getShipmentWorksheet`와 `worksheet/view`는 저장된 worksheet 스냅샷만 반환하고, 기본 조회에서 live CS 재조회를 수행하지 않습니다.
+- live CS 재확인은 `worksheet/refresh`, `shipment_boxes` refresh, `customer_service` refresh, bulk resolve 직전 후보 refresh처럼 explicit 경로에서만 수행합니다.
 - 출고 화면의 worksheet query는 짧은 stale window를 두고 mount/focus 때마다 자동 재조회하지 않도록 완화됐습니다.
 
 ### 보관함

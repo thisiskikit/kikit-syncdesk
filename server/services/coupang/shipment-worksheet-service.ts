@@ -2488,33 +2488,7 @@ export async function getShipmentWorksheetView(
 ): Promise<CoupangShipmentWorksheetViewResponse> {
   const store = await getStoreOrThrow(query.storeId);
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(query.storeId);
-  if (!currentSheet.items.length) {
-    return buildWorksheetViewResponse(store, currentSheet, query);
-  }
-
-  const refreshed = await refreshWorksheetCustomerServiceStatuses({
-    storeId: query.storeId,
-    rows: currentSheet.items.map(normalizeWorksheetRow),
-    syncPlan: buildReadCustomerServiceSyncPlan(currentSheet),
-    forceRefresh: false,
-  });
-  const hasRowChanges = refreshed.rows.some((row, index) =>
-    hasWorksheetRowChanged(currentSheet.items[index], row),
-  );
-  const nextMessage = normalizeLegacyWorksheetMessage(refreshed.message ?? currentSheet.message);
-  const messageChanged = nextMessage !== normalizeLegacyWorksheetMessage(currentSheet.message);
-
-  if (!hasRowChanges && !messageChanged) {
-    return buildWorksheetViewResponse(store, currentSheet, query, refreshed.message);
-  }
-
-  const sheet = {
-    ...currentSheet,
-    items: refreshed.rows,
-    message: refreshed.message ?? currentSheet.message,
-  };
-
-  return buildWorksheetViewResponse(store, sheet, query, refreshed.message);
+  return buildWorksheetViewResponse(store, currentSheet, query);
 }
 
 export async function getShipmentArchiveView(

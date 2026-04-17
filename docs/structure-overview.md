@@ -97,6 +97,7 @@ docs/
 - `invoice_ready` resolve는 전송 직전 후보 `shipmentBoxId`를 한 번 더 `shipment_boxes` refresh로 재수화해 stale worksheet 상태를 바로잡습니다.
 - 같은 bulk resolve는 CS 상태도 전체 worksheet가 아니라 실제 후보 행만 다시 확인하고, `shipment_boxes` refresh 직후 같은 후보를 다시 CS 조회하지 않아 대량 worksheet에서도 `resolve` 단계가 과하게 늘어나지 않도록 줄였습니다.
 - resolve 직전의 `shipment_boxes` refresh 결과는 메모리에서만 합쳐 판정하고, resolve 때문에 전체 worksheet를 다시 저장하지 않습니다. 같은 경로에서 상품 상세 재조회도 생략해 전송 후보 판정만 빠르게 끝내도록 했습니다.
+- 기본 `worksheet/view` 읽기는 저장된 worksheet 스냅샷만 사용하고, live CS 재조회는 수동 refresh나 resolve 직전 후보 refresh에서만 수행합니다.
 - 상단 `송장 전송하기` 버튼은 기본 화면/송장 입력 모드 모두 현재 필터 범위의 전송 가능 행을 기준으로 동작하고, 선택 건만 보내는 경로는 선택 action bar로 분리합니다.
   - 같은 버튼은 stale `availableActions`만으로 시작을 막지 않고, 위 refresh 이후 실제 전송 가능 여부를 다시 확정합니다.
   - `ACCEPT` 상태지만 송장 payload가 이미 들어간 행은 먼저 `markPreparing`으로 자동 처리한 뒤 이어서 송장을 전송합니다.
