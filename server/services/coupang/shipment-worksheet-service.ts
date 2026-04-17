@@ -2705,6 +2705,8 @@ export async function resolveShipmentWorksheetBulkRows(input: {
 }): Promise<CoupangShipmentWorksheetBulkResolveResponse> {
   const store = await getStoreOrThrow(input.storeId);
   let sheetForResolve = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  let refreshMessage: string | null = null;
+  let didRefreshTargetRows = false;
   if (!sheetForResolve.items.length) {
     return {
       store: asStoreRef(store),
@@ -2734,12 +2736,14 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     );
 
     if (shipmentBoxIds.length > 0) {
-      await refreshShipmentWorksheetRows({
+      const refreshResult = await refreshShipmentWorksheetRows({
         storeId: input.storeId,
         scope: "shipment_boxes",
         shipmentBoxIds,
       });
       sheetForResolve = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+      refreshMessage = normalizeLegacyWorksheetMessage(refreshResult.message ?? sheetForResolve.message);
+      didRefreshTargetRows = true;
     }
   }
 
@@ -2752,15 +2756,22 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     filteredRows,
     input.mode,
   );
-  const refreshed = await refreshWorksheetCustomerServiceStatuses({
-    storeId: input.storeId,
-    rows: customerServiceTargetRows,
-    syncPlan: buildReadCustomerServiceSyncPlan(sheetForResolve),
-    forceRefresh: false,
-  });
-  const refreshedRowsById = new Map(refreshed.rows.map((row) => [row.id, row] as const));
+  let rowsForResolve = worksheetRows;
+
+  if (!didRefreshTargetRows && customerServiceTargetRows.length > 0) {
+    const refreshed = await refreshWorksheetCustomerServiceStatuses({
+      storeId: input.storeId,
+      rows: customerServiceTargetRows,
+      syncPlan: buildReadCustomerServiceSyncPlan(sheetForResolve),
+      forceRefresh: false,
+    });
+    const refreshedRowsById = new Map(refreshed.rows.map((row) => [row.id, row] as const));
+    rowsForResolve = worksheetRows.map((row) => refreshedRowsById.get(row.id) ?? row);
+    refreshMessage = normalizeLegacyWorksheetMessage(refreshed.message ?? sheetForResolve.message);
+  }
+
   const resolved = resolveShipmentWorksheetRows(
-    worksheetRows.map((row) => refreshedRowsById.get(row.id) ?? row),
+    rowsForResolve,
     {
       ...input.viewQuery,
       storeId: input.storeId,
@@ -2774,7 +2785,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     items: resolved.items,
     blockedItems: resolved.blockedItems,
     fetchedAt: new Date().toISOString(),
-    message: normalizeLegacyWorksheetMessage(refreshed.message ?? sheetForResolve.message),
+    message: normalizeLegacyWorksheetMessage(refreshMessage ?? sheetForResolve.message),
     source: sheetForResolve.source,
     matchedCount: resolved.matchedCount,
     resolvedCount: resolved.resolvedCount,

@@ -421,9 +421,12 @@ describe("resolveShipmentWorksheetBulkRows", () => {
     const customerServiceCalls = getOrderCustomerServiceSummaryMock.mock.calls.map(
       ([input]) => input as { items: Array<{ rowKey: string }> },
     );
-    expect(customerServiceCalls.length).toBeGreaterThan(0);
-    expect(customerServiceCalls.some((call) => call.items.every((item) => item.rowKey === "row-invoice"))).toBe(true);
-    expect(customerServiceCalls.some((call) => call.items.some((item) => item.rowKey === "row-ignore"))).toBe(false);
+    expect(customerServiceCalls).toHaveLength(1);
+    expect(customerServiceCalls[0]?.items).toEqual([
+      expect.objectContaining({
+        rowKey: "row-invoice",
+      }),
+    ]);
     expect(result.matchedCount).toBe(1);
     expect(result.resolvedCount).toBe(1);
     expect(result.items).toHaveLength(1);
