@@ -1728,9 +1728,9 @@ textarea {
 
 .column-settings-row {
   display: grid;
-  grid-template-columns: 88px minmax(180px, 1fr) minmax(180px, 220px) minmax(120px, auto) auto;
-  gap: 0.75rem;
-  align-items: center;
+  grid-template-columns: 88px minmax(240px, 1.15fr) minmax(240px, 1fr) minmax(280px, 1.1fr) auto;
+  gap: 1rem;
+  align-items: start;
   padding: 0.9rem 1rem;
   border: 1px solid #d9e1ea;
   border-radius: 16px;
@@ -1754,6 +1754,110 @@ textarea {
   cursor: grab;
 }
 
+.column-settings-field {
+  min-width: 0;
+}
+
+.column-settings-field-label {
+  font-size: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.column-settings-field-actions {
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.column-settings-field-meta {
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.column-settings-preview {
+  min-width: 0;
+}
+
+.column-settings-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.column-settings-preview-width {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.65rem;
+  padding: 0 0.6rem;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #24446a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.column-settings-preview-card {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #d6e4f3;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.column-settings-preview-value {
+  min-width: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #13263c;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.column-settings-preview-meta,
+.column-settings-preview-comparison-item {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.column-settings-preview-meta-label {
+  font-size: 0.72rem;
+  color: #63758a;
+}
+
+.column-settings-preview-meta-value {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #2d435d;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.column-settings-preview-comparison {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed #dbe5ef;
+}
+
+.column-settings-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.6rem;
+  min-width: 92px;
+}
+
+.column-settings-width-note {
+  font-size: 0.75rem;
+  text-align: right;
+}
+
 @media (max-width: 960px) {
   .column-settings-row {
     grid-template-columns: 1fr;
@@ -1770,6 +1874,14 @@ textarea {
   .column-settings-handle {
     justify-content: flex-start;
     padding: 0 0.9rem;
+  }
+
+  .column-settings-actions {
+    justify-items: stretch;
+  }
+
+  .column-settings-width-note {
+    text-align: left;
   }
 }
 

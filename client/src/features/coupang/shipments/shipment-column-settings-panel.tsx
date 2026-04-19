@@ -3,7 +3,6 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import type { ShipmentColumnPresetKey } from "./shipment-column-presets";
 import { formatShipmentColumnPreviewValue } from "./shipment-column-preview";
 import {
-  formatShipmentColumnSourceOptionLabel,
   getShipmentColumnSourceStorageKey,
   resolveShipmentColumnDefaultWidth,
   resolveShipmentColumnLabelForSourceChange,
@@ -60,11 +59,16 @@ function groupSourceOptions(options: ShipmentColumnSourceOption[]) {
   return Array.from(grouped.entries());
 }
 
-export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSettingsPanelProps) {
+export default function ShipmentColumnSettingsPanel(
+  props: ShipmentColumnSettingsPanelProps,
+) {
   const sourceOptionByKey = new Map(
     props.shipmentColumnSourceOptions.map((option) => [option.key, option] as const),
   );
   const groupedSourceOptions = groupSourceOptions(props.shipmentColumnSourceOptions);
+  const rawFieldCatalog = props.shipmentColumnSourceOptions
+    .map((option) => option.catalogItem)
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
     <div className="card">
@@ -72,17 +76,17 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
         <div>
           <h2 style={{ margin: 0 }}>다운로드 컬럼 설정</h2>
           <div className="muted shipment-grid-note">
-            컬럼명 변경, 필드 변경, 삭제, 추가가 가능합니다. 여기서 바꾼 구성은 워크시트와 엑셀 다운로드에
-            함께 적용됩니다.
+            컬럼명 변경, 필드 변경, 순서 조정, 추가가 가능합니다. 여기서 바꾼 구성은
+            워크시트와 엑셀 다운로드에 함께 적용됩니다.
           </div>
           <div className="muted shipment-grid-note">
-            source column은 `기본 필드`와 `쿠팡 raw field`로 나뉩니다. raw field는 수집된
-            `order.*`, `detail.*`, `product.*` 평탄화 맵에서 읽어오며 읽기 전용입니다.
+            source column은 기본 필드와 쿠팡 raw field로 나뉩니다. raw field는 수집된
+            `order.*`, `detail.*`, `product.*` 값을 그대로 읽는 용도입니다.
           </div>
           <div className="muted shipment-grid-note">
             {props.previewRowDescription
               ? `미리보기 기준: ${props.previewRowDescription}`
-              : "배송 시트를 불러오면 여기에서 컬럼별 실제 미리보기 값을 확인할 수 있습니다."}
+              : "배송 시트를 불러오면 여기에서 현재 행 기준 미리보기 값을 바로 확인할 수 있습니다."}
           </div>
         </div>
         <div className="toolbar">
@@ -100,7 +104,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
             onClick={() => props.onOpenExcelSortDialog("selected")}
             disabled={props.openExcelExportDisabled}
           >
-            선택 행 엑셀 다운로드
+            선택 건 엑셀 다운로드
           </button>
           <button
             className="button ghost"
@@ -112,7 +116,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
         </div>
         {props.selectedRowsCount > 0 && props.selectedExportBlockedRowCount > 0 ? (
           <div className="muted action-disabled-reason">
-            선택한 클레임 {props.selectedExportBlockedRowCount}건은 다운로드에서 제외됩니다.
+            선택된 클레임 {props.selectedExportBlockedRowCount}건은 다운로드에서 제외됩니다.
           </div>
         ) : null}
         {props.notExportedCount > 0 && props.claimScopeCount > 0 ? (
@@ -127,7 +131,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
           <div>
             <strong>추천 보기 프리셋</strong>
             <div className="muted shipment-grid-note">
-              가로 스크롤을 줄이고 싶다면 먼저 프리셋을 적용한 뒤 필요한 컬럼만 조정하세요.
+              먼저 프리셋을 적용한 뒤 필요한 컬럼만 세부 조정하는 흐름에 맞춰져 있습니다.
             </div>
           </div>
           <div className="toolbar shipment-column-preset-actions">
@@ -151,6 +155,10 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
           const configSourceKey = getShipmentColumnSourceStorageKey(config.source);
           const selectedOption = sourceOptionByKey.get(configSourceKey);
           const previewValue = formatShipmentColumnPreviewValue(props.previewRow, config.source);
+          const defaultLabel = resolveShipmentColumnSourceLabel(config.source, rawFieldCatalog);
+          const currentWidth =
+            props.columnWidths[config.id] ??
+            resolveShipmentColumnDefaultWidth(config.source, selectedOption?.catalogItem);
           const combinedPreviewValue = formatShipmentColumnPreviewValue(props.previewRow, {
             kind: "builtin",
             key: "exposedProductName",
@@ -175,16 +183,15 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
               onDrop={() => props.onDrop(config.id)}
             >
               <div className="column-settings-handle">드래그</div>
-              <div style={{ minWidth: 0 }}>
-                <div className="muted" style={{ fontSize: "0.75rem", marginBottom: 4 }}>
-                  다운로드 헤더
-                </div>
+
+              <div className="column-settings-field">
+                <div className="column-settings-field-label muted">다운로드 헤더</div>
                 <input
                   value={config.label}
                   onChange={(event) => props.onUpdate(config.id, { label: event.target.value })}
                   placeholder="컬럼명"
                 />
-                <div className="toolbar" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <div className="toolbar column-settings-field-actions">
                   <button
                     type="button"
                     className="button ghost"
@@ -195,29 +202,15 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                   <button
                     type="button"
                     className="button ghost"
-                    onClick={() =>
-                      props.onUpdate(config.id, {
-                        label: resolveShipmentColumnSourceLabel(
-                          config.source,
-                          props.shipmentColumnSourceOptions
-                            .map((option) => option.catalogItem)
-                            .filter(
-                              (
-                                item,
-                              ): item is NonNullable<typeof item> => Boolean(item),
-                            ),
-                        ),
-                      })
-                    }
+                    onClick={() => props.onUpdate(config.id, { label: defaultLabel })}
                   >
-                    표시명 적용
+                    기본 표시명 적용
                   </button>
                 </div>
               </div>
-              <div style={{ minWidth: 0 }}>
-                <div className="muted" style={{ fontSize: "0.75rem", marginBottom: 4 }}>
-                  source column
-                </div>
+
+              <div className="column-settings-field">
+                <div className="column-settings-field-label muted">source column</div>
                 <select
                   value={configSourceKey}
                   onChange={(event) => {
@@ -232,13 +225,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                         currentLabel: config.label,
                         previousSource: config.source,
                         nextSource: nextOption.source,
-                        rawFieldCatalog: props.shipmentColumnSourceOptions
-                          .map((option) => option.catalogItem)
-                          .filter(
-                            (
-                              item,
-                            ): item is NonNullable<typeof item> => Boolean(item),
-                          ),
+                        rawFieldCatalog,
                       }),
                     });
                   }}
@@ -253,54 +240,55 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                     </optgroup>
                   ))}
                 </select>
-                <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+                <div className="column-settings-field-meta muted">
                   현재 key: <code>{configSourceKey}</code>
                 </div>
               </div>
-              <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
-                <div className="muted" style={{ fontSize: "0.75rem" }}>
-                  미리보기
+
+              <div className="column-settings-preview">
+                <div className="column-settings-preview-header">
+                  <div className="column-settings-field-label muted">미리보기</div>
+                  <span className="column-settings-preview-width">{currentWidth}px</span>
                 </div>
-                <div
-                  title={previewValue}
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {previewValue}
-                </div>
-                <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
-                  기본 표시명:{" "}
-                  {resolveShipmentColumnSourceLabel(
-                    config.source,
-                    props.shipmentColumnSourceOptions
-                      .map((option) => option.catalogItem)
-                      .filter((item): item is NonNullable<typeof item> => Boolean(item)),
-                  )}
-                </div>
-                {shouldShowCoupangNameComparison ? (
-                  <div className="muted" style={{ fontSize: "0.75rem" }}>
-                    현재 조합값: {combinedPreviewValue}
-                    <br />
-                    쿠팡 원본값: {rawCoupangPreviewValue}
+                <div className="column-settings-preview-card">
+                  <div className="column-settings-preview-value" title={previewValue}>
+                    {previewValue}
                   </div>
-                ) : null}
+                  <div className="column-settings-preview-meta">
+                    <span className="column-settings-preview-meta-label">기본 표시명</span>
+                    <span className="column-settings-preview-meta-value">{defaultLabel}</span>
+                  </div>
+                  {shouldShowCoupangNameComparison ? (
+                    <div className="column-settings-preview-comparison">
+                      <div className="column-settings-preview-comparison-item">
+                        <span className="column-settings-preview-meta-label">현재 조합값</span>
+                        <span className="column-settings-preview-meta-value">
+                          {combinedPreviewValue}
+                        </span>
+                      </div>
+                      <div className="column-settings-preview-comparison-item">
+                        <span className="column-settings-preview-meta-label">쿠팡 원본값</span>
+                        <span className="column-settings-preview-meta-value">
+                          {rawCoupangPreviewValue}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
-              <div className="muted">
-                현재 너비{" "}
-                {props.columnWidths[config.id] ??
-                  resolveShipmentColumnDefaultWidth(config.source, selectedOption?.catalogItem)}
-                px
+
+              <div className="column-settings-actions">
+                <div className="column-settings-width-note muted">
+                  현재 너비 {currentWidth}px
+                </div>
+                <button
+                  className="button ghost"
+                  onClick={() => props.onDelete(config.id)}
+                  disabled={props.columnConfigs.length <= 1}
+                >
+                  삭제
+                </button>
               </div>
-              <button
-                className="button ghost"
-                onClick={() => props.onDelete(config.id)}
-                disabled={props.columnConfigs.length <= 1}
-              >
-                삭제
-              </button>
             </div>
           );
         })}
