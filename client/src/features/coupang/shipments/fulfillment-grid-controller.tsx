@@ -17,6 +17,7 @@ import {
 } from "./shipment-column-presets";
 import type {
   ShipmentColumnConfig,
+  ShipmentPreviewRowOption,
   ShipmentColumnSourceOption,
   WorksheetMode,
 } from "./types";
@@ -100,6 +101,8 @@ type FulfillmentGridControllerProps = {
     draggingConfigId: string | null;
     previewRow: CoupangShipmentWorksheetRow | null;
     previewRowDescription: string | null;
+    previewRowOptions: ShipmentPreviewRowOption[];
+    selectedPreviewRowId: string | null;
     openExcelExportDisabled: boolean;
     openNotExportedExcelExportDisabled: boolean;
     selectedRowsCount: number;
@@ -117,6 +120,7 @@ type FulfillmentGridControllerProps = {
     onDragEnd: () => void;
     onDrop: (targetId: string) => void;
     onUpdate: (id: string, patch: Partial<ShipmentColumnConfig>) => void;
+    onPreviewRowChange: (rowId: string | null) => void;
     onOpenExcelSortDialog: (scope: "selected" | "notExported") => void;
   };
 };
@@ -232,6 +236,8 @@ export default function FulfillmentGridController({
         draggingConfigId={settings.draggingConfigId}
         previewRow={settings.previewRow}
         previewRowDescription={settings.previewRowDescription}
+        previewRowOptions={settings.previewRowOptions}
+        selectedPreviewRowId={settings.selectedPreviewRowId}
         openExcelExportDisabled={settings.openExcelExportDisabled}
         openNotExportedExcelExportDisabled={settings.openNotExportedExcelExportDisabled}
         selectedRowsCount={settings.selectedRowsCount}
@@ -250,6 +256,7 @@ export default function FulfillmentGridController({
         onDragEnd={settings.onDragEnd}
         onDrop={settings.onDrop}
         onUpdate={settings.onUpdate}
+        onPreviewRowChange={settings.onPreviewRowChange}
         onOpenExcelSortDialog={settings.onOpenExcelSortDialog}
       />
     </Suspense>

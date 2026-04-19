@@ -191,6 +191,7 @@ import type {
   ShipmentColumnSourceKey,
   ShipmentExcelExportScope,
   ShipmentExcelSortKey,
+  ShipmentPreviewRowOption,
   WorksheetMode,
 } from "./types";
 
@@ -1379,7 +1380,7 @@ function getShipmentExportValue(row: CoupangShipmentWorksheetRow, source: Shipme
 
 function summarizeShipmentColumnPreviewRow(
   row: Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber" | "exposedProductName" | "productName">,
-  mode: "selected" | "visible",
+  mode: "selected" | "visible" | "manual",
 ) {
   const basisLabel = mode === "selected" ? "선택한 행 기준" : "현재 목록 첫 행 기준";
   const summaryParts = [
@@ -1388,6 +1389,57 @@ function summarizeShipmentColumnPreviewRow(
   ].filter(Boolean);
 
   return summaryParts.length ? `${basisLabel} · ${summaryParts.join(" · ")}` : basisLabel;
+}
+
+function describeShipmentColumnPreviewRow(
+  row: Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber" | "exposedProductName" | "productName">,
+  mode: "selected" | "visible" | "manual",
+) {
+  const basisLabel =
+    mode === "selected"
+      ? "선택한 행 기준"
+      : mode === "manual"
+        ? "직접 고른 행 기준"
+        : "현재 목록 첫 행 기준";
+  const summaryParts = [
+    row.selpickOrderNumber?.trim() ? `주문 ${row.selpickOrderNumber.trim()}` : null,
+    row.exposedProductName?.trim() || row.productName?.trim() || null,
+  ].filter(Boolean);
+
+  return summaryParts.length ? `${basisLabel} · ${summaryParts.join(" · ")}` : basisLabel;
+}
+
+function truncateShipmentPreviewRowText(value: string, maxLength = 42) {
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function buildShipmentPreviewRowOption(
+  row: Pick<
+    CoupangShipmentWorksheetRow,
+    | "id"
+    | "selpickOrderNumber"
+    | "productOrderNumber"
+    | "exposedProductName"
+    | "productName"
+    | "receiverName"
+    | "orderStatus"
+  >,
+): ShipmentPreviewRowOption {
+  const orderIdentity = row.selpickOrderNumber?.trim() || row.productOrderNumber?.trim() || row.id;
+  const productLabel = row.exposedProductName?.trim() || row.productName?.trim() || "상품명 없음";
+  const receiverLabel = row.receiverName?.trim() ? `수령인 ${row.receiverName.trim()}` : null;
+  const statusLabel = row.orderStatus?.trim() ? `상태 ${row.orderStatus.trim()}` : null;
+
+  return {
+    id: row.id,
+    label: `${orderIdentity} · ${truncateShipmentPreviewRowText(productLabel, 30)}`,
+    description: [orderIdentity, productLabel, receiverLabel, statusLabel].filter(Boolean).join(" · "),
+  };
 }
 
 function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
@@ -1518,6 +1570,7 @@ export default function CoupangShipmentsPage() {
     "kikit:coupang-shipments:columns",
     createDefaultShipmentColumnConfigs(),
   );
+  const [columnPreviewRowId, setColumnPreviewRowId] = useState<string | null>(null);
   const columnConfigs = useMemo(
     () => normalizeShipmentColumnConfigs(persistedColumnConfigs),
     [persistedColumnConfigs],
@@ -2050,13 +2103,55 @@ export default function CoupangShipmentsPage() {
 
     return null;
   }, [selectedRowIds, selectedRowsById]);
-  const columnPreviewRow = selectedPreviewRow ?? visibleRows[0] ?? activeSheet?.items[0] ?? null;
+  const previewRowCandidates = useMemo(() => {
+    const rowMap = new Map<string, CoupangShipmentWorksheetRow>();
+    const pushRow = (row: CoupangShipmentWorksheetRow | null | undefined) => {
+      if (!row || rowMap.has(row.id)) {
+        return;
+      }
+
+      rowMap.set(row.id, row);
+    };
+
+    pushRow(selectedPreviewRow);
+    for (const row of visibleRows) {
+      pushRow(row);
+    }
+    for (const row of selectedRows) {
+      pushRow(row);
+    }
+    for (const row of activeSheet?.items ?? []) {
+      pushRow(row);
+    }
+
+    return Array.from(rowMap.values());
+  }, [activeSheet?.items, selectedPreviewRow, selectedRows, visibleRows]);
+  const previewRowOptions = useMemo(
+    () => previewRowCandidates.map((row) => buildShipmentPreviewRowOption(row)),
+    [previewRowCandidates],
+  );
+  const manualPreviewRow = useMemo(() => {
+    if (!columnPreviewRowId) {
+      return null;
+    }
+
+    return previewRowCandidates.find((row) => row.id === columnPreviewRowId) ?? null;
+  }, [columnPreviewRowId, previewRowCandidates]);
+  useEffect(() => {
+    if (!columnPreviewRowId || manualPreviewRow) {
+      return;
+    }
+
+    setColumnPreviewRowId(null);
+  }, [columnPreviewRowId, manualPreviewRow]);
+  const columnPreviewRow = manualPreviewRow ?? selectedPreviewRow ?? visibleRows[0] ?? activeSheet?.items[0] ?? null;
   const columnPreviewDescription = columnPreviewRow
-    ? summarizeShipmentColumnPreviewRow(
+    ? describeShipmentColumnPreviewRow(
         columnPreviewRow,
-        selectedPreviewRow ? "selected" : "visible",
+        manualPreviewRow ? "manual" : selectedPreviewRow ? "selected" : "visible",
       )
     : null;
+  const selectedPreviewRowOptionId = columnPreviewRow?.id ?? null;
   const selectedExportBlockedRows = useMemo(
     () => selectedRows.filter((row) => hasShipmentClaimIssue(row)),
     [selectedRows],
@@ -4941,6 +5036,8 @@ export default function CoupangShipmentsPage() {
         draggingConfigId,
         previewRow: columnPreviewRow,
         previewRowDescription: columnPreviewDescription,
+        previewRowOptions,
+        selectedPreviewRowId: selectedPreviewRowOptionId,
         openExcelExportDisabled,
         openNotExportedExcelExportDisabled,
         selectedRowsCount: selectedRows.length,
@@ -4958,6 +5055,7 @@ export default function CoupangShipmentsPage() {
         onDragEnd: () => setDraggingConfigId(null),
         onDrop: handleSettingsDrop,
         onUpdate: updateColumnConfig,
+        onPreviewRowChange: setColumnPreviewRowId,
         onOpenExcelSortDialog: openExcelSortDialog,
       }}
     />

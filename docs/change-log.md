@@ -2,6 +2,27 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 출고 컬럼 설정 preview 기준 행 선택 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-grid-controller.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/types.ts`
+  - `client/src/index.css`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 컬럼 설정 패널 상단에 `미리보기 기준 행` 선택기를 추가해, 사용자가 현재 보이는 주문행 중 원하는 행을 골라 preview 기준을 바꿀 수 있게 했습니다.
+  - preview 후보는 선택된 행, 현재 페이지에 보이는 행, active worksheet 행을 합쳐 중복 없이 만들고, 기준 행이 사라지면 자동으로 기본 행으로 되돌아가도록 했습니다.
+  - 각 후보는 `주문번호 · 상품명` 중심의 라벨과 `수령인 / 상태`가 포함된 설명을 함께 보여, 긴 raw/source 조합도 어떤 주문 기준인지 바로 파악할 수 있게 했습니다.
+- 이유:
+  - 기존 preview는 선택 행이나 현재 목록 첫 행에 고정돼 있어서, 옵션값 누락이나 특정 raw field 매핑을 검증할 때 다른 주문행으로 비교해 보기가 불편했습니다.
+- 검증:
+  - `npm run check`
+
 ## 2026-04-19 / 쿠팡 배송 시트 rawFields 평탄화 맵 기반 전환
 
 - 변경 유형:

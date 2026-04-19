@@ -56,6 +56,7 @@
 - `컬럼 설정`에서는 각 열의 다운로드 헤더와 source column을 분리해서 볼 수 있습니다.
 - source column 선택지는 `productName · 상품명`, `invoiceNumber · 송장번호`처럼 원본 key와 한글명을 함께 보여줍니다.
 - 각 열마다 `key명 적용` / `한글명 적용` 버튼으로 다운로드 헤더를 빠르게 맞출 수 있습니다.
+- `컬럼 설정` 상단에서 현재 보이는 주문행 중 하나를 골라, 모든 컬럼 preview를 그 행 기준으로 즉시 바꿔 볼 수 있습니다.
 - 쿠팡 배송 시트 row는 이제 정규화 필드만 저장하지 않고, `row_data_json.rawFields` 안에 `order.* / detail.* / detailItem.* / product.* / productItem.* / worksheet.*` 평탄화 맵을 함께 유지합니다.
 - 메인 그리드, 정렬, 컬럼 미리보기, 상세 패널, 엑셀 다운로드는 같은 `builtin/raw source` resolver를 사용해 값을 읽습니다.
 - 기본 builtin 컬럼은 계속 1급 필드로 남아 송장 입력/수정 경로를 유지하고, raw field 컬럼은 읽기 전용으로만 노출합니다.

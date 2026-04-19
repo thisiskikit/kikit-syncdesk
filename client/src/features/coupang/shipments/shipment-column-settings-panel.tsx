@@ -10,6 +10,7 @@ import {
 } from "./worksheet-config";
 import type {
   ShipmentColumnConfig,
+  ShipmentPreviewRowOption,
   ShipmentColumnSourceOption,
   ShipmentExcelExportScope,
 } from "./types";
@@ -26,6 +27,8 @@ export interface ShipmentColumnSettingsPanelProps {
   draggingConfigId: string | null;
   previewRow: CoupangShipmentWorksheetRow | null;
   previewRowDescription: string | null;
+  previewRowOptions: ShipmentPreviewRowOption[];
+  selectedPreviewRowId: string | null;
   openExcelExportDisabled: boolean;
   openNotExportedExcelExportDisabled: boolean;
   selectedRowsCount: number;
@@ -44,6 +47,7 @@ export interface ShipmentColumnSettingsPanelProps {
   onDragEnd: () => void;
   onDrop: (id: string) => void;
   onUpdate: (id: string, patch: Partial<ShipmentColumnConfig>) => void;
+  onPreviewRowChange: (rowId: string | null) => void;
   onOpenExcelSortDialog: (scope: ShipmentExcelExportScope) => void;
 }
 
@@ -69,6 +73,10 @@ export default function ShipmentColumnSettingsPanel(
   const rawFieldCatalog = props.shipmentColumnSourceOptions
     .map((option) => option.catalogItem)
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const selectedPreviewRowOption =
+    props.previewRowOptions.find((option) => option.id === props.selectedPreviewRowId) ??
+    props.previewRowOptions[0] ??
+    null;
 
   return (
     <div className="card">
@@ -147,6 +155,44 @@ export default function ShipmentColumnSettingsPanel(
               </button>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="card shipment-column-preview-picker-card">
+        <div className="shipment-column-preview-picker-header">
+          <div>
+            <strong>미리보기 기준 행</strong>
+            <div className="muted shipment-grid-note">
+              다른 주문행을 골라 두면 아래 모든 컬럼 preview가 그 행 기준으로 즉시 바뀝니다.
+            </div>
+          </div>
+          <div className="column-settings-preview-picker-control">
+            <label className="column-settings-field-label muted" htmlFor="shipment-preview-row-select">
+              기준 행 선택
+            </label>
+            <select
+              id="shipment-preview-row-select"
+              value={props.selectedPreviewRowId ?? ""}
+              onChange={(event) =>
+                props.onPreviewRowChange(event.target.value ? event.target.value : null)
+              }
+              disabled={!props.previewRowOptions.length}
+            >
+              {!props.previewRowOptions.length ? (
+                <option value="">미리보기 가능한 행이 없습니다.</option>
+              ) : null}
+              {props.previewRowOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="column-settings-preview-picker-summary muted">
+          {selectedPreviewRowOption?.description ??
+            props.previewRowDescription ??
+            "현재 보이는 행이 없어서 미리보기 기준을 고를 수 없습니다."}
         </div>
       </div>
 

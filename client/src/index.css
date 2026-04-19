@@ -1779,6 +1779,36 @@ textarea {
   min-width: 0;
 }
 
+.shipment-column-preview-picker-card {
+  margin-top: 0.85rem;
+}
+
+.shipment-column-preview-picker-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+  gap: 0.9rem;
+  align-items: end;
+}
+
+.column-settings-preview-picker-control {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.column-settings-preview-picker-control select {
+  width: 100%;
+  min-width: 0;
+}
+
+.column-settings-preview-picker-summary {
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .column-settings-preview-header {
   display: flex;
   align-items: center;
@@ -1860,6 +1890,10 @@ textarea {
 
 @media (max-width: 960px) {
   .column-settings-row {
+    grid-template-columns: 1fr;
+  }
+
+  .shipment-column-preview-picker-header {
     grid-template-columns: 1fr;
   }
 

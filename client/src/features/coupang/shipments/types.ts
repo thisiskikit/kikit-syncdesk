@@ -70,6 +70,12 @@ export type ShipmentColumnConfig = {
   label: string;
 };
 
+export type ShipmentPreviewRowOption = {
+  id: string;
+  label: string;
+  description: string;
+};
+
 export type SelectedCellState = {
   rowIdx: number;
   columnId: string;
