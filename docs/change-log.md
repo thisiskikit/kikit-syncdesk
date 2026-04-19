@@ -22,6 +22,22 @@
 - 검증:
   - `npm run check`
 
+## 2026-04-19 / 출고 source column 드롭다운에 preview 값 표시 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 컬럼 설정의 source column 드롭다운 각 선택지에 현재 preview 기준 행의 값을 `preview: ...` 형태로 함께 붙여 보여주도록 바꿨습니다.
+  - 현재 선택된 source 아래에도 같은 preview 값을 별도로 노출해, 드롭다운을 닫은 상태에서도 바로 확인할 수 있게 했습니다.
+- 이유:
+  - raw field key를 바꿔 보며 어떤 값이 실제로 들어오는지 확인할 때, 기존에는 드롭다운 목록과 오른쪽 preview를 번갈아 봐야 해서 비교가 불편했습니다.
+- 검증:
+  - `npm run check`
+
 ## 2026-04-19 / 출고 컬럼 설정 preview 기준 행 선택 추가
 
 - 변경 유형:

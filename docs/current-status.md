@@ -53,6 +53,7 @@
 - 사용자가 프리셋을 직접 적용할 때만 컬럼 집합과 폭이 바뀝니다.
 - `컬럼 설정`에서는 각 열의 다운로드 헤더와 source column을 분리해서 볼 수 있습니다.
 - source column 선택지는 `productName · 상품명`, `invoiceNumber · 송장번호`처럼 원본 key와 한글명을 함께 보여줍니다.
+- source column 드롭다운은 현재 preview 기준 행의 값을 각 선택지에 함께 붙여 보여주므로, raw key를 바꿔 가며 어떤 값이 들어오는지 바로 비교할 수 있습니다.
 - 각 열마다 `key명 적용` / `한글명 적용` 버튼으로 다운로드 헤더를 빠르게 맞출 수 있습니다.
 - `컬럼 설정` 상단에서 현재 보이는 주문행 중 하나를 골라, 모든 컬럼 preview를 그 행 기준으로 즉시 바꿔 볼 수 있습니다.
 - 쿠팡 배송 시트 row는 이제 정규화 필드만 저장하지 않고, `row_data_json.rawFields` 안에 `order.* / detail.* / detailItem.* / product.* / productItem.* / worksheet.*` 평탄화 맵을 함께 유지합니다.

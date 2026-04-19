@@ -63,6 +63,23 @@ function groupSourceOptions(options: ShipmentColumnSourceOption[]) {
   return Array.from(grouped.entries());
 }
 
+function truncateSourceOptionPreviewText(value: string, maxLength = 32) {
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function buildSourceOptionSelectLabel(
+  option: ShipmentColumnSourceOption,
+  previewRow: CoupangShipmentWorksheetRow | null,
+) {
+  const previewValue = formatShipmentColumnPreviewValue(previewRow, option.source);
+  return `${option.label} · preview: ${truncateSourceOptionPreviewText(previewValue)}`;
+}
+
 export default function ShipmentColumnSettingsPanel(
   props: ShipmentColumnSettingsPanelProps,
 ) {
@@ -73,6 +90,12 @@ export default function ShipmentColumnSettingsPanel(
   const rawFieldCatalog = props.shipmentColumnSourceOptions
     .map((option) => option.catalogItem)
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const sourceOptionSelectLabelByKey = new Map(
+    props.shipmentColumnSourceOptions.map((option) => [
+      option.key,
+      buildSourceOptionSelectLabel(option, props.previewRow),
+    ] as const),
+  );
   const selectedPreviewRowOption =
     props.previewRowOptions.find((option) => option.id === props.selectedPreviewRowId) ??
     props.previewRowOptions[0] ??
@@ -280,7 +303,7 @@ export default function ShipmentColumnSettingsPanel(
                     <optgroup key={group} label={group}>
                       {options.map((option) => (
                         <option key={option.key} value={option.key}>
-                          {option.label}
+                          {sourceOptionSelectLabelByKey.get(option.key) ?? option.label}
                         </option>
                       ))}
                     </optgroup>
@@ -288,6 +311,9 @@ export default function ShipmentColumnSettingsPanel(
                 </select>
                 <div className="column-settings-field-meta muted">
                   현재 key: <code>{configSourceKey}</code>
+                </div>
+                <div className="column-settings-field-meta muted" title={previewValue}>
+                  현재 preview: {previewValue}
                 </div>
               </div>
 
