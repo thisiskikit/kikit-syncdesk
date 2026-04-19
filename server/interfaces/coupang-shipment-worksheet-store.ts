@@ -57,7 +57,7 @@ export type PatchCoupangShipmentWorksheetRowsResult = {
 
 export type ArchiveCoupangShipmentWorksheetRowsInput = {
   storeId: string;
-  items: CoupangShipmentWorksheetRow[];
+  items: Array<CoupangShipmentWorksheetRow | CoupangShipmentArchiveRow>;
   archivedAt: string;
   dryRun?: boolean;
 };

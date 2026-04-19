@@ -19,6 +19,7 @@ const {
   getArchivedSourceKeysMock,
   setStoreSheetMock,
   upsertStoreRowsMock,
+  archiveRowsMock,
   recordSystemErrorEventMock,
 } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
@@ -33,6 +34,7 @@ const {
   getArchivedSourceKeysMock: vi.fn(),
   setStoreSheetMock: vi.fn(),
   upsertStoreRowsMock: vi.fn(),
+  archiveRowsMock: vi.fn(),
   recordSystemErrorEventMock: vi.fn(),
 }));
 
@@ -62,6 +64,7 @@ vi.mock("./shipment-worksheet-store", () => ({
     getArchivedSourceKeys: getArchivedSourceKeysMock,
     setStoreSheet: setStoreSheetMock,
     upsertStoreRows: upsertStoreRowsMock,
+    archiveRows: archiveRowsMock,
   },
 }));
 
@@ -153,6 +156,7 @@ function buildOrderRow(input: {
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
     customerServiceIssueBreakdown: [],
+    customerServiceTerminalStatus: null,
     customerServiceState: "unknown" as const,
     customerServiceFetchedAt: null,
     availableActions: input.availableActions,
@@ -260,6 +264,7 @@ function buildWorksheetRow(input: {
   customerServiceIssueCount?: number;
   customerServiceIssueSummary?: string | null;
   customerServiceIssueBreakdown?: CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"];
+  customerServiceTerminalStatus?: CoupangShipmentWorksheetRow["customerServiceTerminalStatus"];
   customerServiceState?: "unknown" | "ready" | "stale";
   customerServiceFetchedAt?: string | null;
   deliveryRequest?: string | null;
@@ -318,6 +323,7 @@ function buildWorksheetRow(input: {
     customerServiceIssueCount: input.customerServiceIssueCount ?? 0,
     customerServiceIssueSummary: input.customerServiceIssueSummary ?? null,
     customerServiceIssueBreakdown: input.customerServiceIssueBreakdown ?? [],
+    customerServiceTerminalStatus: input.customerServiceTerminalStatus ?? null,
     customerServiceState: input.customerServiceState ?? "unknown",
     customerServiceFetchedAt: input.customerServiceFetchedAt ?? null,
     orderedAtRaw: "2026-03-26T09:00:00+09:00",
@@ -335,9 +341,9 @@ function buildWorksheetRow(input: {
   } satisfies CoupangShipmentWorksheetRow;
 }
 
-function buildEmptySheet() {
+function buildEmptySheet(items: CoupangShipmentWorksheetRow[] = []) {
   return {
-    items: [],
+    items,
     collectedAt: null,
     source: "live" as const,
     message: null,
@@ -382,6 +388,12 @@ describe("coupang shipment worksheet collection", () => {
       message: null,
     });
     getProductDetailMock.mockResolvedValue(null);
+    archiveRowsMock.mockImplementation(async (input: { items: Array<{ sourceKey: string }>; dryRun?: boolean }) => ({
+      archivedCount: input.dryRun ? 0 : input.items.length,
+      skippedCount: 0,
+      archivedSourceKeys: input.items.map((item) => item.sourceKey),
+      dryRun: input.dryRun === true,
+    }));
     setStoreSheetMock.mockImplementation(
       async (input: {
         items: unknown[];
@@ -725,11 +737,75 @@ describe("coupang shipment worksheet collection", () => {
       maxPerPage: 20,
     });
 
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
-      expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
-    ]);
-    expect(result.items[0]?.customerServiceState).toBe("ready");
+    expect(result.items).toEqual([]);
+    expect(archiveRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:701:V-701",
+            customerServiceTerminalStatus: "cancel_completed",
+            customerServiceIssueBreakdown: [
+              expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
+            ],
+            archiveReason: "cancel_completed",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("auto-archives completed cancel claims during collect", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+    listReturnsMock.mockResolvedValue({
+      items: [
+        buildReturnRow({
+          id: "cancel-archive-1",
+          receiptId: "50000999",
+          orderId: "O-799",
+          shipmentBoxId: "799",
+          vendorItemId: "V-799",
+          sellerProductId: "P-V-799",
+          cancelType: "CANCEL",
+          status: "CANCEL_COMPLETE",
+          releaseStatusName: "출고중지 완료",
+          completeConfirmDate: "2026-03-26T10:20:00+09:00",
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(archiveRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:799:V-799",
+            archiveReason: "cancel_completed",
+          }),
+        ],
+      }),
+    );
+    expect(result.items).toEqual([]);
+    expect(result.message).toContain("완료된 취소/반품 1건을 보관함으로 이동했습니다.");
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [],
+      }),
+    );
   });
 
   it("merges matching quick-collect claims into the active order row without duplication", async () => {
@@ -1045,8 +1121,8 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.productName).toBe("Deleted But Ordered Product");
-    expect(result.items[0]?.optionName).toBeNull();
+    expect(result.items[0]?.productName).toBe("Displayed Product, Red");
+    expect(result.items[0]?.optionName).toBe("Red");
     expect(getOrderDetailMock).toHaveBeenCalledTimes(1);
     expect(getProductDetailMock).toHaveBeenCalledTimes(1);
     expect(result.syncSummary?.pendingPhases).toContain("product_detail_hydration");
@@ -2275,6 +2351,106 @@ describe("coupang shipment worksheet collection", () => {
     expect(setStoreSheetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         items: [],
+      }),
+    );
+  });
+
+  it("auto-archives completed return rows during refresh", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "940",
+          orderId: "O-940",
+          vendorItemId: "V-940",
+          status: "INSTRUCT",
+          productName: "Return Refresh",
+          customerServiceState: "unknown",
+          customerServiceFetchedAt: null,
+        }),
+      ]),
+    );
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [
+        {
+          rowKey: "940:V-940",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "반품 1건",
+          customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "반품 1건" }],
+          customerServiceTerminalStatus: "return_completed",
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+        },
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "customer_service",
+    });
+
+    expect(archiveRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:940:V-940",
+            archiveReason: "return_completed",
+          }),
+        ],
+      }),
+    );
+    expect(result.items).toEqual([]);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [],
+      }),
+    );
+  });
+
+  it("keeps rows in the worksheet when auto-archive fails during refresh", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "941",
+          orderId: "O-941",
+          vendorItemId: "V-941",
+          status: "INSTRUCT",
+          productName: "Archive Failure",
+        }),
+      ]),
+    );
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [
+        {
+          rowKey: "941:V-941",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "출고중지완료 1건",
+          customerServiceIssueBreakdown: [
+            { type: "shipment_stop_handled", count: 1, label: "출고중지완료 1건" },
+          ],
+          customerServiceTerminalStatus: "cancel_completed",
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+        },
+      ],
+      source: "live",
+      message: null,
+    });
+    archiveRowsMock.mockRejectedValueOnce(new Error("archive failed"));
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "customer_service",
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.customerServiceTerminalStatus).toBe("cancel_completed");
+    expect(result.message).toContain("자동 보관 1건에 실패해 워크시트에 그대로 유지했습니다.");
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ sourceKey: "store-1:941:V-941" })],
       }),
     );
   });

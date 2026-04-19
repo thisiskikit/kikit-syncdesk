@@ -1194,6 +1194,20 @@ function resolveWorksheetOrderStatus(
   });
 }
 
+function getShipmentArchiveReasonLabel(
+  row: Pick<CoupangShipmentArchiveRow, "archiveReason">,
+) {
+  if (row.archiveReason === "cancel_completed") {
+    return "취소완료 자동보관";
+  }
+
+  if (row.archiveReason === "return_completed") {
+    return "반품완료 자동보관";
+  }
+
+  return "일반 보관";
+}
+
 function getWorksheetStatusPresentation(row: ShipmentStatusCarrier) {
   const resolvedOrderStatus = resolveWorksheetOrderStatus(row);
   const orderLabel = formatOrderStatusLabel(resolvedOrderStatus);
@@ -5020,6 +5034,7 @@ export default function CoupangShipmentsPage() {
         worksheetPageSize,
         pageSizeOptions: SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
         getStatusPresentation: getWorksheetStatusPresentation,
+        getArchiveReasonLabel: getShipmentArchiveReasonLabel,
         formatDateTimeLabel,
         formatInvoiceText: (row) => formatJoinedText([row.deliveryCompanyCode, row.invoiceNumber]),
         onOpenDetail: openShipmentDetailDialog,

@@ -65,11 +65,27 @@
   - 전체 상세 dialog에서는 claim/return/exchange와 주문 항목 정보가 추가로 보입니다.
   - 닫기 후에는 `/fulfillment` route를 유지한 채 원래 목록 문맥으로 돌아옵니다.
 
+## 시나리오 5. 완료된 취소/반품 자동 보관
+
+- 위험도: high
+- 단계:
+1. `작업 화면` 기준으로 완료된 취소 또는 완료된 반품이 플랫폼에서 확인되는 주문을 준비합니다.
+2. `빠른 수집`, `전체 수집`, 또는 `새로고침(refresh)`을 실행합니다.
+3. 해당 주문이 active worksheet에서 사라지는지 확인합니다.
+4. `보관함` 탭으로 이동해 같은 주문이 보이는지 확인합니다.
+5. 보관 row에 `취소완료 자동보관` 또는 `반품완료 자동보관` 라벨이 붙는지 확인합니다.
+- 기대 결과:
+  - 완료 신호가 확인된 취소/반품 주문만 active worksheet에서 제거됩니다.
+  - 진행 중 취소/반품 주문은 계속 `예외·클레임` 범위에 남습니다.
+  - `customerServiceState`가 `unknown` 또는 `stale`인 주문은 `추정`상 자동 보관되지 않고 워크시트에 남아 있어야 합니다.
+  - 자동 보관 실패 시 주문이 사라지지 않고, 경고 메시지만 남아야 합니다.
+
 ## High-Risk 회귀 포인트
 
 - high: 빠른 수집 집중 보기 활성/해제 조건이 필터 변경과 충돌하는지
 - high: 혼합 선택에서 차단 row가 payload에 섞여 들어가지 않는지
 - high: drawer와 전체 상세 dialog가 같은 detail row 문맥을 유지하는지
+- high: 완료된 취소/반품이 collect/refresh 직후 worksheet에서 빠지고 archive에서만 보이는지
 - medium: 보관함/화면 설정 탭으로 이동해도 상단 action 비활성화 규칙이 맞는지
 - low: 요약/메트릭 문구가 현재 필터 상태와 어긋나지 않는지
 
@@ -78,3 +94,4 @@
 - `빠른 수집 응답 -> quickCollectFocus 활성 -> 필터 변경 -> 자동 해제` 흐름을 component/integration test로 고정
 - 혼합 선택 시 실행 payload에서 blocked row가 빠지는지 action helper test로 고정
 - drawer open -> full detail open -> close 복귀 흐름을 browser automation으로 검증
+- 완료된 취소/반품 row가 collect/refresh 후 archive reason과 함께 보관함으로 이동하는지 server/client 통합 테스트 후보로 유지

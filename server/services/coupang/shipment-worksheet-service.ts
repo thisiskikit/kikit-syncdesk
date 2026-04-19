@@ -19,6 +19,7 @@ import type {
   CoupangShipmentWorksheetRefreshScope,
   CoupangShipmentWorksheetSyncPhase,
   CoupangShipmentArchiveRow,
+  CoupangShipmentArchiveReason,
   CoupangShipmentArchiveViewQuery,
   CoupangShipmentArchiveViewResponse,
   CoupangShipmentWorksheetResponse,
@@ -500,6 +501,7 @@ function buildArchiveRows(rows: ArchiveWorksheetRows) {
   return rows.map((row) => ({
     ...decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso),
     archivedAt: row.archivedAt,
+    archiveReason: row.archiveReason,
   }));
 }
 
@@ -740,6 +742,109 @@ function isShipmentWorksheetArchiveEligible(row: CoupangShipmentWorksheetRow, no
   );
 }
 
+function isShipmentWorksheetCompletedClaimArchiveCandidate(
+  row: Pick<CoupangShipmentWorksheetRow, "customerServiceState" | "customerServiceTerminalStatus">,
+) {
+  return row.customerServiceState === "ready" && row.customerServiceTerminalStatus !== null;
+}
+
+function resolveCompletedClaimArchiveReason(
+  row: Pick<CoupangShipmentWorksheetRow, "customerServiceTerminalStatus">,
+): Extract<CoupangShipmentArchiveReason, "cancel_completed" | "return_completed"> | null {
+  if (row.customerServiceTerminalStatus === "return_completed") {
+    return "return_completed";
+  }
+
+  if (row.customerServiceTerminalStatus === "cancel_completed") {
+    return "cancel_completed";
+  }
+
+  return null;
+}
+
+function buildShipmentWorksheetArchiveRows(
+  rows: CoupangShipmentWorksheetRow[],
+  input: {
+    archivedAt: string;
+    reasonResolver: (row: CoupangShipmentWorksheetRow) => CoupangShipmentArchiveReason | null;
+  },
+): CoupangShipmentArchiveRow[] {
+  return rows
+    .map((row) => {
+      const archiveReason = input.reasonResolver(row);
+      if (!archiveReason) {
+        return null;
+      }
+
+      return {
+        ...row,
+        archivedAt: input.archivedAt,
+        archiveReason,
+      } satisfies CoupangShipmentArchiveRow;
+    })
+    .filter((row): row is CoupangShipmentArchiveRow => Boolean(row));
+}
+
+async function applyCompletedClaimAutoArchive(input: {
+  storeId: string;
+  rows: CoupangShipmentWorksheetRow[];
+  message: string | null;
+  archivedAt: string;
+  persistToStore: boolean;
+}) {
+  const normalizedRows = input.rows.map(normalizeWorksheetRow);
+  if (!input.persistToStore) {
+    return {
+      rows: normalizedRows,
+      removedSourceKeys: new Set<string>(),
+      message: input.message,
+    };
+  }
+
+  const archiveRows = buildShipmentWorksheetArchiveRows(normalizedRows, {
+    archivedAt: input.archivedAt,
+    reasonResolver: resolveCompletedClaimArchiveReason,
+  }).filter((row) => isShipmentWorksheetCompletedClaimArchiveCandidate(row));
+
+  if (!archiveRows.length) {
+    return {
+      rows: normalizedRows,
+      removedSourceKeys: new Set<string>(),
+      message: input.message,
+    };
+  }
+
+  const removedSourceKeys = new Set(archiveRows.map((row) => row.sourceKey));
+
+  try {
+    await coupangShipmentWorksheetStore.archiveRows({
+      storeId: input.storeId,
+      items: archiveRows,
+      archivedAt: input.archivedAt,
+    });
+
+    return {
+      rows: normalizedRows.filter((row) => !removedSourceKeys.has(row.sourceKey)),
+      removedSourceKeys,
+      message: mergeMessages([
+        input.message,
+        `완료된 취소/반품 ${archiveRows.length}건을 보관함으로 이동했습니다.`,
+      ]),
+    };
+  } catch (error) {
+    return {
+      rows: normalizedRows,
+      removedSourceKeys: new Set<string>(),
+      message: mergeMessages([
+        input.message,
+        error instanceof Error
+          ? `완료된 취소/반품 자동 보관 ${archiveRows.length}건에 실패해 워크시트에 그대로 유지했습니다. ${error.message}`
+          : `완료된 취소/반품 자동 보관 ${archiveRows.length}건에 실패해 워크시트에 그대로 유지했습니다.`,
+      ]),
+    };
+  }
+}
+
 function formatSeoulDateOnly(value: Date) {
   const shifted = new Date(value.getTime() + 9 * 60 * 60 * 1000);
   const year = shifted.getUTCFullYear();
@@ -830,6 +935,7 @@ function resolveWorksheetCustomerServiceState(
       customerServiceIssueCount: 0,
       customerServiceIssueSummary: null,
       customerServiceIssueBreakdown: [],
+      customerServiceTerminalStatus: null,
       customerServiceState: "unknown" as const,
       customerServiceFetchedAt: null,
     };
@@ -841,6 +947,7 @@ function resolveWorksheetCustomerServiceState(
       customerServiceIssueCount: row.customerServiceIssueCount ?? 0,
       customerServiceIssueSummary: row.customerServiceIssueSummary ?? null,
       customerServiceIssueBreakdown: row.customerServiceIssueBreakdown ?? [],
+      customerServiceTerminalStatus: row.customerServiceTerminalStatus ?? null,
       customerServiceState: "unknown" as const,
       customerServiceFetchedAt: null,
     };
@@ -850,6 +957,7 @@ function resolveWorksheetCustomerServiceState(
     customerServiceIssueCount: row.customerServiceIssueCount ?? 0,
     customerServiceIssueSummary: row.customerServiceIssueSummary ?? null,
     customerServiceIssueBreakdown: row.customerServiceIssueBreakdown ?? [],
+    customerServiceTerminalStatus: row.customerServiceTerminalStatus ?? null,
     customerServiceState: isTimestampOlderThanMs(fetchedAt, nowIso, CUSTOMER_SERVICE_READY_TTL_MS)
       ? ("stale" as const)
       : ("ready" as const),
@@ -1446,28 +1554,38 @@ async function refreshShipmentWorksheetRows(
     customerServiceRefresh.message,
   ]);
   const mergedRows = mergeWorksheetRowsBySourceKey(currentSheet.items, finalRows);
+  const autoArchiveResult = await applyCompletedClaimAutoArchive({
+    storeId: input.storeId,
+    rows: mergedRows,
+    message: nextMessage,
+    archivedAt: now,
+    persistToStore: input.persistToStore !== false,
+  });
+  const updatedRows = finalRows.filter(
+    (row) => !autoArchiveResult.removedSourceKeys.has(row.sourceKey),
+  );
   const nextSheet =
     input.persistToStore === false
       ? {
           ...currentSheet,
-          items: mergedRows,
-          message: nextMessage,
+          items: autoArchiveResult.rows,
+          message: autoArchiveResult.message,
           syncSummary: nextSyncSummary,
           updatedAt: new Date().toISOString(),
         }
       : await coupangShipmentWorksheetStore.setStoreSheet({
           storeId: input.storeId,
-          items: mergedRows,
+          items: autoArchiveResult.rows,
           collectedAt: currentSheet.collectedAt,
           source: currentSheet.source,
-          message: nextMessage,
+          message: autoArchiveResult.message,
           syncState: currentSheet.syncState ?? createEmptySyncState(),
           syncSummary: nextSyncSummary,
         });
 
   return buildShipmentWorksheetRefreshResponse(store, nextSheet, {
     scope: input.scope,
-    updatedRows: finalRows,
+    updatedRows,
     refreshedCount: refreshTargets.rows.length,
     updatedCount,
     completedPhases:
@@ -1482,7 +1600,7 @@ async function refreshShipmentWorksheetRows(
       input.scope === "pending_after_collect"
         ? nextSheet.syncSummary?.warningPhases ?? warningPhases
         : warningPhases,
-    message: nextMessage,
+    message: autoArchiveResult.message,
   });
 }
 
@@ -1726,6 +1844,7 @@ function buildClaimOnlyCollectionRow(input: {
     customerServiceIssueCount: input.issueState.customerServiceIssueCount,
     customerServiceIssueSummary: input.issueState.customerServiceIssueSummary,
     customerServiceIssueBreakdown: input.issueState.customerServiceIssueBreakdown,
+    customerServiceTerminalStatus: input.issueState.customerServiceTerminalStatus,
     customerServiceState: "ready",
     customerServiceFetchedAt: input.issueFetchedAt,
     availableActions: input.currentRow?.availableActions ?? [],
@@ -1747,7 +1866,11 @@ function buildNextSyncState(
 }
 
 function hasPersistedWorksheetCustomerServiceIssue(row: CoupangShipmentWorksheetRow) {
-  return Boolean(normalizeWhitespace(row.customerServiceIssueSummary)) || row.customerServiceIssueCount > 0;
+  return (
+    Boolean(normalizeWhitespace(row.customerServiceIssueSummary)) ||
+    row.customerServiceIssueCount > 0 ||
+    row.customerServiceTerminalStatus !== null
+  );
 }
 
 async function refreshWorksheetCustomerServiceStatuses(input: {
@@ -1813,6 +1936,9 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
           customerServiceIssueBreakdown: shouldPreserveExistingIssue
             ? row.customerServiceIssueBreakdown
             : summary.customerServiceIssueBreakdown,
+          customerServiceTerminalStatus: shouldPreserveExistingIssue
+            ? row.customerServiceTerminalStatus
+            : summary.customerServiceTerminalStatus,
           customerServiceState: shouldPreserveExistingIssue
             ? row.customerServiceState
             : summary.customerServiceState,
@@ -2282,6 +2408,7 @@ function buildOrderRowFromWorksheetRow(row: CoupangShipmentWorksheetRow): Coupan
     customerServiceIssueCount: row.customerServiceIssueCount,
     customerServiceIssueSummary: row.customerServiceIssueSummary,
     customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+    customerServiceTerminalStatus: row.customerServiceTerminalStatus,
     customerServiceState: row.customerServiceState,
     customerServiceFetchedAt: row.customerServiceFetchedAt,
     availableActions: row.availableActions,
@@ -2354,6 +2481,7 @@ function buildWorksheetRow(input: {
           customerServiceIssueCount: row.customerServiceIssueCount,
           customerServiceIssueSummary: row.customerServiceIssueSummary,
           customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
+          customerServiceTerminalStatus: row.customerServiceTerminalStatus,
           customerServiceState: row.customerServiceState,
           customerServiceFetchedAt: row.customerServiceFetchedAt,
         }
@@ -2422,6 +2550,7 @@ function buildWorksheetRow(input: {
     customerServiceIssueCount: customerServiceIssueState.customerServiceIssueCount,
     customerServiceIssueSummary: customerServiceIssueState.customerServiceIssueSummary,
     customerServiceIssueBreakdown: customerServiceIssueState.customerServiceIssueBreakdown,
+    customerServiceTerminalStatus: customerServiceIssueState.customerServiceTerminalStatus,
     customerServiceState: customerServiceIssueState.customerServiceState,
     customerServiceFetchedAt: customerServiceIssueState.customerServiceFetchedAt,
     orderedAtRaw,
@@ -2616,6 +2745,13 @@ async function collectShipmentWorksheetNewOnly(input: {
       : "이미 동일한 신규 주문 정보가 반영되어 있어 변경한 내용이 없습니다.",
   ]);
   const finalSummary = buildSummary();
+  const autoArchiveResult = await applyCompletedClaimAutoArchive({
+    storeId: input.request.storeId,
+    rows: Array.from(mergedBySourceKey.values()),
+    message: finalMessage,
+    archivedAt: input.nowIso,
+    persistToStore: true,
+  });
 
   await upsertWorksheetStoreRowsWithDiagnostics(
     {
@@ -2623,7 +2759,7 @@ async function collectShipmentWorksheetNewOnly(input: {
       items: [],
       collectedAt: input.nowIso,
       source: input.listResponse.source,
-      message: finalMessage,
+      message: autoArchiveResult.message,
       syncState: finalSyncState,
       syncSummary: finalSummary,
     },
@@ -2639,15 +2775,15 @@ async function collectShipmentWorksheetNewOnly(input: {
     input.store,
     {
       ...input.currentSheet,
-      items: Array.from(mergedBySourceKey.values()),
+      items: autoArchiveResult.rows,
       collectedAt: input.nowIso,
       source: input.listResponse.source,
-      message: finalMessage,
+      message: autoArchiveResult.message,
       syncState: finalSyncState,
       syncSummary: finalSummary,
       updatedAt: input.nowIso,
     },
-    finalMessage,
+    autoArchiveResult.message,
   );
 }
 
@@ -3055,9 +3191,11 @@ export async function runShipmentArchive(
 
   for (const storeSummary of targetStores) {
     const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(storeSummary.id);
-    const eligibleRows = buildWorksheetRows(currentSheet).filter((row) =>
-      isShipmentWorksheetArchiveEligible(row, now),
-    );
+    const eligibleRows = buildShipmentWorksheetArchiveRows(buildWorksheetRows(currentSheet), {
+      archivedAt,
+      reasonResolver: (row) =>
+        isShipmentWorksheetArchiveEligible(row, now) ? "retention_post_dispatch" : null,
+    });
     const result = await coupangShipmentWorksheetStore.archiveRows({
       storeId: storeSummary.id,
       items: eligibleRows,
@@ -4150,32 +4288,40 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     failedStatuses,
     autoAuditRecommended: failedStatuses.length > 0,
   });
+  const baseMessage = mergeMessages([
+    listResponse.message,
+    platformKey.warning,
+    claimWarnings.length ? claimWarnings.join(" ") : null,
+    claimGroupsBySourceKey.size
+      ? insertOnlyMode
+        ? `${syncModeLabel}에서 신규 클레임 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.`
+        : `${syncModeLabel}에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
+      : null,
+    phaseState.pendingPhases.length
+      ? "워크시트 반영 후 주문 상세, 상품 상세, CS 상태 보강을 이어서 진행합니다."
+      : null,
+    /*
+      ? `주문 상세 ${detailWarnings.length}건은 일부 정보를 기존 값으로 유지했습니다.`
+      : null,
+    productWarnings.length
+      ? `상품 상세 ${productWarnings.length}건은 쿠팡 주문 원본값으로 보완했습니다.`
+      : null,
+    customerServiceMessage,
+    */
+  ]);
+  const autoArchiveResult = await applyCompletedClaimAutoArchive({
+    storeId: input.storeId,
+    rows: Array.from(mergedBySourceKey.values()),
+    message: baseMessage,
+    archivedAt: now,
+    persistToStore: true,
+  });
   const sheet = await setWorksheetStoreSheetWithDiagnostics({
     storeId: input.storeId,
-    items: Array.from(mergedBySourceKey.values()),
+    items: autoArchiveResult.rows,
     collectedAt: now,
     source: listResponse.source,
-    message: mergeMessages([
-      listResponse.message,
-      platformKey.warning,
-      claimWarnings.length ? claimWarnings.join(" ") : null,
-      claimGroupsBySourceKey.size
-        ? insertOnlyMode
-          ? `${syncModeLabel}에서 신규 클레임 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.`
-          : `${syncModeLabel}에 클레임 ${claimGroupsBySourceKey.size}건을 반영했고, 신규 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.${quickCollectClaimMatchedCount ? ` 기존 주문 ${quickCollectClaimMatchedCount}건도 클레임 상태로 갱신했습니다.` : ""}`
-        : null,
-      phaseState.pendingPhases.length
-        ? "워크시트 반영 후 주문 상세, 상품 상세, CS 상태 보강을 이어서 진행합니다."
-        : null,
-      /*
-        ? `주문 상세 ${detailWarnings.length}건은 일부 정보를 기존 값으로 유지했습니다.`
-        : null,
-      productWarnings.length
-        ? `상품 상세 ${productWarnings.length}건은 쿠팡 주문 원본값으로 보완했습니다.`
-        : null,
-      customerServiceMessage,
-      */
-    ]),
+    message: autoArchiveResult.message,
     syncState,
     syncSummary,
   }, {

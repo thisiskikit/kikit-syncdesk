@@ -318,6 +318,7 @@ describe("coupang order service", () => {
       optionName: "Accepted Item",
       customerServiceIssueCount: 0,
       customerServiceIssueSummary: null,
+      customerServiceTerminalStatus: null,
       customerServiceState: "unknown",
       customerServiceFetchedAt: null,
     });
@@ -365,6 +366,7 @@ describe("coupang order service", () => {
     expect(getClaimLookupCalls()).toHaveLength(3);
     expect(result.items[0]).toMatchObject({
       customerServiceIssueCount: 1,
+      customerServiceTerminalStatus: null,
       customerServiceState: "ready",
     });
     expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
@@ -809,6 +811,7 @@ describe("coupang order service", () => {
     expect(result.items[0]).toMatchObject({
       rowKey: "700:V-700",
       customerServiceIssueCount: 3,
+      customerServiceTerminalStatus: null,
       customerServiceState: "ready",
     });
     expect(result.items[0]?.customerServiceIssueSummary).toContain("1");
@@ -865,6 +868,7 @@ describe("coupang order service", () => {
 
     expect(result.items[0]).toMatchObject({
       customerServiceIssueCount: 2,
+      customerServiceTerminalStatus: null,
       customerServiceState: "ready",
     });
     expect(result.items[0]?.customerServiceIssueBreakdown).toEqual([
@@ -913,12 +917,56 @@ describe("coupang order service", () => {
 
     expect(result.items[0]).toMatchObject({
       customerServiceIssueCount: 1,
+      customerServiceTerminalStatus: "cancel_completed",
       customerServiceState: "ready",
       customerServiceIssueBreakdown: [
         expect.objectContaining({ type: "shipment_stop_handled", count: 1 }),
       ],
     });
     expect(result.items[0]?.customerServiceIssueSummary).toContain("출고중지완료");
+  });
+
+  it("marks completed return rows with a terminal return status", async () => {
+    mockOrderApi({
+      returns: [
+        buildReturnReceipt({
+          receiptId: "R-RETURN-COMPLETE",
+          orderId: "O-712",
+          shipmentBoxId: "712",
+          vendorItemId: "V-712",
+          cancelType: "RETURN",
+          productName: "Return Complete",
+          status: "RETURN_COMPLETE",
+          releaseStatusName: "반품완료",
+          completeConfirmDate: "2026-03-27T10:10:00+09:00",
+        }),
+      ],
+      cancels: [],
+      exchanges: [],
+    });
+
+    const result = await getOrderCustomerServiceSummary({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-29",
+      createdAtTo: "2026-03-30",
+      items: [
+        {
+          rowKey: "712:V-712",
+          orderId: "O-712",
+          shipmentBoxId: "712",
+          vendorItemId: "V-712",
+          sellerProductId: "P-V-712",
+        },
+      ],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      customerServiceIssueCount: 1,
+      customerServiceTerminalStatus: "return_completed",
+      customerServiceState: "ready",
+      customerServiceIssueBreakdown: [expect.objectContaining({ type: "return", count: 1 })],
+    });
+    expect(result.items[0]?.customerServiceIssueSummary).toContain("반품");
   });
 
   it("reuses the 10-minute cache for repeated CS summary lookups", async () => {
@@ -1085,6 +1133,7 @@ describe("coupang order service", () => {
     expect(first.items[0]).toMatchObject({
       customerServiceIssueCount: 0,
       customerServiceIssueSummary: null,
+      customerServiceTerminalStatus: null,
       customerServiceState: "unknown",
       customerServiceFetchedAt: null,
     });

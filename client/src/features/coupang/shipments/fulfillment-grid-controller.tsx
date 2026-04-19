@@ -89,6 +89,7 @@ type FulfillmentGridControllerProps = {
       orderToneClassName: string;
       customerServiceLabel: string | null;
     };
+    getArchiveReasonLabel: (row: CoupangShipmentArchiveRow) => string;
     formatDateTimeLabel: (value: string | null | undefined) => string;
     formatInvoiceText: (row: CoupangShipmentArchiveRow) => string;
     onOpenDetail: (row: CoupangShipmentArchiveRow) => void;
@@ -216,6 +217,7 @@ export default function FulfillmentGridController({
         onPrevPage={archive.onPrevPage}
         onNextPage={archive.onNextPage}
         getStatusPresentation={archive.getStatusPresentation}
+        getArchiveReasonLabel={archive.getArchiveReasonLabel}
         formatDateTimeLabel={archive.formatDateTimeLabel}
         formatInvoiceText={archive.formatInvoiceText}
         onOpenDetail={archive.onOpenDetail}

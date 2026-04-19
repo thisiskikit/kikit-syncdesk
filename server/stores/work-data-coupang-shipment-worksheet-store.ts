@@ -174,7 +174,11 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
           const hasInvalidItem = items.some(
             (item) =>
               !item ||
-              (item.type !== "cancel" && item.type !== "return" && item.type !== "exchange") ||
+              (item.type !== "shipment_stop_requested" &&
+                item.type !== "shipment_stop_handled" &&
+                item.type !== "cancel" &&
+                item.type !== "return" &&
+                item.type !== "exchange") ||
               !Number.isFinite(item.count) ||
               typeof item.label !== "string",
           );
@@ -182,13 +186,22 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
             ? items.filter(
                 (item): item is CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"][number] =>
                   Boolean(item) &&
-                  (item.type === "cancel" || item.type === "return" || item.type === "exchange") &&
+                  (item.type === "shipment_stop_requested" ||
+                    item.type === "shipment_stop_handled" ||
+                    item.type === "cancel" ||
+                    item.type === "return" ||
+                    item.type === "exchange") &&
                   Number.isFinite(item.count) &&
                   typeof item.label === "string",
               )
             : items;
         })()
       : [],
+    customerServiceTerminalStatus:
+      row.customerServiceTerminalStatus === "cancel_completed" ||
+      row.customerServiceTerminalStatus === "return_completed"
+        ? row.customerServiceTerminalStatus
+        : null,
     customerServiceState:
       row.customerServiceState === "ready" ||
       row.customerServiceState === "stale" ||
@@ -220,6 +233,10 @@ function normalizeArchiveRow(value: CoupangShipmentArchiveRow): CoupangShipmentA
   return {
     ...row,
     archivedAt: typeof value.archivedAt === "string" ? value.archivedAt : new Date().toISOString(),
+    archiveReason:
+      value.archiveReason === "cancel_completed" || value.archiveReason === "return_completed"
+        ? value.archiveReason
+        : "retention_post_dispatch",
   };
 }
 
@@ -307,6 +324,7 @@ export function restoreWorksheetRowFromDatabaseRow(
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
     customerServiceIssueBreakdown: [],
+    customerServiceTerminalStatus: null,
     customerServiceState: "unknown",
     customerServiceFetchedAt: null,
     orderedAtRaw: row.orderedAtRaw,
@@ -367,13 +385,16 @@ export function restoreWorksheetRowFromDatabaseRow(
 export function restoreArchiveRowFromDatabaseRow(
   row: CoupangShipmentArchiveRowRow,
 ): CoupangShipmentArchiveRow {
-  return {
-    ...restoreWorksheetRowFromDatabaseRow({
-      ...row,
-      sheetId: "archive",
-    }),
+  const restoredRow = restoreWorksheetRowFromDatabaseRow({
+    ...row,
+    sheetId: "archive",
+  }) as CoupangShipmentArchiveRow;
+
+  return normalizeArchiveRow({
+    ...restoredRow,
     archivedAt: toIsoString(row.archivedAt) ?? new Date().toISOString(),
-  };
+    archiveReason: restoredRow.archiveReason ?? "retention_post_dispatch",
+  });
 }
 
 function normalizeSyncState(
@@ -1110,14 +1131,25 @@ export class CoupangShipmentWorksheetStore {
 
   async archiveRows(input: ArchiveCoupangShipmentWorksheetRowsInput): Promise<ArchiveCoupangShipmentWorksheetRowsResult> {
     const dryRun = input.dryRun === true;
+    const archivedAt = input.archivedAt || new Date().toISOString();
     const uniqueItems = Array.from(
       new Map(
         input.items
-          .map(normalizeWorksheetRow)
+          .map((item) =>
+            normalizeArchiveRow({
+              ...item,
+              archivedAt,
+              archiveReason:
+                "archiveReason" in item &&
+                (item.archiveReason === "cancel_completed" ||
+                  item.archiveReason === "return_completed")
+                  ? item.archiveReason
+                  : "retention_post_dispatch",
+            }),
+          )
           .map((item) => [item.sourceKey, item] as const),
       ).values(),
     );
-    const archivedAt = input.archivedAt || new Date().toISOString();
 
     if (this.legacyMode) {
       const data = await this.loadLegacy();
@@ -1125,7 +1157,7 @@ export class CoupangShipmentWorksheetStore {
       const existingSourceKeys = new Set(currentArchives.map((row) => row.sourceKey));
       const itemsToArchive = uniqueItems
         .filter((item) => !existingSourceKeys.has(item.sourceKey))
-        .map((item) => normalizeArchiveRow({ ...item, archivedAt }));
+        .map((item) => normalizeArchiveRow(item));
       const archivedSourceKeys = itemsToArchive.map((item) => item.sourceKey);
       const skippedCount = input.items.length - itemsToArchive.length;
 
@@ -1185,7 +1217,7 @@ export class CoupangShipmentWorksheetStore {
     const existingArchivedKeySet = new Set(existingArchivedRows.map((row) => row.sourceKey));
     const itemsToArchive = uniqueItems
       .filter((item) => !existingArchivedKeySet.has(item.sourceKey))
-      .map((item) => normalizeArchiveRow({ ...item, archivedAt }));
+      .map((item) => normalizeArchiveRow(item));
     const archivedSourceKeys = itemsToArchive.map((item) => item.sourceKey);
     const skippedCount = input.items.length - itemsToArchive.length;
 

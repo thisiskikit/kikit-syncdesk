@@ -20,6 +20,7 @@ type ShipmentArchivePanelProps = {
   onPrevPage: () => void;
   onNextPage: () => void;
   getStatusPresentation: (row: CoupangShipmentArchiveRow) => ArchiveStatusPresentation;
+  getArchiveReasonLabel: (row: CoupangShipmentArchiveRow) => string;
   formatDateTimeLabel: (value: string | null | undefined) => string;
   formatInvoiceText: (row: CoupangShipmentArchiveRow) => string;
   onOpenDetail: (row: CoupangShipmentArchiveRow) => void;
@@ -39,6 +40,7 @@ export default function ShipmentArchivePanel({
   onPrevPage,
   onNextPage,
   getStatusPresentation,
+  getArchiveReasonLabel,
   formatDateTimeLabel,
   formatInvoiceText,
   onOpenDetail,
@@ -49,7 +51,8 @@ export default function ShipmentArchivePanel({
         <div>
           <h2 style={{ margin: 0 }}>보관함</h2>
           <div className="muted shipment-grid-note">
-            출력 완료 후 30일이 지난 배송 이후 일반 주문만 이곳으로 이동합니다. 보관함은 읽기 전용입니다.
+            출력 완료 후 30일이 지난 일반 배송 주문과 완료된 취소/반품 주문이 이곳으로 이동합니다.
+            보관함은 읽기 전용입니다.
           </div>
           <div className="muted shipment-grid-note">{detailGuideNotice}</div>
         </div>
@@ -124,9 +127,12 @@ export default function ShipmentArchivePanel({
                       <td>{formatDateTimeLabel(row.archivedAt)}</td>
                       <td>{formatDateTimeLabel(row.orderedAtRaw)}</td>
                       <td>
-                        <span className={`status-pill ${statusPresentation.orderToneClassName}`}>
-                          {statusPresentation.orderLabel}
-                        </span>
+                        <div className="table-cell-stack">
+                          <span className={`status-pill ${statusPresentation.orderToneClassName}`}>
+                            {statusPresentation.orderLabel}
+                          </span>
+                          <span className="muted">{getArchiveReasonLabel(row)}</span>
+                        </div>
                       </td>
                       <td>
                         <div className="table-cell-stack">

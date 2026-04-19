@@ -319,6 +319,7 @@ function buildUnknownCustomerServiceFields(): Pick<
   | "customerServiceIssueCount"
   | "customerServiceIssueSummary"
   | "customerServiceIssueBreakdown"
+  | "customerServiceTerminalStatus"
   | "customerServiceState"
   | "customerServiceFetchedAt"
 > {
@@ -326,6 +327,7 @@ function buildUnknownCustomerServiceFields(): Pick<
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
     customerServiceIssueBreakdown: [],
+    customerServiceTerminalStatus: null,
     customerServiceState: "unknown" as const,
     customerServiceFetchedAt: null,
   };
@@ -336,6 +338,7 @@ function applyUnknownCustomerServiceState(row: CoupangOrderRow): CoupangOrderRow
     row.customerServiceIssueCount === 0 &&
     row.customerServiceIssueSummary === null &&
     row.customerServiceIssueBreakdown.length === 0 &&
+    row.customerServiceTerminalStatus === null &&
     row.customerServiceState === "unknown" &&
     row.customerServiceFetchedAt === null
   ) {
@@ -356,6 +359,7 @@ function applyCustomerServiceLookupToOrderRow(
   | "customerServiceIssueCount"
   | "customerServiceIssueSummary"
   | "customerServiceIssueBreakdown"
+  | "customerServiceTerminalStatus"
   | "customerServiceState"
   | "customerServiceFetchedAt"
 > {

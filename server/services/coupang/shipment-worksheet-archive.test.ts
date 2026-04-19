@@ -75,11 +75,11 @@ function buildWorksheetRow(
     productName: "Archive Product",
     optionName: "Option A",
     productOrderNumber: "PO-1",
-    collectedPlatform: "쿠팡",
-    ordererName: "주문자",
+    collectedPlatform: "coupang",
+    ordererName: "Orderer",
     contact: "010-1111-2222",
-    receiverName: "김수령",
-    receiverBaseName: "김수령",
+    receiverName: "Receiver",
+    receiverBaseName: "Receiver",
     personalClearanceCode: null,
     collectedAccountName: "Archive Store",
     deliveryCompanyCode: "CJ",
@@ -90,7 +90,7 @@ function buildWorksheetRow(
     coupangInvoiceUploadedAt: null,
     salePrice: 10000,
     shippingFee: 0,
-    receiverAddress: "서울",
+    receiverAddress: "Seoul",
     deliveryRequest: "",
     buyerPhoneNumber: "010-9999-9999",
     productNumber: "P-1",
@@ -108,6 +108,7 @@ function buildWorksheetRow(
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
     customerServiceIssueBreakdown: [],
+    customerServiceTerminalStatus: null,
     customerServiceState: "ready",
     customerServiceFetchedAt: "2026-04-01T00:00:00.000Z",
     orderedAtRaw: "2026-04-01T09:00:00+09:00",
@@ -132,6 +133,7 @@ function buildArchiveRow(
   return {
     ...buildWorksheetRow(overrides),
     archivedAt: overrides.archivedAt ?? "2026-04-12T03:30:00.000Z",
+    archiveReason: overrides.archiveReason ?? "retention_post_dispatch",
   };
 }
 
@@ -199,8 +201,8 @@ describe("coupang shipment archive", () => {
       orderId: "order-claim",
       vendorItemId: "vendor-claim",
       customerServiceIssueCount: 1,
-      customerServiceIssueSummary: "반품 1건",
-      customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "반품" }],
+      customerServiceIssueSummary: "Return 1",
+      customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "Return" }],
     });
     const notExported = buildWorksheetRow({
       id: "not-exported",
@@ -223,6 +225,7 @@ describe("coupang shipment archive", () => {
             sourceKey: eligible.sourceKey,
             shipmentBoxId: eligible.shipmentBoxId,
             orderId: eligible.orderId,
+            archiveReason: "retention_post_dispatch",
           }),
         ]),
       }),
@@ -257,6 +260,7 @@ describe("coupang shipment archive", () => {
           expect.objectContaining({
             sourceKey: eligible.sourceKey,
             shipmentBoxId: eligible.shipmentBoxId,
+            archiveReason: "retention_post_dispatch",
           }),
         ]),
       }),
@@ -270,8 +274,9 @@ describe("coupang shipment archive", () => {
       buildArchiveRow({
         id: "row-1",
         sourceKey: "store-1:shipment-1:vendor-1",
-        receiverName: "김보관",
+        receiverName: "Search Target",
         archivedAt: "2026-04-12T03:30:00.000Z",
+        archiveReason: "cancel_completed",
       }),
       buildArchiveRow({
         id: "row-2",
@@ -279,14 +284,15 @@ describe("coupang shipment archive", () => {
         shipmentBoxId: "shipment-2",
         orderId: "order-2",
         vendorItemId: "vendor-2",
-        receiverName: "이보관",
+        receiverName: "Other Receiver",
         archivedAt: "2026-04-11T03:30:00.000Z",
+        archiveReason: "retention_post_dispatch",
       }),
     ]);
 
     const result = await getShipmentArchiveView({
       storeId: "store-1",
-      query: "김보관",
+      query: "Search Target",
       page: 1,
       pageSize: 10,
     });
@@ -294,6 +300,7 @@ describe("coupang shipment archive", () => {
     expect(result.totalRowCount).toBe(2);
     expect(result.filteredRowCount).toBe(1);
     expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.receiverName).toBe("김보관");
+    expect(result.items[0]?.receiverName).toBe("Search Target");
+    expect(result.items[0]?.archiveReason).toBe("cancel_completed");
   });
 });

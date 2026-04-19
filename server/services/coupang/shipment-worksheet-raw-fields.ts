@@ -445,6 +445,7 @@ export function buildWorksheetRawFields(input: {
             customerServiceIssueCount: input.row.customerServiceIssueCount,
             customerServiceIssueSummary: input.row.customerServiceIssueSummary,
             customerServiceIssueBreakdown: input.row.customerServiceIssueBreakdown,
+            customerServiceTerminalStatus: input.row.customerServiceTerminalStatus,
             customerServiceState: input.row.customerServiceState,
             customerServiceFetchedAt: input.row.customerServiceFetchedAt,
             orderedAtRaw: input.row.orderedAt ?? input.row.paidAt,

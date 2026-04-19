@@ -571,6 +571,11 @@ export type CoupangCustomerServiceIssueType =
   | "return"
   | "exchange";
 export type CoupangCustomerServiceState = "unknown" | "ready" | "stale";
+export type CoupangCustomerServiceTerminalStatus = "cancel_completed" | "return_completed";
+export type CoupangShipmentArchiveReason =
+  | "retention_post_dispatch"
+  | "cancel_completed"
+  | "return_completed";
 
 export interface CoupangCustomerServiceIssueBreakdownItem {
   type: CoupangCustomerServiceIssueType;
@@ -591,6 +596,7 @@ export interface CoupangCustomerServiceSummaryItem {
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
   customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
+  customerServiceTerminalStatus: CoupangCustomerServiceTerminalStatus | null;
   customerServiceState: CoupangCustomerServiceState;
   customerServiceFetchedAt: string | null;
 }
@@ -643,6 +649,7 @@ export interface CoupangOrderRow {
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
   customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
+  customerServiceTerminalStatus: CoupangCustomerServiceTerminalStatus | null;
   customerServiceState: CoupangCustomerServiceState;
   customerServiceFetchedAt: string | null;
   availableActions: CoupangActionKey[];
@@ -1062,6 +1069,7 @@ export interface CoupangShipmentWorksheetRow {
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
   customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
+  customerServiceTerminalStatus: CoupangCustomerServiceTerminalStatus | null;
   customerServiceState: CoupangCustomerServiceState;
   customerServiceFetchedAt: string | null;
   orderedAtRaw: string | null;
@@ -1312,6 +1320,7 @@ export interface CoupangShipmentWorksheetViewResponse {
 
 export interface CoupangShipmentArchiveRow extends CoupangShipmentWorksheetRow {
   archivedAt: string;
+  archiveReason: CoupangShipmentArchiveReason;
 }
 
 export interface CoupangShipmentArchiveViewQuery {
