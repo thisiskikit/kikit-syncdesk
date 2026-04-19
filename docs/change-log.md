@@ -2,6 +2,27 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 쿠팡 출고 컬럼 설정에 source key 기준 다운로드 매핑 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/worksheet-config.test.ts`
+  - `docs/change-log.md`
+  - `docs/current-status.md`
+- 변경 내용:
+  - `컬럼 설정` 패널에서 각 열의 `다운로드 헤더`와 `source column`을 더 명확히 구분해서 보이도록 바꿨습니다.
+  - source column 선택지는 `productName · 상품명`, `invoiceNumber · 송장번호`처럼 원본 key와 한글명을 함께 보여줍니다.
+  - 각 열마다 `key명 적용` / `한글명 적용` 버튼을 추가해, 다운로드 헤더를 원본 key 또는 기존 한글명으로 바로 맞출 수 있게 했습니다.
+  - source column을 바꿀 때 현재 헤더가 기본 key명 또는 기본 한글명이었다면, 새 source에 맞춰 헤더도 자연스럽게 따라오도록 맞췄습니다.
+- 이유:
+  - 기존 UI는 한글 컬럼명 중심이라, 사용자가 쿠팡에서 들여온 원본 column key 기준으로 어떤 값을 다운로드할지 판단하기 어려웠습니다.
+- 검증:
+  - `npx vitest run --root . client/src/features/coupang/shipments/worksheet-config.test.ts`
+  - `npm run check`
+
 ## 2026-04-19 / 출고 빠른 수집(new_only) 동기 비용 축소
 
 - 변경 유형:

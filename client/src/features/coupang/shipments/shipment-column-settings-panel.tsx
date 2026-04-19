@@ -2,6 +2,10 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 
 import type { ShipmentColumnPresetKey } from "./shipment-column-presets";
 import { formatShipmentColumnPreviewValue } from "./shipment-column-preview";
+import {
+  formatShipmentColumnSourceOptionLabel,
+  resolveShipmentColumnLabelForSourceChange,
+} from "./worksheet-config";
 import type {
   ShipmentColumnConfig,
   ShipmentColumnSourceKey,
@@ -52,6 +56,10 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
           <div className="muted shipment-grid-note">
             컬럼명 변경, 필드 변경, 삭제, 추가가 가능합니다. 여기에서 바꾸는 순서와 구성은
             워크시트와 엑셀 다운로드에 같이 적용됩니다.
+          </div>
+          <div className="muted shipment-grid-note">
+            각 열은 `다운로드 헤더`와 `source column`을 따로 볼 수 있습니다. source column은
+            `productName`, `invoiceNumber`처럼 쿠팡/워크시트 원본 key 기준으로 선택할 수 있습니다.
           </div>
           <div className="muted shipment-grid-note">
             {props.previewRowDescription
@@ -156,28 +164,64 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
               onDrop={() => props.onDrop(config.id)}
             >
               <div className="column-settings-handle">드래그</div>
-              <input
-                value={config.label}
-                onChange={(event) => props.onUpdate(config.id, { label: event.target.value })}
-                placeholder="컬럼명"
-              />
-              <select
-                value={config.sourceKey}
-                onChange={(event) =>
-                  props.onUpdate(config.id, {
-                    sourceKey: event.target.value as ShipmentColumnSourceKey,
-                    label:
-                      config.label ||
-                      props.shipmentColumnLabels[event.target.value as ShipmentColumnSourceKey],
-                  })
-                }
-              >
-                {props.shipmentColumnSourceOptions.map((sourceKey) => (
-                  <option key={sourceKey} value={sourceKey}>
-                    {props.shipmentColumnLabels[sourceKey]}
-                  </option>
-                ))}
-              </select>
+              <div style={{ minWidth: 0 }}>
+                <div className="muted" style={{ fontSize: "0.75rem", marginBottom: 4 }}>
+                  다운로드 헤더
+                </div>
+                <input
+                  value={config.label}
+                  onChange={(event) => props.onUpdate(config.id, { label: event.target.value })}
+                  placeholder="컬럼명"
+                />
+                <div className="toolbar" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() => props.onUpdate(config.id, { label: config.sourceKey })}
+                  >
+                    key명 적용
+                  </button>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() =>
+                      props.onUpdate(config.id, {
+                        label: props.shipmentColumnLabels[config.sourceKey],
+                      })
+                    }
+                  >
+                    한글명 적용
+                  </button>
+                </div>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="muted" style={{ fontSize: "0.75rem", marginBottom: 4 }}>
+                  source column
+                </div>
+                <select
+                  value={config.sourceKey}
+                  onChange={(event) => {
+                    const nextSourceKey = event.target.value as ShipmentColumnSourceKey;
+                    props.onUpdate(config.id, {
+                      sourceKey: nextSourceKey,
+                      label: resolveShipmentColumnLabelForSourceChange({
+                        currentLabel: config.label,
+                        previousSourceKey: config.sourceKey,
+                        nextSourceKey,
+                      }),
+                    });
+                  }}
+                >
+                  {props.shipmentColumnSourceOptions.map((sourceKey) => (
+                    <option key={sourceKey} value={sourceKey}>
+                      {formatShipmentColumnSourceOptionLabel(sourceKey)}
+                    </option>
+                  ))}
+                </select>
+                <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+                  현재 key: <code>{config.sourceKey}</code>
+                </div>
+              </div>
               <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
                 <div className="muted" style={{ fontSize: "0.75rem" }}>
                   미리보기
@@ -191,6 +235,9 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                   }}
                 >
                   {previewValue}
+                </div>
+                <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
+                  기본 헤더: {props.shipmentColumnLabels[config.sourceKey]}
                 </div>
                 {shouldShowCoupangNameComparison ? (
                   <div className="muted" style={{ fontSize: "0.75rem" }}>

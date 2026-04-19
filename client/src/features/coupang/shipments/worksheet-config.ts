@@ -131,6 +131,31 @@ export const SHIPMENT_COLUMN_SOURCE_OPTIONS: ShipmentColumnSourceKey[] = [
   "coupangDisplayProductName",
 ];
 
+export function formatShipmentColumnSourceOptionLabel(sourceKey: ShipmentColumnSourceKey) {
+  return `${sourceKey} · ${SHIPMENT_COLUMN_LABELS[sourceKey]}`;
+}
+
+export function resolveShipmentColumnLabelForSourceChange(input: {
+  currentLabel: string;
+  previousSourceKey: ShipmentColumnSourceKey;
+  nextSourceKey: ShipmentColumnSourceKey;
+}) {
+  const normalizedCurrentLabel = input.currentLabel.trim();
+  if (!normalizedCurrentLabel) {
+    return SHIPMENT_COLUMN_LABELS[input.nextSourceKey];
+  }
+
+  if (normalizedCurrentLabel === input.previousSourceKey) {
+    return input.nextSourceKey;
+  }
+
+  if (normalizedCurrentLabel === SHIPMENT_COLUMN_LABELS[input.previousSourceKey]) {
+    return SHIPMENT_COLUMN_LABELS[input.nextSourceKey];
+  }
+
+  return input.currentLabel;
+}
+
 export const ORDER_STATUS_LABEL_BY_VALUE = new Map<string, string>(
   ORDER_STATUS_OPTIONS.map((option) => [option.value, option.label]),
 );
