@@ -1,6 +1,6 @@
 ﻿# Structure Overview
 
-- 스냅샷 날짜: 2026-04-17
+- 스냅샷 날짜: 2026-04-19
 - 목적: 현재 KIKIT SyncDesk가 어떤 top-level 구조와 화면 책임을 가지는지 설명합니다.
 
 ## 1. 최상위 구조
@@ -44,6 +44,7 @@ docs/
   - 멀티탭 workspace strip
   - top-level route 전환
   - 작업 상태 패널
+  - 쿠팡 API 런타임 / backoff 상태 요약
 
 ### 현재 상단 주요 메뉴
 - `대시보드`

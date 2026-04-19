@@ -1,6 +1,6 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-17
+- 스냅샷 날짜: 2026-04-19
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
@@ -147,6 +147,7 @@
 - Vitest 실행 또는 `FORCE_MEMORY_STORAGE=true`일 때만 이 저장소는 in-memory fallback을 유지해 테스트가 실DB를 건드리지 않도록 막습니다.
 - 배포 후 smoke check와 rollback 포인트는 `docs/deployment/cloud-run-smoke-check.md`에 정리돼 있습니다.
 - 작업 상태 패널과 작업센터 주요 레이블은 현재 한국어로 정리돼 있습니다.
+- 작업 상태 패널은 진행 중 작업 외에도 쿠팡 API 런타임 카드로 `현재 동시 실행`, `대기열`, `기본 요청 간격`, `backoff 남은 시간`을 함께 보여줍니다.
 
 ### 운영 회귀 문서
 - 출고 수동 회귀 시나리오는 `docs/qa/manual-fulfillment-regression.md`에 정리돼 있습니다.

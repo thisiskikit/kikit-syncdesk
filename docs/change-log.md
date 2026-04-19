@@ -2,6 +2,46 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 쿠팡 API 기본 요청 스케줄러 완화
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/api-client.ts`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 쿠팡 API 요청 스케줄러의 기본 fallback 값을 `동시성 2 -> 4`, `요청 간격 250ms -> 100ms`로 조정했습니다.
+  - 배포 환경에서 별도 env를 주지 않은 경우에도 빠른 수집, 송장 전송, 출고 보강 계열 요청이 덜 보수적으로 흘러가도록 맞췄습니다.
+- 이유:
+  - 출고 워크시트의 빠른 수집과 후속 상세 보강이 외부 API 왕복 수에 크게 좌우되는데, 기존 기본값이 너무 보수적이라 신규 주문 수집 체감 속도를 과하게 늦추고 있었습니다.
+- 남은 점:
+  - 실제 운영 트래픽에서 `429` 재시도 비율은 배포 후 로그로 추가 확인이 필요합니다.
+- 검증:
+  - `npx vitest run --root . server/services/coupang/api-client.test.ts`
+
+## 2026-04-19 / 작업 상태 패널에 쿠팡 API backoff 표시 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/operations.ts`
+  - `server/services/coupang/api-client.ts`
+  - `server/routes/operations.ts`
+  - `client/src/components/operation-toaster.tsx`
+  - `server/services/coupang/api-client.test.ts`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 작업 상태 패널이 `/api/operations/runtime-status`를 주기적으로 조회해 쿠팡 API 요청 런타임 상태를 함께 표시하도록 했습니다.
+  - 패널에서 현재 동시 실행 수, 대기열 크기, 기본 요청 간격, backoff 남은 시간을 볼 수 있습니다.
+  - 서버는 쿠팡 요청 스케줄러의 런타임 스냅샷을 읽어 UI에 필요한 최소 상태만 노출합니다.
+- 이유:
+  - 대량 수집이나 송장 전송 중 지연이 생겼을 때, 사용자가 단순히 느리기만 한지, 대기열인지, 재시도 backoff인지 바로 구분할 수 있게 하기 위해서입니다.
+- 남은 점:
+  - 현재는 쿠팡 스케줄러만 표시합니다.
+- 검증:
+  - `npx vitest run --root . server/services/coupang/api-client.test.ts client/src/components/operation-toaster.test.ts`
+  - `npm run check`
+
 ## 2026-04-17 / 출고 기본 조회의 live CS 자동 갱신 중단
 
 - 변경 유형:

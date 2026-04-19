@@ -21,6 +21,7 @@ import {
   sendError,
   sendNormalizedError,
 } from "../services/shared/api-response";
+import { getCoupangRequestSchedulerRuntimeStatus } from "../services/coupang/api-client";
 
 const router = Router();
 
@@ -84,6 +85,17 @@ function writeEvent<T>(res: Response, event: string, data: T) {
 router.get("/", async (req, res) => {
   const limit = Number(req.query.limit ?? 50);
   const items = (await listRecentOperations(limit)).map(compactOperationEntry);
+  sendData(res, { items });
+});
+
+router.get("/runtime-status", (_req, res) => {
+  const coupangStatus = getCoupangRequestSchedulerRuntimeStatus();
+  const items =
+    coupangStatus.activeRequestCount > 0 ||
+    coupangStatus.queuedRequestCount > 0 ||
+    coupangStatus.cooldownRemainingMs > 0
+      ? [coupangStatus]
+      : [];
   sendData(res, { items });
 });
 

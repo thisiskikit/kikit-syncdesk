@@ -88,6 +88,24 @@ export interface OperationListResponse {
   items: OperationLogEntry[];
 }
 
+export interface OperationRuntimeStatusItem {
+  channel: OperationChannel;
+  schedulerCount: number;
+  activeRequestCount: number;
+  queuedRequestCount: number;
+  concurrencyLimit: number;
+  minRequestGapMs: number;
+  coolingDownSchedulerCount: number;
+  cooldownRemainingMs: number;
+  latestBlockedUntil: string | null;
+  latestNextAvailableAt: string | null;
+  fetchedAt: string;
+}
+
+export interface OperationRuntimeStatusResponse {
+  items: OperationRuntimeStatusItem[];
+}
+
 export interface OperationExecutionResponse<T> {
   operation: OperationLogEntry;
   data: T;

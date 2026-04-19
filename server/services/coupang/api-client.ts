@@ -9,6 +9,20 @@ export type CoupangRequestCredentials = {
   baseUrl: string;
 };
 
+export type CoupangRequestSchedulerRuntimeStatus = {
+  channel: "coupang";
+  schedulerCount: number;
+  activeRequestCount: number;
+  queuedRequestCount: number;
+  concurrencyLimit: number;
+  minRequestGapMs: number;
+  coolingDownSchedulerCount: number;
+  cooldownRemainingMs: number;
+  latestBlockedUntil: string | null;
+  latestNextAvailableAt: string | null;
+  fetchedAt: string;
+};
+
 type RequestSchedulerState = {
   activeCount: number;
   queue: Array<() => void>;
@@ -21,13 +35,13 @@ const COUPANG_RETRYABLE_STATUSES = new Set([429, 503, 504]);
 const COUPANG_MAX_RETRIES = readIntegerEnv("COUPANG_REQUEST_MAX_RETRIES", 3, 0, 5);
 const COUPANG_MAX_CONCURRENCY = readIntegerEnv(
   "COUPANG_REQUEST_MAX_CONCURRENCY",
-  2,
+  4,
   1,
   4,
 );
 const COUPANG_MIN_REQUEST_GAP_MS = readIntegerEnv(
   "COUPANG_REQUEST_MIN_GAP_MS",
-  250,
+  100,
   0,
   2_000,
 );
@@ -155,6 +169,14 @@ function getSchedulerState(key: string) {
   return created;
 }
 
+function toIsoTimestamp(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return new Date(value).toISOString();
+}
+
 function tryCleanupScheduler(key: string, state: RequestSchedulerState) {
   if (state.activeCount || state.queue.length) {
     return;
@@ -188,6 +210,37 @@ function pumpSchedulerQueue(key: string, state: RequestSchedulerState) {
   }
 
   tryCleanupScheduler(key, state);
+}
+
+export function getCoupangRequestSchedulerRuntimeStatus(
+  now = Date.now(),
+): CoupangRequestSchedulerRuntimeStatus {
+  const states = Array.from(requestSchedulers.values());
+  const activeRequestCount = states.reduce((sum, state) => sum + state.activeCount, 0);
+  const queuedRequestCount = states.reduce((sum, state) => sum + state.queue.length, 0);
+  const latestBlockedUntilMs = states.reduce(
+    (maxValue, state) => Math.max(maxValue, state.blockedUntil),
+    0,
+  );
+  const latestNextAvailableAtMs = states.reduce(
+    (maxValue, state) => Math.max(maxValue, state.nextAvailableAt),
+    0,
+  );
+  const coolingDownSchedulerCount = states.filter((state) => state.blockedUntil > now).length;
+
+  return {
+    channel: "coupang",
+    schedulerCount: states.length,
+    activeRequestCount,
+    queuedRequestCount,
+    concurrencyLimit: COUPANG_MAX_CONCURRENCY,
+    minRequestGapMs: COUPANG_MIN_REQUEST_GAP_MS,
+    coolingDownSchedulerCount,
+    cooldownRemainingMs: Math.max(0, latestBlockedUntilMs - now),
+    latestBlockedUntil: toIsoTimestamp(latestBlockedUntilMs),
+    latestNextAvailableAt: toIsoTimestamp(latestNextAvailableAtMs),
+    fetchedAt: new Date(now).toISOString(),
+  };
 }
 
 async function scheduleCoupangRequest<T>(

@@ -98,7 +98,7 @@ describe("coupang api client rate limiting", () => {
   }, 10_000);
 
   it("serializes concurrent requests for the same Coupang credential set", async () => {
-    const { requestCoupangJson } = await loadApiClient();
+    const { getCoupangRequestSchedulerRuntimeStatus, requestCoupangJson } = await loadApiClient();
     const fetchMock = vi.mocked(global.fetch);
     let activeCount = 0;
     let maxActiveCount = 0;
@@ -144,6 +144,16 @@ describe("coupang api client rate limiting", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    expect(getCoupangRequestSchedulerRuntimeStatus()).toMatchObject({
+      channel: "coupang",
+      schedulerCount: 1,
+      activeRequestCount: 1,
+      queuedRequestCount: 1,
+      concurrencyLimit: 1,
+      minRequestGapMs: 0,
+      coolingDownSchedulerCount: 0,
+    });
+
     resolvers[0]?.();
 
     await vi.waitFor(() => {
@@ -157,5 +167,58 @@ describe("coupang api client rate limiting", () => {
     expect(maxActiveCount).toBe(1);
     expect(firstResult.data.currentCall).toBe(1);
     expect(secondResult.data.currentCall).toBe(2);
+  });
+
+  it("reports remaining backoff time while a retry is cooling down", async () => {
+    const { getCoupangRequestSchedulerRuntimeStatus, requestCoupangJson } = await loadApiClient();
+    const fetchMock = vi.mocked(global.fetch);
+
+    fetchMock
+      .mockResolvedValueOnce(
+        buildJsonResponse(
+          {
+            code: "ERROR",
+            message: "Too many requests",
+          },
+          429,
+          { "retry-after": "0.2" },
+        ),
+      )
+      .mockResolvedValueOnce(
+        buildJsonResponse({
+          code: "SUCCESS",
+          data: {
+            ok: true,
+          },
+        }),
+      );
+
+    const request = requestCoupangJson<{
+      code: string;
+      data: { ok: boolean };
+    }>({
+      credentials: {
+        accessKey: "test-access",
+        secretKey: "test-secret",
+        baseUrl: "https://api-gateway.coupang.com",
+      },
+      method: "GET",
+      path: "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products",
+      query: new URLSearchParams({
+        vendorId: "A0001",
+        maxPerPage: "1",
+      }),
+    });
+
+    await vi.waitFor(() => {
+      const status = getCoupangRequestSchedulerRuntimeStatus();
+      expect(status.cooldownRemainingMs).toBeGreaterThan(0);
+      expect(status.coolingDownSchedulerCount).toBe(1);
+    });
+
+    await expect(request).resolves.toMatchObject({
+      code: "SUCCESS",
+      data: { ok: true },
+    });
   });
 });
