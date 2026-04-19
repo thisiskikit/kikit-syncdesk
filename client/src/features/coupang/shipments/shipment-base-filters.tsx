@@ -10,7 +10,7 @@ type ScopeOption = {
 };
 
 type ShipmentBaseFiltersProps = {
-  activeTab: "worksheet" | "archive" | "settings";
+  activeTab: "worksheet" | "confirmed" | "archive" | "settings";
   filters: FilterState;
   stores: readonly CoupangStoreSummary[];
   scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
@@ -80,7 +80,7 @@ export default function ShipmentBaseFilters({
               query: event.target.value,
             })
           }
-          placeholder="셀픽주문번호, 상품명, 수령자명, 송장번호 검색"
+          placeholder="주문번호, 상품명, 수령인명, 송장번호 검색"
         />
       </div>
 

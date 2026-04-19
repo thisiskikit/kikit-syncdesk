@@ -26,6 +26,10 @@
 - `출고`는 쿠팡 배송/송장 워크시트를 운영 화면으로 재배치한 top-level 화면입니다.
 - `client/src/features/coupang/shipments/page.tsx`는 상태, 조회, 실행 action coordinator를 맡고, 렌더 구조는 별도 controller/component로 분리됐습니다.
 - `tab / storeId / scope / decisionStatus / query` 기반 deep-link를 읽고, 현재 상태에 맞춰 `/fulfillment` URL을 다시 정규화합니다.
+- 상단 탭은 `작업 화면`, `구매확정`, `보관함`, `화면 설정`으로 나뉘며, `구매확정`은 최근 구매확정건만 따로 보는 운영 탭입니다.
+- `구매확정 sync`는 자동이 아니라 수동 액션이고, 현재 선택 스토어와 현재 조회 기간을 기준으로만 실행합니다.
+- 구매확정 판정의 진실 원천은 주문 상태값이 아니라 쿠팡 `revenue-history` 계열 정산 인식 데이터입니다.
+- 주문 상태가 `FINAL_DELIVERY / NONE_TRACKING`까지만 내려오더라도, 구매확정 여부는 별도 sync 결과로 `purchaseConfirmedAt` 등 worksheet row 확장 필드에 저장합니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `출고 판단`
   - 보조 축: `작업 대상 / 배송 이후 / 예외·클레임 / 전체`
@@ -102,6 +106,14 @@
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
 - 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
+- `구매확정 sync`는 `/api/coupang/shipments/worksheet/refresh`의 `purchase_confirmed` scope를 사용합니다.
+- 구매확정 sync 대상은 현재 스토어 + 현재 조회 기간 안의 미보관 worksheet row 중 `DEPARTURE / DELIVERING / FINAL_DELIVERY / NONE_TRACKING` 상태이면서 아직 구매확정되지 않은 행입니다.
+- 정산 row는 `saleType === "SALE"`만 구매확정 후보로 인정하고, 기본 매칭 키는 `orderId + vendorItemId`입니다.
+- `vendorItemId`가 없을 때만 `orderId + 정규화된 vendorItemName/productName` fallback을 허용하고, 단일 후보가 아니면 경고만 남기고 건너뜁니다.
+- 구매확정 sync는 false positive 방지를 위해 이미 확정된 행을 다시 미확정으로 되돌리지는 않습니다.
+- `dispatch_active`와 `post_dispatch` 범위에서는 `purchaseConfirmedAt`이 있는 행을 제외하고, 새 `confirmed` 범위에서만 claim 없는 구매확정 행을 보여줍니다.
+- claim이 있는 구매확정 행은 구매확정 탭으로 이동하지 않고 계속 `claims` 범위에 남습니다.
+- `구매확정` 탭은 기존 worksheet grid와 상세 패널을 재사용하지만 읽기 전용입니다. 송장 입력, 송장 전송, 상품준비중 처리, 저장은 이 탭에서 비활성화됩니다.
 - 송장 업로드/수정은 서버가 worksheet 전송 상태를 `pending -> succeeded/failed`로 직접 기록하고, 클라이언트는 로컬 pending 표시 후 재조회만 수행합니다.
 - 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
 - `invoice_ready` / `prepare_ready` bulk resolve는 전송·처리 직전에 후보 `shipmentBoxId`를 `shipment_boxes` refresh로 다시 맞춰 stale `orderStatus`/`vendorItemId` 때문에 정상 건이 빠지지 않게 합니다.
@@ -121,7 +133,9 @@
 ### 보관함
 - `보관함`은 읽기 전용 archive 조회 화면입니다.
 - 현재 작업용 워크시트와 분리되어 있고, 메인 작업 흐름은 `작업 화면`에 남아 있습니다.
+- `구매확정` 탭은 최근 확정건 운영 메뉴이고, 장기 보관은 계속 `보관함`이 맡습니다.
 - `출력 완료 후 30일이 지난 일반 배송 주문`은 기존처럼 수동 archive 정리 대상입니다.
+- 구매확정된 행도 기존 30일 archive 정책이 지나면 `보관함`으로 이동합니다.
 - `취소완료`, `반품완료`가 플랫폼 응답으로 확인된 주문은 다음 collect 또는 refresh 시점에 active worksheet에서 빠지고 같은 보관함으로 자동 이동합니다.
 - 보관함 row는 `일반 보관`, `취소완료 자동보관`, `반품완료 자동보관` 이유를 구분해서 보여줍니다.
 

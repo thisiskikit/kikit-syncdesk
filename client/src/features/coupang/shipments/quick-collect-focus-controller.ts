@@ -15,7 +15,7 @@ import {
 } from "./quick-collect-focus";
 import type { FulfillmentDecisionFilterValue } from "./types";
 
-type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+type FulfillmentActiveTab = "worksheet" | "confirmed" | "archive" | "settings";
 
 type SelectedStoreRef = {
   id: string;
@@ -49,6 +49,7 @@ export type QuickCollectFocusViewState = {
 const EMPTY_SCOPE_COUNTS: Record<CoupangShipmentWorksheetViewScope, number> = {
   dispatch_active: 0,
   post_dispatch: 0,
+  confirmed: 0,
   claims: 0,
   all: 0,
 };

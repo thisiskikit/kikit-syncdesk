@@ -2911,6 +2911,85 @@ export async function listSettlements(input: {
   }
 }
 
+export async function listSettlementSales(input: {
+  storeId: string;
+  recognitionDateFrom?: string;
+  recognitionDateTo?: string;
+  maxPerPage?: number;
+  maxPageCount?: number;
+}) {
+  const store = await getStoreOrThrow(input.storeId);
+  const recognitionDateFrom = normalizeDateRangeInput(input.recognitionDateFrom, "start");
+  const recognitionDateTo = normalizeDateRangeInput(input.recognitionDateTo, "end");
+  const maxPageCount = Math.max(1, Math.min(input.maxPageCount ?? 100, 200));
+
+  try {
+    const items: CoupangSettlementRow[] = [];
+    let nextToken = "";
+    let pageCount = 0;
+    let hasNext = false;
+
+    while (pageCount < maxPageCount) {
+      const payload = await requestRevenueHistory(store, {
+        recognitionDateFrom,
+        recognitionDateTo,
+        token: nextToken,
+        maxPerPage: input.maxPerPage,
+      });
+
+      const sales = asArray(payload.data)
+        .map((row) => asObject(row))
+        .filter((row): row is LooseObject => Boolean(row));
+      for (let saleIndex = 0; saleIndex < sales.length; saleIndex += 1) {
+        const sale = sales[saleIndex];
+        const saleItems = asArray(sale.items)
+          .map((item) => asObject(item))
+          .filter((item): item is LooseObject => Boolean(item));
+        for (let itemIndex = 0; itemIndex < saleItems.length; itemIndex += 1) {
+          const item = saleItems[itemIndex];
+          items.push(normalizeSettlementRow(sale, item, pageCount * 10_000 + saleIndex * 100 + itemIndex));
+        }
+      }
+
+      nextToken = asString(payload.nextToken) ?? "";
+      hasNext = payload.hasNext === true && Boolean(nextToken);
+      pageCount += 1;
+
+      if (!hasNext) {
+        break;
+      }
+    }
+
+    const hitSafeCap = hasNext;
+
+    return {
+      store: mapStoreRef(store),
+      items,
+      fetchedAt: new Date().toISOString(),
+      servedFromFallback: false,
+      message: hitSafeCap
+        ? `${recognitionDateFrom} ~ ${recognitionDateTo} 정산 조회가 안전 상한 ${maxPageCount}페이지에서 중단되었습니다.`
+        : null,
+      source: "live" as const,
+      nextToken: hitSafeCap ? nextToken : null,
+      pageCount,
+      hitSafeCap,
+    };
+  } catch (error) {
+    return {
+      store: mapStoreRef(store),
+      items: [],
+      fetchedAt: new Date().toISOString(),
+      servedFromFallback: true,
+      message: getActionMessage(error, "정산 인식 데이터를 불러오지 못했습니다."),
+      source: "fallback" as const,
+      nextToken: null,
+      pageCount: 0,
+      hitSafeCap: false,
+    };
+  }
+}
+
 export async function markPreparing(input: {
   storeId: string;
   items: CoupangPrepareTarget[];

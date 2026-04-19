@@ -1,6 +1,6 @@
 import ShipmentSelectionActionBar from "./shipment-selection-action-bar";
 
-type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+type FulfillmentActiveTab = "worksheet" | "confirmed" | "archive" | "settings";
 
 type FulfillmentSelectionControllerProps = {
   activeTab: FulfillmentActiveTab;

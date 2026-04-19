@@ -9,7 +9,8 @@ import type { FilterState, FulfillmentDecisionFilterValue } from "./types";
 const SCOPE_LABELS: Record<CoupangShipmentWorksheetViewScope, string> = {
   dispatch_active: "작업 대상",
   post_dispatch: "배송 이후",
-  claims: "예외·클레임",
+  confirmed: "구매확정",
+  claims: "예외/클레임",
   all: "전체",
 };
 
@@ -124,7 +125,7 @@ export function buildShipmentFilterSummaryTokens(input: {
 
   const normalizedQuery = input.filters.query.trim();
   if (normalizedQuery) {
-    tokens.push(`검색: ${normalizedQuery}`);
+    tokens.push(`검색 ${normalizedQuery}`);
   }
 
   return tokens;

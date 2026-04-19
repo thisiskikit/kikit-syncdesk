@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 import { formatNumber } from "@/lib/utils";
 import ShipmentWorksheetOverview from "./shipment-worksheet-overview";
 
-type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+type FulfillmentActiveTab = "worksheet" | "confirmed" | "archive" | "settings";
 
 type FulfillmentSummaryBarProps = {
   activeTab: FulfillmentActiveTab;
@@ -21,7 +21,7 @@ export default function FulfillmentSummaryBar({
   worksheetSummaryProps,
   archiveSummary,
 }: FulfillmentSummaryBarProps) {
-  if (activeTab === "worksheet") {
+  if (activeTab === "worksheet" || activeTab === "confirmed") {
     return <ShipmentWorksheetOverview {...worksheetSummaryProps} />;
   }
 

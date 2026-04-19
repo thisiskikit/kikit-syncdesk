@@ -2,13 +2,14 @@ import type { ComponentProps } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import ShipmentBaseFilters from "./shipment-base-filters";
 
-type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+type FulfillmentActiveTab = "worksheet" | "confirmed" | "archive" | "settings";
 
 type FulfillmentToolbarProps = {
   activeTab: FulfillmentActiveTab;
   activeSheetSource: "live" | "fallback" | null;
   busyAction: string | null;
   collectActionDisabled: boolean;
+  purchaseConfirmActionDisabled: boolean;
   prepareActionDisabled: boolean;
   transmitActionDisabled: boolean;
   openInvoiceInputDisabled: boolean;
@@ -25,6 +26,7 @@ type FulfillmentToolbarProps = {
   filtersProps: ComponentProps<typeof ShipmentBaseFilters>;
   onChangeTab: (tab: FulfillmentActiveTab) => void;
   onQuickCollect: () => void;
+  onSyncPurchaseConfirmed: () => void;
   onPrepareAcceptedOrders: () => void;
   onTransmit: () => void;
   onOpenInvoiceInput: () => void;
@@ -36,11 +38,46 @@ type FulfillmentToolbarProps = {
   onCollectFull: () => void;
 };
 
+function getTabBadgeLabel(activeTab: FulfillmentActiveTab) {
+  if (activeTab === "archive") {
+    return "보관함";
+  }
+  if (activeTab === "confirmed") {
+    return "구매확정 운영";
+  }
+  if (activeTab === "settings") {
+    return "화면 설정";
+  }
+  return "출고 운영";
+}
+
+function getTabTitle(activeTab: FulfillmentActiveTab) {
+  if (activeTab === "archive") {
+    return "출고 보관함";
+  }
+  if (activeTab === "confirmed") {
+    return "구매확정";
+  }
+  if (activeTab === "settings") {
+    return "출고 화면 설정";
+  }
+  return "출고";
+}
+
+function getTabDescription(activeTab: FulfillmentActiveTab) {
+  if (activeTab === "confirmed") {
+    return "쿠팡 정산 인식 데이터 기준으로 구매확정 여부를 맞추고, 최근 확정건을 읽기 전용으로 확인합니다.";
+  }
+
+  return "오늘 처리할 출고 판단, 송장 입력과 전송, 누락 검수와 예외 확인을 한 화면에서 이어서 처리합니다.";
+}
+
 export default function FulfillmentToolbar({
   activeTab,
   activeSheetSource,
   busyAction,
   collectActionDisabled,
+  purchaseConfirmActionDisabled,
   prepareActionDisabled,
   transmitActionDisabled,
   openInvoiceInputDisabled,
@@ -57,6 +94,7 @@ export default function FulfillmentToolbar({
   filtersProps,
   onChangeTab,
   onQuickCollect,
+  onSyncPurchaseConfirmed,
   onPrepareAcceptedOrders,
   onTransmit,
   onOpenInvoiceInput,
@@ -67,6 +105,10 @@ export default function FulfillmentToolbar({
   onCollectIncremental,
   onCollectFull,
 }: FulfillmentToolbarProps) {
+  const isWorksheetTab = activeTab === "worksheet";
+  const isConfirmedTab = activeTab === "confirmed";
+  const isArchiveTab = activeTab === "archive";
+
   return (
     <>
       <div className="card shipment-page-header">
@@ -77,34 +119,22 @@ export default function FulfillmentToolbar({
                 tone={activeSheetSource === "live" ? "live" : "draft"}
                 label={activeSheetSource === "live" ? "실시간 동기" : "대체 데이터"}
               />
-              <StatusBadge
-                tone="shared"
-                label={
-                  activeTab === "archive"
-                    ? "보관함"
-                    : activeTab === "settings"
-                      ? "화면 설정"
-                      : "출고 운영"
-                }
-              />
+              <StatusBadge tone="shared" label={getTabBadgeLabel(activeTab)} />
             </div>
-            <h1>
-              {activeTab === "archive"
-                ? "출고 보관함"
-                : activeTab === "settings"
-                  ? "출고 화면 설정"
-                  : "출고"}
-            </h1>
-            <p>
-              오늘 처리할 출고 판단, 송장 입력과 전송, 누락 검수, 예외 확인을 한 화면에서 이어서
-              처리합니다.
-            </p>
+            <h1>{getTabTitle(activeTab)}</h1>
+            <p>{getTabDescription(activeTab)}</p>
             <div className="segmented-control" style={{ marginTop: "0.75rem", width: "fit-content" }}>
               <button
                 className={`segmented-button${activeTab === "worksheet" ? " active" : ""}`}
                 onClick={() => onChangeTab("worksheet")}
               >
                 작업 화면
+              </button>
+              <button
+                className={`segmented-button${activeTab === "confirmed" ? " active" : ""}`}
+                onClick={() => onChangeTab("confirmed")}
+              >
+                구매확정
               </button>
               <button
                 className={`segmented-button${activeTab === "archive" ? " active" : ""}`}
@@ -122,7 +152,7 @@ export default function FulfillmentToolbar({
           </div>
 
           <div className="shipment-page-actions">
-            {activeTab !== "archive" ? (
+            {isWorksheetTab ? (
               <div className="shipment-primary-actions">
                 <button className="button" onClick={onQuickCollect} disabled={collectActionDisabled}>
                   {busyAction === "collect-new" ? "빠른 수집 중..." : "빠른 수집"}
@@ -166,12 +196,12 @@ export default function FulfillmentToolbar({
                 </button>
                 {selectedRowsCount > 0 && selectedExportBlockedRowsCount > 0 ? (
                   <div className="muted action-disabled-reason">
-                    선택한 클레임 {selectedExportBlockedRowsCount}건은 엑셀 다운로드에서 제외됩니다.
+                    선택한 행 중 {selectedExportBlockedRowsCount}건은 다운로드에서 제외됩니다.
                   </div>
                 ) : null}
                 {notExportedCount > 0 && claimScopeCount > 0 ? (
                   <div className="muted action-disabled-reason">
-                    클레임 주문은 미출력건 전체 다운로드에서도 자동 제외됩니다.
+                    클레임 주문은 미출력건 전체 다운로드에서 자동 제외됩니다.
                   </div>
                 ) : null}
                 {dirtyCount ? (
@@ -206,21 +236,35 @@ export default function FulfillmentToolbar({
                   </div>
                 </details>
               </div>
+            ) : isConfirmedTab ? (
+              <div className="shipment-primary-actions">
+                <button
+                  className="button"
+                  onClick={onSyncPurchaseConfirmed}
+                  disabled={purchaseConfirmActionDisabled}
+                >
+                  {busyAction === "purchase-confirm-sync"
+                    ? "구매확정 sync 중..."
+                    : "구매확정 sync"}
+                </button>
+                <div className="muted">
+                  구매확정 탭은 읽기 전용입니다. 송장 입력, 송장 전송, 상품준비중 처리와 저장은 숨겨집니다.
+                </div>
+              </div>
             ) : (
               <div className="shipment-primary-actions">
                 <div className="muted">
-                  보관함은 읽기 전용입니다. 상세 확인만 가능하고 수정, 송장 처리, 상품준비중 처리 등은
-                  비활성화됩니다.
+                  보관함은 읽기 전용입니다. 상세 확인만 가능하고 수정, 송장 처리, 상품준비중 처리는 비활성화됩니다.
                 </div>
               </div>
             )}
-            {activeTab !== "archive" && isFallback ? (
+            {isWorksheetTab && isFallback ? (
               <div className="muted action-disabled-reason">
                 대체 데이터에서는 송장 전송을 실행할 수 없습니다.
               </div>
-            ) : activeTab !== "archive" && selectedInvoiceBlockedRowsCount ? (
+            ) : isWorksheetTab && selectedInvoiceBlockedRowsCount ? (
               <div className="muted action-disabled-reason">
-                선택 송장 전송에서는 클레임 {selectedInvoiceBlockedRowsCount}건이 제외됩니다.
+                선택 송장 전송에서 {selectedInvoiceBlockedRowsCount}건이 제외됩니다.
               </div>
             ) : null}
           </div>

@@ -215,6 +215,8 @@ export function parseRefreshShipmentWorksheetInput(
           .map((entry) => asString(entry))
           .filter((entry) => entry.trim().length > 0)
       : [],
+    createdAtFrom: asOptionalString(item.createdAtFrom) ?? undefined,
+    createdAtTo: asOptionalString(item.createdAtTo) ?? undefined,
   };
 }
 
@@ -321,7 +323,11 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
   return {
     storeId: asString(item.storeId),
     scope:
-      scope === "dispatch_active" || scope === "post_dispatch" || scope === "claims" || scope === "all"
+      scope === "dispatch_active" ||
+      scope === "post_dispatch" ||
+      scope === "confirmed" ||
+      scope === "claims" ||
+      scope === "all"
         ? scope
         : undefined,
     page: parsePositiveInteger(item.page, 1),

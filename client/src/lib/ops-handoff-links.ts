@@ -9,19 +9,21 @@ import type { CoupangShipmentWorksheetViewScope } from "@shared/coupang";
 import type { OperationStatus } from "@shared/operations";
 import type { FulfillmentDecisionFilterValue } from "@/features/coupang/shipments/types";
 
-export type FulfillmentWorkspaceTab = "worksheet" | "archive" | "settings";
+export type FulfillmentWorkspaceTab = "worksheet" | "confirmed" | "archive" | "settings";
 export type WorkCenterTab = "operations" | "events";
 export type CsHubFocus = "fulfillment-impact" | "claims" | "inquiries" | "recovery";
 export type CsHubSource = "dashboard" | "fulfillment" | "work-center";
 
 const fulfillmentTabs: readonly FulfillmentWorkspaceTab[] = [
   "worksheet",
+  "confirmed",
   "archive",
   "settings",
 ];
 const fulfillmentScopes: readonly CoupangShipmentWorksheetViewScope[] = [
   "dispatch_active",
   "post_dispatch",
+  "confirmed",
   "claims",
   "all",
 ];
@@ -110,7 +112,7 @@ export function buildFulfillmentWorkspaceHref(input: FulfillmentWorkspaceHrefInp
   if (input.storeId) {
     params.set("storeId", input.storeId);
   }
-  if (input.scope && input.scope !== "dispatch_active") {
+  if (input.scope && input.tab !== "confirmed" && input.scope !== "dispatch_active") {
     params.set("scope", input.scope);
   }
   if (input.decisionStatus && input.decisionStatus !== "all") {

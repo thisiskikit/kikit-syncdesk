@@ -25,13 +25,14 @@ import type {
 const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
 const VISIBLE_SHIPMENT_COLUMN_PRESETS = SHIPMENT_COLUMN_PRESETS.filter((preset) => preset.key === "full");
 
-type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
+type FulfillmentActiveTab = "worksheet" | "confirmed" | "archive" | "settings";
 
 type FulfillmentGridControllerProps = {
   activeTab: FulfillmentActiveTab;
   worksheet: {
     invoiceModeNotice: string;
     detailGuideNotice: string;
+    readOnly: boolean;
     worksheetMode: WorksheetMode;
     activeColumnPreset: ShipmentColumnPresetKey | "custom";
     isLoading: boolean;
@@ -152,11 +153,12 @@ export default function FulfillmentGridController({
   archive,
   settings,
 }: FulfillmentGridControllerProps) {
-  if (activeTab === "worksheet") {
+  if (activeTab === "worksheet" || activeTab === "confirmed") {
     return (
       <ShipmentWorksheetPanel
         invoiceModeNotice={worksheet.invoiceModeNotice}
         detailGuideNotice={worksheet.detailGuideNotice}
+        readOnly={worksheet.readOnly}
         worksheetMode={worksheet.worksheetMode}
         activeColumnPreset={worksheet.activeColumnPreset}
         columnPresetOptions={VISIBLE_SHIPMENT_COLUMN_PRESETS}

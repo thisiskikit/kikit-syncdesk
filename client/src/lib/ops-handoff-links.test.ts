@@ -79,6 +79,24 @@ describe("ops-handoff-links", () => {
     });
   });
 
+  it("keeps confirmed-tab fulfillment links scoped to the tab without forcing worksheet scope", () => {
+    const href = buildFulfillmentWorkspaceHref({
+      tab: "confirmed",
+      storeId: "store-1",
+      scope: "claims",
+      query: "box-1",
+    });
+
+    expect(href).toBe("/fulfillment?tab=confirmed&storeId=store-1&query=box-1");
+    expect(parseFulfillmentWorkspaceSearch(href.split("?")[1] ?? "")).toEqual({
+      activeTab: "confirmed",
+      filterPatch: {
+        selectedStoreId: "store-1",
+        query: "box-1",
+      },
+    });
+  });
+
   it("builds and parses work-center links with full filters", () => {
     const href = buildWorkCenterWorkspaceHref({
       tab: "events",

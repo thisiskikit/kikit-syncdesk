@@ -9,6 +9,7 @@ import type {
   CoupangOrderRow,
   CoupangReturnDetail,
   CoupangReturnRow,
+  CoupangSettlementRow,
   CoupangShipmentWorksheetAuditMissingResponse,
   CoupangShipmentWorksheetBulkResolveMode,
   CoupangShipmentWorksheetBulkResolveResponse,
@@ -41,6 +42,7 @@ import {
   listExchanges,
   listOrders,
   listReturns,
+  listSettlementSales,
 } from "./order-service";
 import { buildCoupangCustomerServiceIssueState } from "./customer-service-issues";
 import { getProductDetail } from "./product-service";
@@ -587,6 +589,16 @@ const WORKSHEET_CHECKPOINT_FLUSH_SIZE = 100;
 const WORKSHEET_AUDIT_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
 const WORKSHEET_AUDIT_MAX_RANGE_DAYS = 7;
 const WORKSHEET_AUDIT_PAGE_SIZE = 50;
+const PURCHASE_CONFIRM_MAX_RANGE_DAYS = 31;
+const PURCHASE_CONFIRM_PAGE_SIZE = 50;
+const PURCHASE_CONFIRM_SAFE_PAGE_CAP = 100;
+const PURCHASE_CONFIRM_SOURCE = "revenue_history_sale";
+const PURCHASE_CONFIRM_TARGET_STATUSES = new Set([
+  "DEPARTURE",
+  "DELIVERING",
+  "FINAL_DELIVERY",
+  "NONE_TRACKING",
+]);
 const SHIPMENT_ARCHIVE_RETENTION_DAYS = 30;
 const SHIPMENT_ARCHIVE_DEFAULT_PAGE_SIZE = 50;
 const SHIPMENT_WORKSHEET_STATUSES = new Set([
@@ -675,17 +687,23 @@ function parseDateOnlyTimestamp(value: string) {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
-function validateShipmentWorksheetAuditRange(createdAtFrom: string, createdAtTo: string) {
+function validateDateOnlyRange(createdAtFrom: string, createdAtTo: string) {
   const fromTimestamp = parseDateOnlyTimestamp(createdAtFrom);
   const toTimestamp = parseDateOnlyTimestamp(createdAtTo);
 
   if (!Number.isFinite(fromTimestamp) || !Number.isFinite(toTimestamp)) {
-    throw new Error("검수 기간 날짜 형식이 올바르지 않습니다.");
+    throw new Error("날짜 형식이 올바르지 않습니다.");
   }
 
   if (fromTimestamp > toTimestamp) {
-    throw new Error("검수 시작일은 종료일보다 늦을 수 없습니다.");
+    throw new Error("시작일은 종료일보다 늦을 수 없습니다.");
   }
+
+  return { fromTimestamp, toTimestamp };
+}
+
+function validateShipmentWorksheetAuditRange(createdAtFrom: string, createdAtTo: string) {
+  const { fromTimestamp, toTimestamp } = validateDateOnlyRange(createdAtFrom, createdAtTo);
 
   const daySpan = Math.floor((toTimestamp - fromTimestamp) / (24 * 60 * 60 * 1000)) + 1;
   if (daySpan > WORKSHEET_AUDIT_MAX_RANGE_DAYS) {
@@ -694,24 +712,27 @@ function validateShipmentWorksheetAuditRange(createdAtFrom: string, createdAtTo:
 }
 
 function buildShipmentWorksheetAuditRanges(createdAtFrom: string, createdAtTo: string) {
-  const fromTimestamp = parseDateOnlyTimestamp(createdAtFrom);
-  const toTimestamp = parseDateOnlyTimestamp(createdAtTo);
+  return buildDateOnlyRanges({
+    dateFrom: createdAtFrom,
+    dateTo: createdAtTo,
+    maxRangeDays: WORKSHEET_AUDIT_MAX_RANGE_DAYS,
+  });
+}
 
-  if (!Number.isFinite(fromTimestamp) || !Number.isFinite(toTimestamp)) {
-    throw new Error("검수 기간 날짜 형식이 올바르지 않습니다.");
-  }
-
-  if (fromTimestamp > toTimestamp) {
-    throw new Error("검수 시작일이 종료일보다 늦을 수는 없습니다.");
-  }
+function buildDateOnlyRanges(input: {
+  dateFrom: string;
+  dateTo: string;
+  maxRangeDays: number;
+}) {
+  const { fromTimestamp, toTimestamp } = validateDateOnlyRange(input.dateFrom, input.dateTo);
 
   const ranges: Array<{ createdAtFrom: string; createdAtTo: string }> = [];
   const dayInMilliseconds = 24 * 60 * 60 * 1000;
-  const chunkSpan = WORKSHEET_AUDIT_MAX_RANGE_DAYS * dayInMilliseconds;
+  const chunkSpan = input.maxRangeDays * dayInMilliseconds;
 
   for (let cursor = fromTimestamp; cursor <= toTimestamp; cursor += chunkSpan) {
     const chunkToTimestamp = Math.min(
-      cursor + (WORKSHEET_AUDIT_MAX_RANGE_DAYS - 1) * dayInMilliseconds,
+      cursor + (input.maxRangeDays - 1) * dayInMilliseconds,
       toTimestamp,
     );
 
@@ -722,6 +743,70 @@ function buildShipmentWorksheetAuditRanges(createdAtFrom: string, createdAtTo: s
   }
 
   return ranges;
+}
+
+function normalizePurchaseConfirmName(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value);
+  return normalized ? normalized.replace(/\s+/g, " ").toLowerCase() : null;
+}
+
+function buildPurchaseConfirmFallbackNameKeys(row: CoupangShipmentWorksheetRow) {
+  return Array.from(
+    new Set(
+      [row.exposedProductName, row.productName]
+        .map((value) => normalizePurchaseConfirmName(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function buildPurchaseConfirmSettlementNameKeys(row: Pick<
+  CoupangSettlementRow,
+  "vendorItemName" | "productName"
+>) {
+  return Array.from(
+    new Set(
+      [row.vendorItemName, row.productName]
+        .map((value) => normalizePurchaseConfirmName(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function buildPurchaseConfirmVendorItemKey(
+  orderId: string | null | undefined,
+  vendorItemId: string | null | undefined,
+) {
+  const normalizedOrderId = normalizeWhitespace(orderId);
+  const normalizedVendorItemId = normalizeWhitespace(vendorItemId);
+  if (!normalizedOrderId || !normalizedVendorItemId) {
+    return null;
+  }
+
+  return `${normalizedOrderId}::${normalizedVendorItemId}`;
+}
+
+function resolvePurchaseConfirmRowDateKey(row: CoupangShipmentWorksheetRow) {
+  const fromOrderedAt = normalizeWhitespace(row.orderedAtRaw)?.slice(0, 10);
+  const orderDate = fromOrderedAt?.replaceAll("-", "") ?? row.orderDateKey;
+  return orderDate && orderDate.length === 8 ? orderDate : null;
+}
+
+function matchesPurchaseConfirmDateRange(
+  row: CoupangShipmentWorksheetRow,
+  createdAtFrom: string,
+  createdAtTo: string,
+) {
+  validateDateOnlyRange(createdAtFrom, createdAtTo);
+
+  const rowDateKey = resolvePurchaseConfirmRowDateKey(row);
+  if (!rowDateKey) {
+    return false;
+  }
+
+  const fromKey = createdAtFrom.replaceAll("-", "");
+  const toKey = createdAtTo.replaceAll("-", "");
+  return rowDateKey >= fromKey && rowDateKey <= toKey;
 }
 
 function isOlderThanDays(value: string | null | undefined, days: number, now: Date) {
@@ -1231,12 +1316,49 @@ function mergeWorksheetRowsBySourceKey(
   return Array.from(merged.values());
 }
 
+function resolvePurchaseConfirmRefreshTargetRows(input: {
+  rows: CoupangShipmentWorksheetRow[];
+  createdAtFrom?: string;
+  createdAtTo?: string;
+}) {
+  const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
+  const createdAtTo = normalizeWhitespace(input.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    throw new Error("구매확정 sync에는 현재 조회 시작일과 종료일이 모두 필요합니다.");
+  }
+
+  validateDateOnlyRange(createdAtFrom, createdAtTo);
+
+  return input.rows.filter((row) => {
+    const status = normalizeWhitespace(row.orderStatus)?.toUpperCase() ?? "";
+    return (
+      PURCHASE_CONFIRM_TARGET_STATUSES.has(status) &&
+      !row.purchaseConfirmedAt &&
+      matchesPurchaseConfirmDateRange(row, createdAtFrom, createdAtTo)
+    );
+  });
+}
+
 function resolveShipmentWorksheetRefreshTargets(input: {
   rows: CoupangShipmentWorksheetRow[];
   scope: RefreshCoupangShipmentWorksheetInput["scope"];
   shipmentBoxIds: string[];
   nowIso: string;
+  createdAtFrom?: string;
+  createdAtTo?: string;
 }) {
+  if (input.scope === "purchase_confirmed") {
+    return {
+      rows: resolvePurchaseConfirmRefreshTargetRows({
+        rows: input.rows,
+        createdAtFrom: input.createdAtFrom,
+        createdAtTo: input.createdAtTo,
+      }),
+      phases: ["purchase_confirm_refresh"] as CoupangShipmentWorksheetSyncPhase[],
+    };
+  }
+
   if (input.scope === "customer_service") {
     return {
       rows: input.rows,
@@ -1306,6 +1428,247 @@ function buildShipmentWorksheetRefreshResponse(
   };
 }
 
+function pushUniqueWorksheetWarning(warnings: string[], value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value);
+  if (normalized && !warnings.includes(normalized)) {
+    warnings.push(normalized);
+  }
+}
+
+function buildPurchaseConfirmFallbackIndex(rows: readonly CoupangShipmentWorksheetRow[]) {
+  const index = new Map<string, Map<string, CoupangShipmentWorksheetRow[]>>();
+
+  for (const row of rows) {
+    const orderId = normalizeWhitespace(row.orderId);
+    if (!orderId) {
+      continue;
+    }
+
+    const keys = buildPurchaseConfirmFallbackNameKeys(row);
+    if (!keys.length) {
+      continue;
+    }
+
+    let nameMap = index.get(orderId);
+    if (!nameMap) {
+      nameMap = new Map<string, CoupangShipmentWorksheetRow[]>();
+      index.set(orderId, nameMap);
+    }
+
+    for (const key of keys) {
+      const current = nameMap.get(key) ?? [];
+      current.push(row);
+      nameMap.set(key, current);
+    }
+  }
+
+  return index;
+}
+
+function resolvePurchaseConfirmedSettlementTarget(input: {
+  settlement: CoupangSettlementRow;
+  rowByVendorKey: Map<string, CoupangShipmentWorksheetRow>;
+  fallbackIndex: Map<string, Map<string, CoupangShipmentWorksheetRow[]>>;
+  matchedRowIds: Set<string>;
+  warnings: string[];
+}) {
+  const vendorKey = buildPurchaseConfirmVendorItemKey(
+    input.settlement.orderId,
+    input.settlement.vendorItemId,
+  );
+  if (vendorKey) {
+    const matched = input.rowByVendorKey.get(vendorKey);
+    if (matched && !input.matchedRowIds.has(matched.id)) {
+      return matched;
+    }
+    return null;
+  }
+
+  const orderId = normalizeWhitespace(input.settlement.orderId);
+  if (!orderId) {
+    return null;
+  }
+
+  const nameIndex = input.fallbackIndex.get(orderId);
+  if (!nameIndex) {
+    return null;
+  }
+
+  const matchedRows = new Map<string, CoupangShipmentWorksheetRow>();
+  for (const key of buildPurchaseConfirmSettlementNameKeys(input.settlement)) {
+    for (const candidate of nameIndex.get(key) ?? []) {
+      if (!input.matchedRowIds.has(candidate.id)) {
+        matchedRows.set(candidate.id, candidate);
+      }
+    }
+  }
+
+  if (matchedRows.size === 1) {
+    return Array.from(matchedRows.values())[0] ?? null;
+  }
+
+  if (matchedRows.size > 1) {
+    pushUniqueWorksheetWarning(
+      input.warnings,
+      `주문 ${orderId} 구매확정 매칭을 건너뛰었습니다. vendorItemId가 없어 상품명 fallback 후보가 ${matchedRows.size}건으로 겹칩니다.`,
+    );
+  }
+
+  return null;
+}
+
+async function refreshPurchaseConfirmedWorksheetRows(input: {
+  store: StoredCoupangStore;
+  currentSheet: WorksheetStoreSheet;
+  request: RefreshCoupangShipmentWorksheetInput & {
+    persistToStore?: boolean;
+  };
+  refreshTargets: {
+    rows: CoupangShipmentWorksheetRow[];
+    phases: CoupangShipmentWorksheetSyncPhase[];
+  };
+  nowIso: string;
+}) {
+  const warnings: string[] = [];
+  const today = formatSeoulDateOnly(new Date());
+  const createdAtFrom = normalizeWhitespace(input.request.createdAtFrom);
+  const createdAtTo = normalizeWhitespace(input.request.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    throw new Error("구매확정 sync에는 현재 조회 기간이 필요합니다.");
+  }
+
+  validateDateOnlyRange(createdAtFrom, createdAtTo);
+
+  const targetRows = input.refreshTargets.rows;
+  const rowByVendorKey = new Map<string, CoupangShipmentWorksheetRow>();
+  for (const row of targetRows) {
+    const vendorKey = buildPurchaseConfirmVendorItemKey(row.orderId, row.vendorItemId);
+    if (vendorKey) {
+      rowByVendorKey.set(vendorKey, row);
+    }
+  }
+  const fallbackIndex = buildPurchaseConfirmFallbackIndex(targetRows);
+  const matchedRowIds = new Set<string>();
+  const updatedRowsBySourceKey = new Map<string, CoupangShipmentWorksheetRow>();
+  const recognitionRanges = buildDateOnlyRanges({
+    dateFrom: createdAtFrom,
+    dateTo: today,
+    maxRangeDays: PURCHASE_CONFIRM_MAX_RANGE_DAYS,
+  });
+
+  for (const range of recognitionRanges) {
+    if (matchedRowIds.size >= targetRows.length) {
+      break;
+    }
+
+    const response = await listSettlementSales({
+      storeId: input.request.storeId,
+      recognitionDateFrom: range.createdAtFrom,
+      recognitionDateTo: range.createdAtTo,
+      maxPerPage: PURCHASE_CONFIRM_PAGE_SIZE,
+      maxPageCount: PURCHASE_CONFIRM_SAFE_PAGE_CAP,
+    });
+
+    pushUniqueWorksheetWarning(warnings, response.message);
+    if (response.source !== "live") {
+      continue;
+    }
+
+    for (const settlement of response.items) {
+      if (normalizeWhitespace(settlement.saleType)?.toUpperCase() !== "SALE") {
+        continue;
+      }
+
+      const matchedRow = resolvePurchaseConfirmedSettlementTarget({
+        settlement,
+        rowByVendorKey,
+        fallbackIndex,
+        matchedRowIds,
+        warnings,
+      });
+      if (!matchedRow || matchedRowIds.has(matchedRow.id)) {
+        continue;
+      }
+
+      const purchaseConfirmedAt =
+        normalizeWhitespace(settlement.recognitionDate) ??
+        normalizeWhitespace(settlement.settlementDate) ??
+        normalizeWhitespace(settlement.finalSettlementDate) ??
+        input.nowIso;
+      const nextRow = normalizeWorksheetRow({
+        ...matchedRow,
+        purchaseConfirmedAt,
+        purchaseConfirmedSyncedAt: input.nowIso,
+        purchaseConfirmedFinalSettlementDate:
+          normalizeWhitespace(settlement.finalSettlementDate) ??
+          matchedRow.purchaseConfirmedFinalSettlementDate ??
+          null,
+        purchaseConfirmedSource: PURCHASE_CONFIRM_SOURCE,
+        updatedAt: input.nowIso,
+      });
+
+      updatedRowsBySourceKey.set(nextRow.sourceKey, nextRow);
+      matchedRowIds.add(matchedRow.id);
+    }
+  }
+
+  const mergedRows = mergeWorksheetRowsBySourceKey(
+    input.currentSheet.items,
+    Array.from(updatedRowsBySourceKey.values()),
+  );
+  const nextMessage = mergeMessages([
+    input.currentSheet.message,
+    warnings.length > 0 ? `구매확정 sync 중 경고 ${warnings.length}건이 있습니다.` : null,
+  ]);
+  const autoArchiveResult = await applyCompletedClaimAutoArchive({
+    storeId: input.request.storeId,
+    rows: mergedRows,
+    message: nextMessage,
+    archivedAt: input.nowIso,
+    persistToStore: input.request.persistToStore !== false,
+  });
+  const persistedSheet =
+    input.request.persistToStore === false
+      ? {
+          ...input.currentSheet,
+          items: autoArchiveResult.rows,
+          message: autoArchiveResult.message,
+          updatedAt: input.nowIso,
+        }
+      : await coupangShipmentWorksheetStore.setStoreSheet({
+          storeId: input.request.storeId,
+          items: autoArchiveResult.rows,
+          collectedAt: input.currentSheet.collectedAt,
+          source: input.currentSheet.source,
+          message: autoArchiveResult.message,
+          syncState: input.currentSheet.syncState ?? createEmptySyncState(),
+          syncSummary: input.currentSheet.syncSummary,
+        });
+  const updatedRows = Array.from(updatedRowsBySourceKey.values()).filter(
+    (row) => !autoArchiveResult.removedSourceKeys.has(row.sourceKey),
+  );
+  const warningPhases =
+    warnings.length > 0
+      ? (["purchase_confirm_refresh"] as CoupangShipmentWorksheetSyncPhase[])
+      : [];
+  const completedPhases =
+    warnings.length > 0
+      ? []
+      : (["purchase_confirm_refresh"] as CoupangShipmentWorksheetSyncPhase[]);
+
+  return buildShipmentWorksheetRefreshResponse(input.store, persistedSheet, {
+    scope: input.request.scope,
+    updatedRows,
+    refreshedCount: targetRows.length,
+    updatedCount: updatedRowsBySourceKey.size,
+    completedPhases,
+    pendingPhases: [],
+    warningPhases,
+    message: autoArchiveResult.message,
+  });
+}
+
 async function refreshShipmentWorksheetRows(
   input: RefreshCoupangShipmentWorksheetInput & {
     currentSheet?: WorksheetStoreSheet;
@@ -1323,6 +1686,8 @@ async function refreshShipmentWorksheetRows(
     scope: input.scope,
     shipmentBoxIds: input.shipmentBoxIds ?? [],
     nowIso: now,
+    createdAtFrom: input.createdAtFrom,
+    createdAtTo: input.createdAtTo,
   });
 
   if (!refreshTargets.rows.length) {
@@ -1348,6 +1713,16 @@ async function refreshShipmentWorksheetRows(
       pendingPhases,
       warningPhases,
       message: null,
+    });
+  }
+
+  if (input.scope === "purchase_confirmed") {
+    return refreshPurchaseConfirmedWorksheetRows({
+      store,
+      currentSheet,
+      request: input,
+      refreshTargets,
+      nowIso: now,
     });
   }
 
@@ -2553,6 +2928,11 @@ function buildWorksheetRow(input: {
     customerServiceTerminalStatus: customerServiceIssueState.customerServiceTerminalStatus,
     customerServiceState: customerServiceIssueState.customerServiceState,
     customerServiceFetchedAt: customerServiceIssueState.customerServiceFetchedAt,
+    purchaseConfirmedAt: currentRow?.purchaseConfirmedAt ?? null,
+    purchaseConfirmedSyncedAt: currentRow?.purchaseConfirmedSyncedAt ?? null,
+    purchaseConfirmedFinalSettlementDate:
+      currentRow?.purchaseConfirmedFinalSettlementDate ?? null,
+    purchaseConfirmedSource: currentRow?.purchaseConfirmedSource ?? null,
     orderedAtRaw,
     lastOrderHydratedAt: detail ? nowIso : currentRow?.lastOrderHydratedAt ?? null,
     lastProductHydratedAt: productDetail ? nowIso : currentRow?.lastProductHydratedAt ?? null,
@@ -2941,6 +3321,12 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     ? Math.max(0, Math.trunc(row.customerServiceIssueCount))
     : 0;
   const customerServiceIssueSummary = normalizeWhitespace(row.customerServiceIssueSummary);
+  const purchaseConfirmedAt = normalizeWhitespace(row.purchaseConfirmedAt);
+  const purchaseConfirmedSyncedAt = normalizeWhitespace(row.purchaseConfirmedSyncedAt);
+  const purchaseConfirmedFinalSettlementDate = normalizeWhitespace(
+    row.purchaseConfirmedFinalSettlementDate,
+  );
+  const purchaseConfirmedSource = normalizeWhitespace(row.purchaseConfirmedSource);
   const customerServiceIssueBreakdown = Array.isArray(row.customerServiceIssueBreakdown)
     ? (() => {
         const items = row.customerServiceIssueBreakdown;
@@ -2980,6 +3366,10 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     customerServiceIssueCount === row.customerServiceIssueCount &&
     customerServiceIssueSummary === row.customerServiceIssueSummary &&
     customerServiceIssueBreakdown === row.customerServiceIssueBreakdown &&
+    purchaseConfirmedAt === row.purchaseConfirmedAt &&
+    purchaseConfirmedSyncedAt === row.purchaseConfirmedSyncedAt &&
+    purchaseConfirmedFinalSettlementDate === row.purchaseConfirmedFinalSettlementDate &&
+    purchaseConfirmedSource === row.purchaseConfirmedSource &&
     coupangDeliveryCompanyCode === row.coupangDeliveryCompanyCode &&
     coupangInvoiceNumber === row.coupangInvoiceNumber &&
     coupangInvoiceUploadedAt === row.coupangInvoiceUploadedAt &&
@@ -2996,6 +3386,10 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     customerServiceIssueCount,
     customerServiceIssueSummary,
     customerServiceIssueBreakdown,
+    purchaseConfirmedAt,
+    purchaseConfirmedSyncedAt,
+    purchaseConfirmedFinalSettlementDate,
+    purchaseConfirmedSource,
     coupangDeliveryCompanyCode,
     coupangInvoiceNumber,
     coupangInvoiceUploadedAt,

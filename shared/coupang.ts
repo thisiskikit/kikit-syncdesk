@@ -1072,6 +1072,10 @@ export interface CoupangShipmentWorksheetRow {
   customerServiceTerminalStatus: CoupangCustomerServiceTerminalStatus | null;
   customerServiceState: CoupangCustomerServiceState;
   customerServiceFetchedAt: string | null;
+  purchaseConfirmedAt?: string | null;
+  purchaseConfirmedSyncedAt?: string | null;
+  purchaseConfirmedFinalSettlementDate?: string | null;
+  purchaseConfirmedSource?: string | null;
   orderedAtRaw: string | null;
   lastOrderHydratedAt: string | null;
   lastProductHydratedAt: string | null;
@@ -1159,6 +1163,7 @@ export const coupangShipmentWorksheetSyncPhases = [
   "order_detail_hydration",
   "product_detail_hydration",
   "customer_service_refresh",
+  "purchase_confirm_refresh",
 ] as const;
 export type CoupangShipmentWorksheetSyncPhase =
   (typeof coupangShipmentWorksheetSyncPhases)[number];
@@ -1167,6 +1172,7 @@ export const coupangShipmentWorksheetRefreshScopes = [
   "pending_after_collect",
   "shipment_boxes",
   "customer_service",
+  "purchase_confirmed",
 ] as const;
 export type CoupangShipmentWorksheetRefreshScope =
   (typeof coupangShipmentWorksheetRefreshScopes)[number];
@@ -1208,6 +1214,7 @@ export interface CoupangShipmentWorksheetResponse {
 export type CoupangShipmentWorksheetViewScope =
   | "dispatch_active"
   | "post_dispatch"
+  | "confirmed"
   | "claims"
   | "all";
 
@@ -1444,6 +1451,8 @@ export interface RefreshCoupangShipmentWorksheetInput {
   storeId: string;
   scope: CoupangShipmentWorksheetRefreshScope;
   shipmentBoxIds?: string[];
+  createdAtFrom?: string;
+  createdAtTo?: string;
 }
 
 export interface CoupangShipmentWorksheetRefreshResponse {

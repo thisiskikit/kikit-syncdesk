@@ -19,6 +19,7 @@ function buildRow(input: {
   customerServiceIssueCount?: number;
   customerServiceIssueBreakdown?: CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"];
   availableActions?: CoupangShipmentWorksheetRow["availableActions"];
+  purchaseConfirmedAt?: string | null;
 }) {
   const invoiceNumber = input.invoiceNumber ?? "";
   const deliveryCompanyCode = input.deliveryCompanyCode ?? "";
@@ -76,6 +77,10 @@ function buildRow(input: {
     invoiceTransmissionStatus: input.invoiceTransmissionStatus ?? null,
     invoiceTransmissionMessage: null,
     invoiceTransmissionAt: null,
+    purchaseConfirmedAt: input.purchaseConfirmedAt ?? null,
+    purchaseConfirmedSyncedAt: null,
+    purchaseConfirmedFinalSettlementDate: null,
+    purchaseConfirmedSource: null,
     exportedAt: input.exportedAt ?? null,
     invoiceAppliedAt: input.invoiceAppliedAt ?? null,
     createdAt: "2026-04-09T09:00:00.000Z",
@@ -143,6 +148,65 @@ describe("shipment worksheet view", () => {
     expect(view.filteredRowCount).toBe(2);
     expect(view.orderCounts.SHIPMENT_STOP_HANDLED).toBe(1);
     expect(view.orderCounts.RETURN).toBe(1);
+  });
+
+  it("moves purchase-confirmed rows into the confirmed scope while keeping claim rows claim-first", () => {
+    const rows = [
+      buildRow({
+        id: "confirmed",
+        status: "FINAL_DELIVERY",
+        exportedAt: "2026-04-09T11:00:00.000Z",
+        purchaseConfirmedAt: "2026-04-10T09:00:00.000Z",
+      }),
+      buildRow({
+        id: "confirmed-claim",
+        status: "FINAL_DELIVERY",
+        exportedAt: "2026-04-09T11:00:00.000Z",
+        purchaseConfirmedAt: "2026-04-10T09:00:00.000Z",
+        customerServiceIssueCount: 1,
+        customerServiceIssueSummary: "Return 1",
+        customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "Return 1" }],
+      }),
+      buildRow({
+        id: "post-dispatch",
+        status: "DELIVERING",
+        exportedAt: "2026-04-09T11:00:00.000Z",
+      }),
+      buildRow({
+        id: "dispatch-active",
+        status: "ACCEPT",
+      }),
+    ];
+
+    const confirmedView = buildShipmentWorksheetViewData(rows, {
+      scope: "confirmed",
+      page: 1,
+      pageSize: 50,
+    });
+    const claimsView = buildShipmentWorksheetViewData(rows, {
+      scope: "claims",
+      page: 1,
+      pageSize: 50,
+    });
+    const postDispatchView = buildShipmentWorksheetViewData(rows, {
+      scope: "post_dispatch",
+      page: 1,
+      pageSize: 50,
+    });
+    const dispatchActiveView = buildShipmentWorksheetViewData(rows, {
+      scope: "dispatch_active",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(confirmedView.items.map((row) => row.id)).toEqual(["confirmed"]);
+    expect(confirmedView.scopeCounts.confirmed).toBe(1);
+    expect(confirmedView.scopeCounts.claims).toBe(1);
+    expect(confirmedView.scopeCounts.post_dispatch).toBe(1);
+    expect(confirmedView.scopeCounts.dispatch_active).toBe(1);
+    expect(claimsView.items.map((row) => row.id)).toEqual(["confirmed-claim"]);
+    expect(postDispatchView.items.map((row) => row.id)).toEqual(["post-dispatch"]);
+    expect(dispatchActiveView.items.map((row) => row.id)).toEqual(["dispatch-active"]);
   });
 
   it("resolves not-exported download rows without claims", () => {

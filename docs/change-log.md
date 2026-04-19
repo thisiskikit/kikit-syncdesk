@@ -2,6 +2,51 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 쿠팡 구매확정 수동 sync와 구매확정 탭 분리
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/application/coupang/orders/read.ts`
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `client/src/lib/ops-handoff-links.ts`
+  - `client/src/lib/ops-handoff-links.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-toolbar.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-grid-controller.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-selection-controller.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-summary-bar.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+  - `client/src/features/coupang/shipments/shipment-base-filters.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 출고 화면에 `구매확정` 상단 탭과 `구매확정 sync` 수동 액션을 추가했습니다.
+  - 구매확정 판정은 주문 상태값이 아니라 기존 쿠팡 `revenue-history` 정산 인식 데이터로만 수행하도록 고정했습니다.
+  - worksheet row에 `purchaseConfirmedAt`, `purchaseConfirmedSyncedAt`, `purchaseConfirmedFinalSettlementDate`, `purchaseConfirmedSource` 확장 필드를 추가했고, 새 테이블 없이 기존 row 저장 경로를 그대로 사용합니다.
+  - `worksheet/refresh`에 `purchase_confirmed` scope를 추가해 현재 스토어/조회 기간 기준의 post-dispatch 후보만 별도로 구매확정 sync 할 수 있게 했습니다.
+  - 매칭은 `orderId + vendorItemId`를 기본으로 사용하고, `vendorItemId`가 없는 정산 row만 이름 fallback을 허용합니다. fallback이 다중 후보면 경고만 남기고 건너뜁니다.
+  - `dispatch_active`, `post_dispatch`에서는 구매확정된 행을 숨기고, 새 `confirmed` scope에서는 claim 없는 구매확정 행만 보여줍니다.
+  - claim이 있는 구매확정 행은 계속 `claims` 범위에 남기고, `구매확정` 탭은 읽기 전용으로 유지합니다.
+- 이유:
+  - 주문 시트 API만으로는 구매확정 상태를 신뢰성 있게 알 수 없어서, 이미 저장소에 있는 정산 인식 데이터를 출고 운영 화면과 연결할 필요가 있었습니다.
+  - 최근 구매확정건을 active worksheet/보관함과 분리해 보여 주되, 기존 30일 archive 정책은 바꾸지 않는 것이 이번 운영 요구에 맞았습니다.
+- 남은 점:
+  - 구매확정 sync는 수동 실행만 지원합니다.
+  - 이미 확정된 행을 미확정으로 되돌리는 해제(sync rollback)는 이번 범위에 넣지 않았습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-view.test.ts`
+  - `npx vitest run client/src/lib/ops-handoff-links.test.ts`
+
 ## 2026-04-19 / 출고 보기 프리셋 UI를 전체 열 보기만 노출하도록 제한
 
 - 변경 유형:

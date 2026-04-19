@@ -6,5 +6,6 @@ export {
   listExchanges,
   listOrders,
   listReturns,
+  listSettlementSales,
   listSettlements,
 } from "./service";

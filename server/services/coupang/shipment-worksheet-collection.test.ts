@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CoupangExchangeRow,
   CoupangReturnRow,
+  CoupangSettlementRow,
   CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
 
@@ -13,6 +14,7 @@ const {
   listExchangesMock,
   getOrderCustomerServiceSummaryMock,
   getOrderDetailMock,
+  listSettlementSalesMock,
   markPreparingMock,
   getProductDetailMock,
   getStoreSheetMock,
@@ -28,6 +30,7 @@ const {
   listExchangesMock: vi.fn(),
   getOrderCustomerServiceSummaryMock: vi.fn(),
   getOrderDetailMock: vi.fn(),
+  listSettlementSalesMock: vi.fn(),
   markPreparingMock: vi.fn(),
   getProductDetailMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
@@ -50,6 +53,7 @@ vi.mock("./order-service", () => ({
   listExchanges: listExchangesMock,
   getOrderCustomerServiceSummary: getOrderCustomerServiceSummaryMock,
   getOrderDetail: getOrderDetailMock,
+  listSettlementSales: listSettlementSalesMock,
   markPreparing: markPreparingMock,
 }));
 
@@ -276,6 +280,10 @@ function buildWorksheetRow(input: {
   coupangDeliveryCompanyCode?: string | null;
   coupangInvoiceNumber?: string | null;
   coupangInvoiceUploadedAt?: string | null;
+  purchaseConfirmedAt?: string | null;
+  purchaseConfirmedSyncedAt?: string | null;
+  purchaseConfirmedFinalSettlementDate?: string | null;
+  purchaseConfirmedSource?: string | null;
 }) {
   const productName = input.productName ?? "Stored Product";
   const optionName = input.optionName ?? "Default";
@@ -334,11 +342,48 @@ function buildWorksheetRow(input: {
     invoiceTransmissionStatus: input.invoiceTransmissionStatus ?? null,
     invoiceTransmissionMessage: input.invoiceTransmissionMessage ?? null,
     invoiceTransmissionAt: input.invoiceTransmissionAt ?? null,
+    purchaseConfirmedAt: input.purchaseConfirmedAt ?? null,
+    purchaseConfirmedSyncedAt: input.purchaseConfirmedSyncedAt ?? null,
+    purchaseConfirmedFinalSettlementDate: input.purchaseConfirmedFinalSettlementDate ?? null,
+    purchaseConfirmedSource: input.purchaseConfirmedSource ?? null,
     exportedAt: null,
     invoiceAppliedAt: null,
     createdAt: input.createdAt ?? "2026-03-26T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-03-26T00:00:00.000Z",
   } satisfies CoupangShipmentWorksheetRow;
+}
+
+function buildSettlementRow(
+  overrides: Partial<CoupangSettlementRow> = {},
+): CoupangSettlementRow {
+  return {
+    settlementId: "settlement-1",
+    orderId: "O-950",
+    saleType: "SALE",
+    saleDate: "2026-03-25",
+    recognitionDate: "2026-03-26",
+    settlementDate: "2026-03-27",
+    finalSettlementDate: "2026-03-31",
+    productName: "Confirmed Product",
+    vendorItemName: "Confirmed Product, Default",
+    vendorItemId: "V-950",
+    externalSellerSkuCode: "SKU-V-950",
+    quantity: 1,
+    salesAmount: 10000,
+    saleAmount: 10000,
+    settlementAmount: 9500,
+    serviceFee: 500,
+    serviceFeeVat: 50,
+    serviceFeeRatio: 5,
+    sellerDiscountCoupon: 0,
+    downloadableCoupon: 0,
+    deliveryFeeAmount: 0,
+    deliveryFeeSettlementAmount: 0,
+    taxType: "TAX",
+    status: "FINALIZED",
+    settledAt: "2026-03-31T00:00:00+09:00",
+    ...overrides,
+  };
 }
 
 function buildEmptySheet(items: CoupangShipmentWorksheetRow[] = []) {
@@ -386,6 +431,14 @@ describe("coupang shipment worksheet collection", () => {
       item: null,
       source: "live",
       message: null,
+    });
+    listSettlementSalesMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+      nextToken: null,
+      pageCount: 1,
+      hitSafeCap: false,
     });
     getProductDetailMock.mockResolvedValue(null);
     archiveRowsMock.mockImplementation(async (input: { items: Array<{ sourceKey: string }>; dryRun?: boolean }) => ({
@@ -2274,6 +2327,241 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.shipmentBoxId).toBe("920-A");
     expect(result.refreshedCount).toBe(1);
+  });
+
+  it("patches purchase-confirmed fields from settlement SALE rows matched by orderId and vendorItemId", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "950",
+          orderId: "O-950",
+          vendorItemId: "V-950",
+          status: "FINAL_DELIVERY",
+          productName: "Confirmed Product",
+        }),
+      ]),
+    );
+    listSettlementSalesMock.mockResolvedValue({
+      items: [
+        buildSettlementRow({
+          orderId: "O-950",
+          vendorItemId: "V-950",
+          productName: "Confirmed Product",
+          vendorItemName: "Confirmed Product, Default",
+          recognitionDate: "2026-03-26",
+          finalSettlementDate: "2026-03-31",
+        }),
+      ],
+      source: "live",
+      message: null,
+      nextToken: null,
+      pageCount: 1,
+      hitSafeCap: false,
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "purchase_confirmed",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+    });
+
+    expect(listSettlementSalesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        recognitionDateFrom: "2026-03-26",
+        recognitionDateTo: "2026-03-26",
+      }),
+    );
+    expect(result.refreshedCount).toBe(1);
+    expect(result.updatedCount).toBe(1);
+    expect(result.completedPhases).toEqual(["purchase_confirm_refresh"]);
+    expect(result.warningPhases).toEqual([]);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        shipmentBoxId: "950",
+        purchaseConfirmedAt: "2026-03-26",
+        purchaseConfirmedFinalSettlementDate: "2026-03-31",
+        purchaseConfirmedSource: "revenue_history_sale",
+      }),
+    ]);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:950:V-950",
+            purchaseConfirmedAt: "2026-03-26",
+            purchaseConfirmedSource: "revenue_history_sale",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("allows single-candidate fallback matching when settlement vendorItemId is missing", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "951",
+          orderId: "O-951",
+          vendorItemId: "V-951",
+          status: "DELIVERING",
+          productName: "Fallback Product",
+          optionName: "Blue",
+        }),
+      ]),
+    );
+    listSettlementSalesMock.mockResolvedValue({
+      items: [
+        buildSettlementRow({
+          settlementId: "settlement-951",
+          orderId: "O-951",
+          vendorItemId: null,
+          productName: "Fallback Product",
+          vendorItemName: "Fallback Product, Blue",
+          recognitionDate: "2026-03-26",
+          finalSettlementDate: "2026-03-30",
+        }),
+      ],
+      source: "live",
+      message: null,
+      nextToken: null,
+      pageCount: 1,
+      hitSafeCap: false,
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "purchase_confirmed",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+    });
+
+    expect(result.updatedCount).toBe(1);
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        shipmentBoxId: "951",
+        purchaseConfirmedAt: "2026-03-26",
+        purchaseConfirmedSource: "revenue_history_sale",
+      }),
+    );
+  });
+
+  it("skips ambiguous fallback purchase-confirm matches and records a warning", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "952-A",
+          orderId: "O-952",
+          vendorItemId: "V-952-A",
+          status: "FINAL_DELIVERY",
+          productName: "Duplicate Product",
+          optionName: "Default",
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "952-B",
+          orderId: "O-952",
+          vendorItemId: "V-952-B",
+          status: "FINAL_DELIVERY",
+          productName: "Duplicate Product",
+          optionName: "Default",
+        }),
+      ]),
+    );
+    listSettlementSalesMock.mockResolvedValue({
+      items: [
+        buildSettlementRow({
+          settlementId: "settlement-952",
+          orderId: "O-952",
+          vendorItemId: null,
+          productName: "Duplicate Product",
+          vendorItemName: "Duplicate Product, Default",
+        }),
+      ],
+      source: "live",
+      message: null,
+      nextToken: null,
+      pageCount: 1,
+      hitSafeCap: false,
+    });
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "purchase_confirmed",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+    });
+
+    expect(result.refreshedCount).toBe(2);
+    expect(result.updatedCount).toBe(0);
+    expect(result.items).toEqual([]);
+    expect(result.completedPhases).toEqual([]);
+    expect(result.warningPhases).toEqual(["purchase_confirm_refresh"]);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:952-A:V-952-A",
+            purchaseConfirmedAt: null,
+          }),
+          expect.objectContaining({
+            sourceKey: "store-1:952-B:V-952-B",
+            purchaseConfirmedAt: null,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("keeps already purchase-confirmed rows unchanged when re-sync runs again", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "953-A",
+          orderId: "O-953-A",
+          vendorItemId: "V-953-A",
+          status: "FINAL_DELIVERY",
+          productName: "Already Confirmed",
+          purchaseConfirmedAt: "2026-03-25",
+          purchaseConfirmedSyncedAt: "2026-03-25T12:00:00.000Z",
+          purchaseConfirmedFinalSettlementDate: "2026-03-30",
+          purchaseConfirmedSource: "revenue_history_sale",
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "953-B",
+          orderId: "O-953-B",
+          vendorItemId: "V-953-B",
+          status: "FINAL_DELIVERY",
+          productName: "Still Pending",
+        }),
+      ]),
+    );
+
+    const result = await refreshShipmentWorksheet({
+      storeId: "store-1",
+      scope: "purchase_confirmed",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+    });
+
+    expect(result.refreshedCount).toBe(1);
+    expect(result.updatedCount).toBe(0);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:953-A:V-953-A",
+            purchaseConfirmedAt: "2026-03-25",
+            purchaseConfirmedFinalSettlementDate: "2026-03-30",
+            purchaseConfirmedSource: "revenue_history_sale",
+          }),
+          expect.objectContaining({
+            sourceKey: "store-1:953-B:V-953-B",
+            purchaseConfirmedAt: null,
+          }),
+        ],
+      }),
+    );
   });
 
   it("keeps worksheet rows and records warning phases when follow-up refresh has warnings", async () => {

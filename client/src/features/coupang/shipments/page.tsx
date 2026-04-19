@@ -1563,7 +1563,10 @@ export default function CoupangShipmentsPage() {
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
   const [isFullDetailDialogOpen, setIsFullDetailDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<FulfillmentWorkspaceTab>("worksheet");
+  const [settingsReturnTab, setSettingsReturnTab] = useState<FulfillmentWorkspaceTab>("worksheet");
   const [worksheetMode, setWorksheetMode] = useState<WorksheetMode>("default");
+  const effectiveWorksheetMode: WorksheetMode =
+    activeTab === "confirmed" ? "default" : worksheetMode;
   const [quickCollectFocus, setQuickCollectFocus] = useState<QuickCollectFocusState | null>(null);
   const [worksheetPageSize, setWorksheetPageSize] = usePersistentState<number>(
     "kikit:coupang-shipments:worksheet-page-size",
@@ -1721,6 +1724,8 @@ export default function CoupangShipmentsPage() {
   ]);
 
   const deferredQuery = useDeferredValue(filters.query);
+  const effectiveWorksheetScope: CoupangShipmentWorksheetViewScope =
+    activeTab === "confirmed" ? "confirmed" : filters.scope;
   const activeSortColumn = sortColumns[0] ?? null;
   const activeSortField = useMemo(
     () => resolveShipmentSortField(activeSortColumn?.columnKey, columnConfigs),
@@ -1767,7 +1772,7 @@ export default function CoupangShipmentsPage() {
     queryKey: [
       "/api/coupang/shipments/worksheet/view",
       filters.selectedStoreId,
-      filters.scope,
+      effectiveWorksheetScope,
       worksheetPage,
       worksheetPageSize,
       deferredQuery,
@@ -1781,7 +1786,7 @@ export default function CoupangShipmentsPage() {
       getJson<CoupangShipmentWorksheetViewResponse>(
         buildWorksheetViewUrl({
           storeId: filters.selectedStoreId,
-          scope: filters.scope,
+          scope: effectiveWorksheetScope,
           page: worksheetPage,
           pageSize: worksheetPageSize,
           query: deferredQuery,
@@ -2008,14 +2013,14 @@ export default function CoupangShipmentsPage() {
               vendorId: selectedStore.vendorId,
             }
           : null,
-        scope: filters.scope,
+        scope: effectiveWorksheetScope,
       }),
     [
       activeDecisionStatus,
       activeTab,
       baseActiveSheet,
       draftRows,
-      filters.scope,
+      effectiveWorksheetScope,
       quickCollectFocus,
       quickCollectFocusRows,
       quickCollectFocusSignature,
@@ -2076,7 +2081,7 @@ export default function CoupangShipmentsPage() {
         createdAtFrom: filters.createdAtFrom,
         createdAtTo: filters.createdAtTo,
         query: deferredQuery,
-        scope: filters.scope,
+        scope: effectiveWorksheetScope,
         decisionStatus: activeDecisionStatus,
         invoiceStatusCard: activeInvoiceStatusCard,
         orderStatusCard: activeOrderStatusCard,
@@ -2091,14 +2096,14 @@ export default function CoupangShipmentsPage() {
     deferredQuery,
     filters.createdAtFrom,
     filters.createdAtTo,
-    filters.scope,
+    effectiveWorksheetScope,
     isQuickCollectFocusActive,
     quickCollectFocusResult,
     selectedStoreName,
   ]);
   const hasCustomWorksheetFilters =
     Boolean(deferredQuery) ||
-    filters.scope !== "dispatch_active" ||
+    effectiveWorksheetScope !== "dispatch_active" ||
     activeDecisionStatus !== "all" ||
     activeDetailFilterCount > 0;
   const pageRowIdSet = useMemo(() => new Set(visibleRows.map((row) => row.id)), [visibleRows]);
@@ -2416,7 +2421,7 @@ export default function CoupangShipmentsPage() {
   const infoBanner = summarizeWorksheetMessage(activeSheet);
   const syncBanner = summarizeWorksheetSync(activeSheet);
   const invoiceModeNotice =
-    worksheetMode === "invoice"
+    effectiveWorksheetMode === "invoice"
       ? "송장 입력 모드에서는 택배사와 송장번호 열이 연보라색으로 강조되며, 다른 엑셀 표를 그대로 복사해 와도 현재 선택 위치부터 붙여넣고 드래그 복제를 사용할 수 있습니다. 팝업 입력도 지원합니다."
       : "표 안에서 `Ctrl+V`로 붙여넣을 수 있습니다. 일반 값은 선택한 셀부터 반영되고, `셀픽주문번호 | 택배사 | 송장번호` 형식은 주문번호 기준으로 자동 매칭합니다.";
   const detailGuideNotice = "행을 클릭하면 메모, 현재 상태, 쿠팡 클레임 상세를 팝업으로 확인할 수 있습니다.";
@@ -3003,6 +3008,7 @@ export default function CoupangShipmentsPage() {
     return items;
   }, [feedback, infoBanner, isFallback, syncBanner]);
   const isArchiveTab = activeTab === "archive";
+  const isConfirmedTab = activeTab === "confirmed";
   const transmitActionLabel = "송장 전송하기";
   const transmitActionBusyLabel =
     busyAction === "invoice-transmit" || busyAction === "execute"
@@ -3020,14 +3026,16 @@ export default function CoupangShipmentsPage() {
   const selectedTransmitActionDisabled =
     !selectedReadyRows.length || isFallback || busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
+  const purchaseConfirmActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const prepareActionDisabled =
     !filters.selectedStoreId ||
+    isConfirmedTab ||
     isFallback ||
     busyAction !== null;
   const refreshActionDisabled =
     !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
   const openInvoiceInputDisabled =
-    !(activeSheet?.totalRowCount ?? effectiveDraftRows.length) || busyAction !== null;
+    isConfirmedTab || !(activeSheet?.totalRowCount ?? effectiveDraftRows.length) || busyAction !== null;
   const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
   const openNotExportedExcelExportDisabled =
     !(activeSheet?.outputCounts.notExported ?? 0) || busyAction !== null;
@@ -3044,7 +3052,7 @@ export default function CoupangShipmentsPage() {
 
   function buildCurrentWorksheetViewQuery() {
     return {
-      scope: filters.scope,
+      scope: effectiveWorksheetScope,
       page: worksheetPage,
       pageSize: worksheetPageSize,
       query: deferredQuery,
@@ -3390,8 +3398,14 @@ export default function CoupangShipmentsPage() {
 
   async function refreshWorksheetInBackground(input: {
     storeId?: string;
-    scope: "pending_after_collect" | "shipment_boxes" | "customer_service";
+    scope:
+      | "pending_after_collect"
+      | "shipment_boxes"
+      | "customer_service"
+      | "purchase_confirmed";
     shipmentBoxIds?: string[];
+    createdAtFrom?: string;
+    createdAtTo?: string;
   }) {
     const storeId = input.storeId ?? filters.selectedStoreId;
     if (!storeId || activeTab === "archive") {
@@ -3406,6 +3420,8 @@ export default function CoupangShipmentsPage() {
           storeId,
           scope: input.scope,
           shipmentBoxIds: input.shipmentBoxIds,
+          createdAtFrom: input.createdAtFrom,
+          createdAtTo: input.createdAtTo,
         },
       );
 
@@ -3440,6 +3456,75 @@ export default function CoupangShipmentsPage() {
             },
       );
       return null;
+    }
+  }
+
+  async function executePurchaseConfirmedSync() {
+    const requestFilters = normalizeFiltersToSeoulToday(filters);
+    if (!requestFilters.selectedStoreId) {
+      return;
+    }
+
+    const localToastId = startLocalOperation({
+      channel: "coupang",
+      actionName: "쿠팡 구매확정 sync",
+      targetCount: 1,
+    });
+    setBusyAction("purchase-confirm-sync");
+
+    try {
+      const response = await refreshWorksheetInBackground({
+        storeId: requestFilters.selectedStoreId,
+        scope: "purchase_confirmed",
+        createdAtFrom: requestFilters.createdAtFrom,
+        createdAtTo: requestFilters.createdAtTo,
+      });
+
+      if (!response) {
+        throw new Error("구매확정 sync 응답을 받지 못했습니다.");
+      }
+
+      const hasWarning =
+        Boolean(response.message) || response.warningPhases.includes("purchase_confirm_refresh");
+      const summaryMessage =
+        response.updatedCount > 0
+          ? `${response.refreshedCount}건을 점검해 ${response.updatedCount}건을 구매확정으로 반영했습니다.`
+          : `${response.refreshedCount}건을 점검했고 새로 반영된 구매확정은 없습니다.`;
+      const details = [
+        response.message,
+        hasWarning && !response.message
+          ? "일부 후보는 매칭되지 않거나 안전 상한에 걸려 건너뛰었을 수 있습니다."
+          : null,
+      ].filter((value): value is string => Boolean(value));
+
+      setFeedback({
+        type: hasWarning ? "warning" : "success",
+        title: response.updatedCount > 0 ? "구매확정 sync 완료" : "구매확정 점검 완료",
+        message: response.message ? `${summaryMessage} ${response.message}` : summaryMessage,
+        details,
+      });
+      finishLocalOperation(localToastId, {
+        status: hasWarning ? "warning" : "success",
+        summary:
+          response.updatedCount > 0
+            ? `구매확정 ${response.updatedCount}건 반영`
+            : `${response.refreshedCount}건 점검 완료`,
+      });
+      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "구매확정 sync에 실패했습니다.";
+      setFeedback({
+        type: "error",
+        title: "구매확정 sync 실패",
+        message,
+        details: [],
+      });
+      finishLocalOperation(localToastId, {
+        status: "error",
+        errorMessage: message,
+      });
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -3622,8 +3707,8 @@ export default function CoupangShipmentsPage() {
     [columnConfigs],
   );
   const editableColumnIds = useMemo(
-    () => getEditableColumnIds(columnConfigs, worksheetMode),
-    [columnConfigs, worksheetMode],
+    () => getEditableColumnIds(columnConfigs, effectiveWorksheetMode),
+    [columnConfigs, effectiveWorksheetMode],
   );
 
   const columns = useMemo(
@@ -3631,9 +3716,20 @@ export default function CoupangShipmentsPage() {
       buildShipmentGridColumns({
         columnConfigs,
         columnWidths,
-        worksheetMode,
+        worksheetMode: effectiveWorksheetMode,
       }),
-    [columnConfigs, columnWidths, worksheetMode],
+    [columnConfigs, columnWidths, effectiveWorksheetMode],
+  );
+  const gridColumns = useMemo(
+    () =>
+      isConfirmedTab
+        ? columns.map((column) => ({
+            ...column,
+            editable: false,
+            renderEditCell: undefined,
+          }))
+        : columns,
+    [columns, isConfirmedTab],
   );
 
   function handlePageSelectedRowsChange(nextSelectedRows: ReadonlySet<string>) {
@@ -3656,8 +3752,12 @@ export default function CoupangShipmentsPage() {
     sourceRow: CoupangShipmentWorksheetRow;
     targetRow: CoupangShipmentWorksheetRow;
   }) {
+    if (isConfirmedTab) {
+      return event.targetRow;
+    }
+
     const config = columnConfigById.get(event.columnKey);
-    if (!config || !isGridEditableSource(config.source, worksheetMode)) {
+    if (!config || !isGridEditableSource(config.source, effectiveWorksheetMode)) {
       return event.targetRow;
     }
 
@@ -4621,10 +4721,14 @@ export default function CoupangShipmentsPage() {
     nextVisibleRows: CoupangShipmentWorksheetRow[],
     data: RowsChangeData<CoupangShipmentWorksheetRow>,
   ) {
+    if (isConfirmedTab) {
+      return;
+    }
+
     const columnId = String(data.column.key);
     const config = columnConfigById.get(columnId);
     const source = config?.source;
-    if (!config || !source || !isGridEditableSource(source, worksheetMode)) {
+    if (!config || !source || !isGridEditableSource(source, effectiveWorksheetMode)) {
       return;
     }
 
@@ -4650,6 +4754,10 @@ export default function CoupangShipmentsPage() {
   }
 
   async function handleGridPaste(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (isConfirmedTab) {
+      return;
+    }
+
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, [contenteditable='true']")) {
       return;
@@ -4720,7 +4828,7 @@ export default function CoupangShipmentsPage() {
     }
 
     const sanitizedMatrix =
-      worksheetMode === "invoice"
+      effectiveWorksheetMode === "invoice"
         ? stripWorksheetPasteHeaderRow(matrix, startColumnIndex, editableColumnIds, columnConfigById)
         : matrix;
     if (!sanitizedMatrix.length) {
@@ -4742,7 +4850,7 @@ export default function CoupangShipmentsPage() {
       for (let columnOffset = 0; columnOffset < cells.length; columnOffset += 1) {
         const targetColumnId = editableColumnIds[startColumnIndex + columnOffset];
         const config = targetColumnId ? columnConfigById.get(targetColumnId) : undefined;
-        if (!config || !isGridEditableSource(config.source, worksheetMode)) {
+        if (!config || !isGridEditableSource(config.source, effectiveWorksheetMode)) {
           continue;
         }
 
@@ -4781,7 +4889,7 @@ export default function CoupangShipmentsPage() {
     }
 
     const config = columnConfigById.get(columnKey);
-    if (config && isGridEditableSource(config.source, worksheetMode)) {
+    if (!isConfirmedTab && config && isGridEditableSource(config.source, effectiveWorksheetMode)) {
       return;
     }
 
@@ -4803,6 +4911,7 @@ export default function CoupangShipmentsPage() {
       activeSheetSource={activeSheet?.source ?? null}
       busyAction={busyAction}
       collectActionDisabled={collectActionDisabled}
+      purchaseConfirmActionDisabled={purchaseConfirmActionDisabled}
       prepareActionDisabled={prepareActionDisabled}
       transmitActionDisabled={transmitActionDisabled}
       openInvoiceInputDisabled={openInvoiceInputDisabled}
@@ -4832,6 +4941,7 @@ export default function CoupangShipmentsPage() {
       }}
       onChangeTab={changeWorkspaceTab}
       onQuickCollect={() => void collectWorksheet("new_only")}
+      onSyncPurchaseConfirmed={() => void executePurchaseConfirmedSync()}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
       onTransmit={() => void executeInvoiceInputMode()}
       onOpenInvoiceInput={openInvoiceInputDialog}
@@ -4980,7 +5090,8 @@ export default function CoupangShipmentsPage() {
       worksheet={{
         invoiceModeNotice,
         detailGuideNotice,
-        worksheetMode,
+        readOnly: isConfirmedTab,
+        worksheetMode: effectiveWorksheetMode,
         activeColumnPreset,
         isLoading: worksheetQuery.isLoading && !activeSheet,
         hasSheetRows: Boolean(activeSheet?.totalRowCount ?? 0),
@@ -4991,14 +5102,17 @@ export default function CoupangShipmentsPage() {
         worksheetTotalPages,
         worksheetPageSize,
         pageSizeOptions: SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
-        columns,
+        columns: gridColumns,
         rows: visibleRows,
-        selectedRows: pageSelectedRowIds,
+        selectedRows: isConfirmedTab ? new Set<string>() : pageSelectedRowIds,
         sortColumns,
         dirtySourceKeys: dirtySet,
-        onWorksheetModeChange: setWorksheetMode,
+        onWorksheetModeChange: isConfirmedTab ? () => undefined : setWorksheetMode,
         onApplyColumnPreset: applyColumnPreset,
-        onOpenSettings: () => changeWorkspaceTab("settings"),
+        onOpenSettings: () => {
+          setSettingsReturnTab(activeTab === "settings" ? "worksheet" : activeTab);
+          changeWorkspaceTab("settings");
+        },
         onPageSizeChange: (pageSize) => {
           setWorksheetPageSize(pageSize);
           setWorksheetPage(1);
@@ -5007,8 +5121,8 @@ export default function CoupangShipmentsPage() {
         onNextPage: () => setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1)),
         onPasteCapture: handleGridPaste,
         onSortColumnsChange: (nextSortColumns) => setSortColumns(nextSortColumns.slice(-1)),
-        onSelectedRowsChange: handlePageSelectedRowsChange,
-        onRowsChange: handleVisibleRowsChange,
+        onSelectedRowsChange: isConfirmedTab ? () => undefined : handlePageSelectedRowsChange,
+        onRowsChange: isConfirmedTab ? () => undefined : handleVisibleRowsChange,
         onFill: handleGridFill,
         onCellClick: handleGridCellClick,
         onSelectedCellChange: (args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>
@@ -5061,7 +5175,7 @@ export default function CoupangShipmentsPage() {
         notExportedCount: activeSheet?.outputCounts.notExported ?? 0,
         activeColumnPreset,
         shipmentColumnSourceOptions,
-        onBack: () => changeWorkspaceTab("worksheet"),
+        onBack: () => changeWorkspaceTab(settingsReturnTab),
         onAdd: addColumnConfig,
         onApplyColumnPreset: applyColumnPreset,
         onReset: resetColumnConfigs,
