@@ -1,6 +1,9 @@
 import {
+  createBuiltinShipmentColumnSource,
   createShipmentColumnConfig,
   DEFAULT_SHIPMENT_COLUMN_ORDER,
+  getShipmentColumnSourceStorageKey,
+  isBuiltinShipmentColumnSource,
   SHIPMENT_COLUMN_DEFAULT_WIDTHS,
 } from "./worksheet-config";
 import type { ShipmentColumnConfig, ShipmentColumnSourceKey } from "./types";
@@ -32,8 +35,14 @@ export const SHIPMENT_COLUMN_PRESETS: readonly ShipmentColumnPresetDefinition[] 
   {
     key: "invoice_input",
     label: "송장 입력 보기",
-    description: "셀픽주문번호, 수령자, 택배사, 송장번호 중심으로 송장 작업에 맞춥니다.",
-    sourceKeys: ["selpickOrderNumber", "productName", "receiverName", "deliveryCompanyCode", "invoiceNumber"],
+    description: "셀픽주문번호, 수령인, 택배사, 송장번호 중심으로 송장 작업에 맞춥니다.",
+    sourceKeys: [
+      "selpickOrderNumber",
+      "productName",
+      "receiverName",
+      "deliveryCompanyCode",
+      "invoiceNumber",
+    ],
     widthOverrides: {
       selpickOrderNumber: 138,
       productName: 176,
@@ -44,7 +53,7 @@ export const SHIPMENT_COLUMN_PRESETS: readonly ShipmentColumnPresetDefinition[] 
   },
   {
     key: "full",
-    label: "전체 열 보기",
+    label: "전체 보기",
     description: "기본 전체 컬럼 구성을 그대로 사용합니다.",
     sourceKeys: [...DEFAULT_SHIPMENT_COLUMN_ORDER],
   },
@@ -66,22 +75,30 @@ export function buildShipmentColumnPresetWidths(
   const preset = getShipmentColumnPresetDefinition(key);
 
   return Object.fromEntries(
-    configs.map((config) => [
-      config.id,
-      preset.widthOverrides?.[config.sourceKey] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey],
-    ]),
+    configs.map((config) => {
+      const builtinKey =
+        isBuiltinShipmentColumnSource(config.source) ? config.source.key : "blank";
+
+      return [
+        config.id,
+        preset.widthOverrides?.[builtinKey] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[builtinKey],
+      ];
+    }),
   );
 }
 
 export function detectShipmentColumnPresetKey(
   configs: readonly ShipmentColumnConfig[],
 ): ShipmentColumnPresetKey | "custom" {
-  const sourceKeys = configs.map((config) => config.sourceKey);
+  const storageKeys = configs.map((config) => getShipmentColumnSourceStorageKey(config.source));
 
   for (const preset of SHIPMENT_COLUMN_PRESETS) {
+    const presetStorageKeys = preset.sourceKeys.map((sourceKey) =>
+      getShipmentColumnSourceStorageKey(createBuiltinShipmentColumnSource(sourceKey)),
+    );
     if (
-      preset.sourceKeys.length === sourceKeys.length &&
-      preset.sourceKeys.every((sourceKey, index) => sourceKeys[index] === sourceKey)
+      presetStorageKeys.length === storageKeys.length &&
+      presetStorageKeys.every((sourceKey, index) => storageKeys[index] === sourceKey)
     ) {
       return preset.key;
     }

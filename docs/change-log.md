@@ -2,6 +2,45 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 쿠팡 배송 시트 rawFields 평탄화 맵 기반 전환
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/services/coupang/shipment-worksheet-raw-fields.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/worksheet-grid-config.tsx`
+  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-presets.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `client/src/features/coupang/shipments/worksheet-config.test.ts`
+  - `client/src/features/coupang/shipments/shipment-column-presets.test.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 배송 시트 row는 이제 `row_data_json.rawFields` 안에 `worksheet.*`, `order.*`, `detail.*`, `detailItem.*`, `product.*`, `productItem.*` scalar 평탄화 맵을 함께 저장합니다.
+  - collect / refresh / archive restore는 같은 raw field builder 또는 synthetic backfill 경로를 써서, active worksheet와 archive가 같은 source resolver를 공유합니다.
+  - `ShipmentColumnConfig`는 `sourceKey` 단일 문자열에서 `builtin/raw` union source 구조로 전환됐고, 기존 저장된 컬럼 설정은 로드 시 자동 마이그레이션됩니다.
+  - 컬럼 설정은 builtin field와 Coupang raw field를 함께 보여주며, 메인 그리드 / 정렬 / 엑셀 다운로드 / 미리보기 / 빠른 수집 집중 보기 응답도 `rawFieldCatalog`를 사용해 같은 선택지를 유지합니다.
+  - `optionName`, `productName`, `coupangDisplayProductName`, `deliveryCompanyCode`, `invoiceNumber`, `isOverseas`는 raw field precedence를 기준으로 다시 파생됩니다.
+- 이유:
+  - 기존 구조는 “어떤 값을 어떤 컬럼에 넣을지”가 정규화 row에만 묶여 있어서, 쿠팡 원본 컬럼을 그대로 고르거나 옵션값 누락 케이스를 사후 복구하기가 어려웠습니다.
+  - raw scalar map을 같이 유지하면, 컬럼 설정과 후속 파생 규칙을 같은 source 모델에서 재해석할 수 있고 archive도 동일한 UI를 공유할 수 있습니다.
+- 남은 점:
+  - archive의 synthetic rawFields는 live worksheet보다 원본 응답 복원도가 낮습니다.
+  - 대형 nested payload 전체를 저장하는 구조는 아니므로, 이미지/HTML/contents/notices 계열은 여전히 rawFields 대상에서 제외됩니다.
+- 검증:
+  - `npm run check`
+  - `npx vitest run --root . client/src/features/coupang/shipments/worksheet-config.test.ts client/src/features/coupang/shipments/shipment-column-presets.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts server/services/coupang/shipment-worksheet-view.test.ts`
+
 ## 2026-04-19 / 쿠팡 출고 컬럼 설정에 source key 기준 다운로드 매핑 추가
 
 - 변경 유형:

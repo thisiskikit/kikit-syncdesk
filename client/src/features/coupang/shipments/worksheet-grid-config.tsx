@@ -1,10 +1,10 @@
 import { SelectColumn, type Column, type RenderEditCellProps } from "react-data-grid";
 import { stripMatchingHeaderRow } from "@/lib/spreadsheet-grid";
 import {
-  SHIPMENT_COLUMN_DEFAULT_WIDTHS,
-  isEditableSourceKey,
-  isGridEditableSourceKey,
-  isInvoiceInputSourceKey,
+  isEditableSource,
+  isGridEditableSource,
+  isInvoiceInputSource,
+  resolveShipmentColumnDefaultWidth,
 } from "./worksheet-config";
 import {
   renderFulfillmentDecisionReasonCell,
@@ -29,8 +29,8 @@ export function getEditableColumnIds(
   return columnConfigs
     .filter((config) =>
       worksheetMode === "invoice"
-        ? isInvoiceInputSourceKey(config.sourceKey)
-        : isEditableSourceKey(config.sourceKey),
+        ? isInvoiceInputSource(config.source)
+        : isEditableSource(config.source),
     )
     .map((config) => config.id);
 }
@@ -140,26 +140,26 @@ export function buildShipmentGridColumns(input: {
     ...columnConfigs.map((config) => ({
       key: config.id,
       name: config.label,
-      width: columnWidths[config.id] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey],
-      minWidth: Math.min(SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey], 100),
-      editable: isGridEditableSourceKey(config.sourceKey, worksheetMode),
+      width: columnWidths[config.id] ?? resolveShipmentColumnDefaultWidth(config.source),
+      minWidth: Math.min(resolveShipmentColumnDefaultWidth(config.source), 100),
+      editable: isGridEditableSource(config.source, worksheetMode),
       cellClass:
-        worksheetMode === "invoice" && isInvoiceInputSourceKey(config.sourceKey)
+        worksheetMode === "invoice" && isInvoiceInputSource(config.source)
           ? "shipment-invoice-input-cell"
           : undefined,
       headerCellClass:
-        worksheetMode === "invoice" && isInvoiceInputSourceKey(config.sourceKey)
+        worksheetMode === "invoice" && isInvoiceInputSource(config.source)
           ? "shipment-invoice-input-header"
           : undefined,
-      renderEditCell: isGridEditableSourceKey(config.sourceKey, worksheetMode)
+      renderEditCell: isGridEditableSource(config.source, worksheetMode)
         ? (props: RenderEditCellProps<CoupangShipmentWorksheetRow>) =>
-            renderShipmentEditCell(props, config.sourceKey as EditableColumnKey)
+            renderShipmentEditCell(props, config.source.key as EditableColumnKey)
         : undefined,
       resizable: true,
-      sortable: config.sourceKey !== "blank",
+      sortable: config.source.kind !== "builtin" || config.source.key !== "blank",
       draggable: true,
       renderCell: ({ row }: { row: CoupangShipmentWorksheetRow }) =>
-        renderShipmentColumnValue(row, config.sourceKey),
+        renderShipmentColumnValue(row, config.source),
     })),
   ];
 }

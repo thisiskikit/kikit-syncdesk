@@ -1,6 +1,7 @@
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 
-import type { ShipmentColumnSourceKey } from "./types";
+import { isBuiltinShipmentColumnSource } from "./worksheet-config";
+import type { ShipmentColumnSource } from "./types";
 
 const PREVIEW_CURRENCY_FORMATTER = new Intl.NumberFormat("ko-KR", {
   style: "currency",
@@ -17,13 +18,24 @@ function normalizePreviewText(value: string | null | undefined) {
 
 export function formatShipmentColumnPreviewValue(
   row: CoupangShipmentWorksheetRow | null,
-  sourceKey: ShipmentColumnSourceKey,
+  source: ShipmentColumnSource,
 ) {
   if (!row) {
     return "미리보기 없음";
   }
 
-  switch (sourceKey) {
+  if (!isBuiltinShipmentColumnSource(source)) {
+    const rawValue = row.rawFields?.[source.key];
+    if (typeof rawValue === "number") {
+      return PREVIEW_NUMBER_FORMATTER.format(rawValue);
+    }
+    if (typeof rawValue === "boolean") {
+      return rawValue ? "true" : "false";
+    }
+    return normalizePreviewText(rawValue ?? null) ?? "값 없음";
+  }
+
+  switch (source.key) {
     case "blank":
       return "(빈 칸)";
     case "quantity": {
@@ -45,6 +57,6 @@ export function formatShipmentColumnPreviewValue(
         : "값 없음";
     }
     default:
-      return normalizePreviewText(row[sourceKey] as string | null | undefined) ?? "값 없음";
+      return normalizePreviewText(row[source.key] as string | null | undefined) ?? "값 없음";
   }
 }

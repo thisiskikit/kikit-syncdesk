@@ -299,8 +299,8 @@ function matchesOutputStatusCard(
 }
 
 function compareSortValues(
-  left: string | number | null | undefined,
-  right: string | number | null | undefined,
+  left: string | number | boolean | null | undefined,
+  right: string | number | boolean | null | undefined,
 ) {
   if (left === right) {
     return 0;
@@ -314,16 +314,33 @@ function compareSortValues(
   if (typeof left === "number" && typeof right === "number") {
     return left - right;
   }
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
+  }
   return String(left).localeCompare(String(right), "ko-KR", {
     numeric: true,
     sensitivity: "base",
   });
 }
 
+function extractRawSortFieldKey(sortField: CoupangShipmentWorksheetSortField | null) {
+  if (!sortField || !sortField.startsWith("raw:")) {
+    return null;
+  }
+
+  const rawKey = sortField.slice(4).trim();
+  return rawKey || null;
+}
+
 function getSortValue(
   row: CoupangShipmentWorksheetRow,
   sortField: CoupangShipmentWorksheetSortField | null,
 ) {
+  const rawSortFieldKey = extractRawSortFieldKey(sortField);
+  if (rawSortFieldKey) {
+    return row.rawFields?.[rawSortFieldKey] ?? null;
+  }
+
   switch (sortField) {
     case "__exportStatus":
       return row.exportedAt ? 1 : 0;
@@ -340,7 +357,9 @@ function getSortValue(
     case "orderDateText":
       return row.orderDateKey;
     default:
-      return sortField ? row[sortField] : null;
+      return sortField
+        ? (row[sortField as Exclude<typeof sortField, `raw:${string}`>] ?? null)
+        : null;
   }
 }
 
@@ -374,6 +393,9 @@ export function matchesShipmentWorksheetQuery(row: CoupangShipmentWorksheetRow, 
     row.sellerProductCode,
     row.orderId,
     row.shipmentBoxId,
+    ...Object.values(row.rawFields ?? {}).map((value) =>
+      value === null || value === undefined ? "" : String(value),
+    ),
   ]
     .filter(Boolean)
     .join(" ")

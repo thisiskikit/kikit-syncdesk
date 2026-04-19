@@ -1,42 +1,67 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createBuiltinShipmentColumnSource,
+  createRawShipmentColumnSource,
   formatShipmentColumnSourceOptionLabel,
   resolveShipmentColumnLabelForSourceChange,
+  resolveShipmentColumnSourceLabel,
 } from "./worksheet-config";
 
 describe("worksheet-config column source helpers", () => {
-  it("formats source options with the raw key and Korean label", () => {
-    expect(formatShipmentColumnSourceOptionLabel("productName")).toBe("productName · 상품명");
-    expect(formatShipmentColumnSourceOptionLabel("invoiceNumber")).toBe("invoiceNumber · 송장번호");
+  it("formats builtin source options with the key and resolved label", () => {
+    const source = createBuiltinShipmentColumnSource("productName");
+
+    expect(formatShipmentColumnSourceOptionLabel(source)).toBe(
+      `productName · ${resolveShipmentColumnSourceLabel(source)}`,
+    );
+  });
+
+  it("formats raw source options with the namespace key and catalog label", () => {
+    const source = createRawShipmentColumnSource("productItem.itemName");
+    const rawFieldCatalog = [
+      {
+        key: "productItem.itemName",
+        label: "상품 옵션명",
+        group: "상품 옵션",
+        sampleValueType: "string" as const,
+      },
+    ];
+
+    expect(formatShipmentColumnSourceOptionLabel(source, rawFieldCatalog)).toBe(
+      "productItem.itemName · 상품 옵션명",
+    );
   });
 
   it("keeps raw-key headers in sync when the source column changes", () => {
     expect(
       resolveShipmentColumnLabelForSourceChange({
         currentLabel: "productName",
-        previousSourceKey: "productName",
-        nextSourceKey: "invoiceNumber",
+        previousSource: createBuiltinShipmentColumnSource("productName"),
+        nextSource: createBuiltinShipmentColumnSource("invoiceNumber"),
       }),
     ).toBe("invoiceNumber");
   });
 
-  it("keeps Korean default headers in sync when the source column changes", () => {
+  it("keeps default labels in sync when the source column changes", () => {
+    const previousSource = createBuiltinShipmentColumnSource("productName");
+    const nextSource = createBuiltinShipmentColumnSource("invoiceNumber");
+
     expect(
       resolveShipmentColumnLabelForSourceChange({
-        currentLabel: "상품명",
-        previousSourceKey: "productName",
-        nextSourceKey: "invoiceNumber",
+        currentLabel: resolveShipmentColumnSourceLabel(previousSource),
+        previousSource,
+        nextSource,
       }),
-    ).toBe("송장번호");
+    ).toBe(resolveShipmentColumnSourceLabel(nextSource));
   });
 
   it("preserves custom headers when the source column changes", () => {
     expect(
       resolveShipmentColumnLabelForSourceChange({
         currentLabel: "출고용 상품명",
-        previousSourceKey: "productName",
-        nextSourceKey: "invoiceNumber",
+        previousSource: createBuiltinShipmentColumnSource("productName"),
+        nextSource: createBuiltinShipmentColumnSource("invoiceNumber"),
       }),
     ).toBe("출고용 상품명");
   });

@@ -137,7 +137,10 @@ describe("work-data coupang shipment worksheet row persistence", () => {
 
     const restored = restoreWorksheetRowFromDatabaseRow(buildDatabaseRow(row, compact));
 
-    expect(restored).toEqual(row);
+    expect(restored).toMatchObject(row);
+    expect(restored.rawFields).toBeTruthy();
+    expect(restored.rawFields?.["worksheet.sourceKey"]).toBe("source-1");
+    expect(restored.rawFields?.["productItem.itemName"]).toBe("옵션 A");
   });
 
   it("splits worksheet rows into fixed-size write chunks", () => {

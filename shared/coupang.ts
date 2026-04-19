@@ -998,6 +998,26 @@ export interface CoupangOrderDetailResponse {
   source: CoupangDataSource;
 }
 
+export type CoupangShipmentWorksheetRawFieldValue = string | number | boolean | null;
+
+export type CoupangShipmentWorksheetRawFields = Record<
+  string,
+  CoupangShipmentWorksheetRawFieldValue
+>;
+
+export type CoupangShipmentWorksheetRawFieldValueType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "null";
+
+export interface CoupangShipmentWorksheetRawFieldCatalogItem {
+  key: string;
+  label: string;
+  group: string;
+  sampleValueType: CoupangShipmentWorksheetRawFieldValueType;
+}
+
 export interface CoupangShipmentWorksheetRow {
   id: string;
   sourceKey: string;
@@ -1056,6 +1076,7 @@ export interface CoupangShipmentWorksheetRow {
   invoiceAppliedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  rawFields?: CoupangShipmentWorksheetRawFields;
 }
 
 export type CoupangShipmentInvoiceTransmissionStatus = "pending" | "succeeded" | "failed";
@@ -1167,6 +1188,7 @@ export interface CoupangShipmentWorksheetSyncSummary {
 export interface CoupangShipmentWorksheetResponse {
   store: CoupangStoreRef;
   items: CoupangShipmentWorksheetRow[];
+  rawFieldCatalog: CoupangShipmentWorksheetRawFieldCatalogItem[];
   fetchedAt: string;
   collectedAt: string | null;
   message: string | null;
@@ -1231,11 +1253,24 @@ export type CoupangShipmentWorksheetColumnSourceKey =
   | "productOptionNumber"
   | "sellerProductCode";
 
+export type CoupangShipmentWorksheetColumnSource =
+  | {
+      kind: "builtin";
+      key: CoupangShipmentWorksheetColumnSourceKey;
+    }
+  | {
+      kind: "raw";
+      key: string;
+    };
+
+export type CoupangShipmentWorksheetRawSortField = `raw:${string}`;
+
 export type CoupangShipmentWorksheetSortField =
   | "__exportStatus"
   | "__orderStatus"
   | "__invoiceTransmissionStatus"
-  | Exclude<CoupangShipmentWorksheetColumnSourceKey, "blank">;
+  | Exclude<CoupangShipmentWorksheetColumnSourceKey, "blank">
+  | CoupangShipmentWorksheetRawSortField;
 
 export type CoupangShipmentWorksheetSortDirection = "asc" | "desc";
 
@@ -1255,6 +1290,7 @@ export interface CoupangShipmentWorksheetViewQuery {
 export interface CoupangShipmentWorksheetViewResponse {
   store: CoupangStoreRef;
   items: CoupangShipmentWorksheetRow[];
+  rawFieldCatalog: CoupangShipmentWorksheetRawFieldCatalogItem[];
   fetchedAt: string;
   collectedAt: string | null;
   message: string | null;
@@ -1288,6 +1324,7 @@ export interface CoupangShipmentArchiveViewQuery {
 export interface CoupangShipmentArchiveViewResponse {
   store: CoupangStoreRef;
   items: CoupangShipmentArchiveRow[];
+  rawFieldCatalog: CoupangShipmentWorksheetRawFieldCatalogItem[];
   fetchedAt: string;
   message: string | null;
   page: number;

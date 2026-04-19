@@ -103,6 +103,17 @@ import {
   validateInvoiceRow,
 } from "./shipment-actions";
 import {
+  buildShipmentColumnSourceOptions,
+  createDefaultShipmentColumnConfigs,
+  createDefaultFilters,
+  createShipmentColumnConfig,
+  isGridEditableSource,
+  moveColumnConfigs,
+  normalizeFiltersToSeoulToday,
+  normalizeShipmentColumnConfigs,
+  resolveShipmentColumnDefaultWidth,
+  serializeShipmentWorksheetSortField,
+  SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
   summarizeWorksheetMessage,
   summarizeWorksheetSync,
 } from "./worksheet-config";
@@ -176,6 +187,7 @@ import type {
   SelectedCellState,
   ShipmentActivityItem,
   ShipmentColumnConfig,
+  ShipmentColumnSource,
   ShipmentColumnSourceKey,
   ShipmentExcelExportScope,
   ShipmentExcelSortKey,
@@ -183,7 +195,6 @@ import type {
 } from "./types";
 
 type InvoiceTransmissionMode = "upload" | "update";
-const SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
 type QuickFilterCardOption<TValue extends string> = {
   value: TValue;
@@ -368,39 +379,6 @@ function defaultSeoulDate(offsetDays: number) {
   return `${nextYear}-${nextMonth}-${nextDay}`;
 }
 
-function createDefaultFilters(): FilterState {
-  return {
-    selectedStoreId: "",
-    createdAtFrom: defaultSeoulDate(-3),
-    createdAtTo: defaultSeoulDate(0),
-    query: "",
-    maxPerPage: 20,
-    scope: "dispatch_active",
-    decisionStatus: "all",
-    invoiceStatusCard: "all",
-    orderStatusCard: "all",
-    outputStatusCard: "all",
-  };
-}
-
-function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
-  const fallbackFrom = defaultSeoulDate(-3);
-  const fallbackTo = defaultSeoulDate(0);
-  const normalizedFrom = current.createdAtFrom.trim() || fallbackFrom;
-  const normalizedTo = current.createdAtTo.trim() || fallbackTo;
-
-  return {
-    ...current,
-    createdAtFrom: normalizedFrom,
-    createdAtTo: normalizedTo,
-    scope: current.scope ?? "dispatch_active",
-    decisionStatus: current.decisionStatus ?? "all",
-    invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
-    orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
-    outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
-  };
-}
-
 function areFiltersEqual(left: FilterState, right: FilterState) {
   return (
     left.selectedStoreId === right.selectedStoreId &&
@@ -498,56 +476,93 @@ function makeColumnId() {
   return `shipment-column-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function createShipmentColumnConfig(sourceKey: ShipmentColumnSourceKey): ShipmentColumnConfig {
+function createBuiltinShipmentColumnSource(
+  key: ShipmentColumnSourceKey,
+): Extract<ShipmentColumnSource, { kind: "builtin" }> {
   return {
-    id: makeColumnId(),
-    sourceKey,
-    label: SHIPMENT_COLUMN_LABELS[sourceKey],
+    kind: "builtin",
+    key,
   };
 }
 
-function createDefaultShipmentColumnConfigs() {
-  return DEFAULT_SHIPMENT_COLUMN_ORDER.map((sourceKey) => createShipmentColumnConfig(sourceKey));
+function createShipmentColumnConfigLocal(
+  source: ShipmentColumnSource | ShipmentColumnSourceKey,
+): ShipmentColumnConfig {
+  const normalizedSource =
+    typeof source === "string" ? createBuiltinShipmentColumnSource(source) : source;
+  return {
+    id: makeColumnId(),
+    source: normalizedSource,
+    label:
+      normalizedSource.kind === "builtin"
+        ? SHIPMENT_COLUMN_LABELS[normalizedSource.key]
+        : normalizedSource.key,
+  };
 }
 
 function isShipmentColumnSourceKey(value: unknown): value is ShipmentColumnSourceKey {
   return typeof value === "string" && value in SHIPMENT_COLUMN_LABELS;
 }
 
-function normalizeShipmentColumnConfigs(value: ShipmentColumnConfig[]) {
-  const items = Array.isArray(value)
-    ? value
-        .filter(
-          (item): item is ShipmentColumnConfig =>
-            Boolean(item) && isShipmentColumnSourceKey(item.sourceKey),
-        )
-        .map((item) => ({
-          id: item.id || makeColumnId(),
-          sourceKey: item.sourceKey,
-          label: item.label?.trim() || SHIPMENT_COLUMN_LABELS[item.sourceKey],
-        }))
-    : [];
-
-  return items.length ? items : createDefaultShipmentColumnConfigs();
-}
-
-function moveColumnConfigs(
-  configs: ShipmentColumnConfig[],
-  sourceId: string,
-  targetId: string,
-) {
-  const sourceIndex = configs.findIndex((config) => config.id === sourceId);
-  const targetIndex = configs.findIndex((config) => config.id === targetId);
-
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
-    return configs;
+function normalizeShipmentColumnSource(value: unknown): ShipmentColumnSource | null {
+  if (isShipmentColumnSourceKey(value)) {
+    return createBuiltinShipmentColumnSource(value);
   }
 
-  const next = configs.slice();
-  const [moved] = next.splice(sourceIndex, 1);
-  const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-  next.splice(adjustedTargetIndex, 0, moved);
-  return next;
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const source = value as Partial<ShipmentColumnSource>;
+  if (source.kind === "builtin" && isShipmentColumnSourceKey(source.key)) {
+    return createBuiltinShipmentColumnSource(source.key);
+  }
+
+  if (source.kind === "raw" && typeof source.key === "string" && source.key.trim()) {
+    return {
+      kind: "raw",
+      key: source.key.trim(),
+    };
+  }
+
+  return null;
+}
+
+function normalizeShipmentColumnConfigsLocal(value: ShipmentColumnConfig[]) {
+  const items = Array.isArray(value)
+    ? value
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+
+          const candidate = item as Partial<ShipmentColumnConfig> & {
+            sourceKey?: unknown;
+          };
+          const source =
+            normalizeShipmentColumnSource(candidate.source) ??
+            normalizeShipmentColumnSource(candidate.sourceKey);
+          if (!source) {
+            return null;
+          }
+
+          return {
+            id: typeof candidate.id === "string" && candidate.id.trim() ? candidate.id : makeColumnId(),
+            source,
+            label:
+              typeof candidate.label === "string" && candidate.label.trim()
+                ? candidate.label.trim()
+                : source.kind === "builtin"
+                  ? SHIPMENT_COLUMN_LABELS[source.key]
+                  : source.key,
+          } satisfies ShipmentColumnConfig;
+        })
+        .filter((item): item is ShipmentColumnConfig => Boolean(item))
+    : [];
+
+  return items.length
+    ? items
+    : DEFAULT_SHIPMENT_COLUMN_ORDER.map((sourceKey) => createShipmentColumnConfigLocal(sourceKey));
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -698,8 +713,8 @@ function formatExportText(value: string | null | undefined) {
 }
 
 function compareShipmentSortValues(
-  left: string | number | null | undefined,
-  right: string | number | null | undefined,
+  left: string | number | boolean | null | undefined,
+  right: string | number | boolean | null | undefined,
 ) {
   if (left === right) {
     return 0;
@@ -715,6 +730,10 @@ function compareShipmentSortValues(
 
   if (typeof left === "number" && typeof right === "number") {
     return left - right;
+  }
+
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
   }
 
   return String(left).localeCompare(String(right), "ko-KR", {
@@ -753,7 +772,11 @@ function getShipmentSortValue(
     return null;
   }
 
-  switch (config.sourceKey) {
+  if (config.source.kind === "raw") {
+    return row.rawFields?.[config.source.key] ?? null;
+  }
+
+  switch (config.source.key) {
     case "blank":
       return null;
     case "quantity":
@@ -765,7 +788,7 @@ function getShipmentSortValue(
     case "orderDateText":
       return row.orderDateKey;
     default:
-      return row[config.sourceKey] as string | null | undefined;
+      return row[config.source.key] as string | number | boolean | null | undefined;
   }
 }
 
@@ -1038,11 +1061,7 @@ function resolveShipmentSortField(
   }
 
   const config = columnConfigs.find((item) => item.id === columnKey);
-  if (!config || config.sourceKey === "blank") {
-    return null;
-  }
-
-  return config.sourceKey as Exclude<CoupangShipmentWorksheetColumnSourceKey, "blank">;
+  return config ? serializeShipmentWorksheetSortField(config.source) : null;
 }
 
 function hasShipmentClaimIssue(
@@ -1308,9 +1327,20 @@ function renderShipmentEditCell(
 
 function renderShipmentColumnValue(
   row: CoupangShipmentWorksheetRow,
-  sourceKey: ShipmentColumnSourceKey,
+  source: ShipmentColumnSource,
 ): ReactNode {
-  switch (sourceKey) {
+  if (source.kind === "raw") {
+    const rawValue = row.rawFields?.[source.key];
+    if (typeof rawValue === "number") {
+      return formatNumber(rawValue);
+    }
+    if (typeof rawValue === "boolean") {
+      return renderTextCell(rawValue ? "true" : "false");
+    }
+    return renderTextCell(rawValue ?? null);
+  }
+
+  switch (source.key) {
     case "blank":
       return renderTextCell(null);
     case "quantity":
@@ -1320,12 +1350,20 @@ function renderShipmentColumnValue(
     case "shippingFee":
       return formatCurrency(row.shippingFee);
     default:
-      return renderTextCell(row[sourceKey] as string | null | undefined);
+      return renderTextCell(row[source.key] as string | null | undefined);
   }
 }
 
-function getShipmentExportValue(row: CoupangShipmentWorksheetRow, sourceKey: ShipmentColumnSourceKey) {
-  switch (sourceKey) {
+function getShipmentExportValue(row: CoupangShipmentWorksheetRow, source: ShipmentColumnSource) {
+  if (source.kind === "raw") {
+    const rawValue = row.rawFields?.[source.key];
+    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+      return String(rawValue);
+    }
+    return formatExportText(rawValue ?? null);
+  }
+
+  switch (source.key) {
     case "blank":
       return "";
     case "quantity":
@@ -1335,7 +1373,7 @@ function getShipmentExportValue(row: CoupangShipmentWorksheetRow, sourceKey: Shi
     case "shippingFee":
       return formatExportCurrency(row.shippingFee);
     default:
-      return formatExportText(row[sourceKey] as string | null | undefined);
+      return formatExportText(row[source.key] as string | null | undefined);
   }
 }
 
@@ -1385,6 +1423,9 @@ function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
     row.coupangDisplayProductName,
     row.productOptionNumber,
     row.sellerProductCode,
+    ...Object.values(row.rawFields ?? {}).map((value) =>
+      value === null || value === undefined ? "" : String(value),
+    ),
   ]
     .filter(Boolean)
     .join(" ")
@@ -1915,6 +1956,16 @@ export default function CoupangShipmentsPage() {
   const quickCollectFocusResult = quickCollectFocusViewState.result;
   const activeSheet = quickCollectFocusViewState.activeSheet;
   const effectiveDraftRows = quickCollectFocusViewState.effectiveDraftRows;
+  const shipmentColumnSourceOptions = useMemo(
+    () =>
+      buildShipmentColumnSourceOptions(
+        activeSheet?.rawFieldCatalog ??
+          worksheetQuery.data?.rawFieldCatalog ??
+          archiveSheet?.rawFieldCatalog ??
+          [],
+      ),
+    [activeSheet?.rawFieldCatalog, archiveSheet?.rawFieldCatalog, worksheetQuery.data?.rawFieldCatalog],
+  );
   const decisionCounts = useMemo(
     () => buildFulfillmentDecisionCounts(effectiveDraftRows),
     [effectiveDraftRows],
@@ -3492,14 +3543,14 @@ export default function CoupangShipmentsPage() {
     targetRow: CoupangShipmentWorksheetRow;
   }) {
     const config = columnConfigById.get(event.columnKey);
-    if (!config || !isGridEditableSourceKey(config.sourceKey, worksheetMode)) {
+    if (!config || !isGridEditableSource(config.source, worksheetMode)) {
       return event.targetRow;
     }
 
     return applyEditableCell(
       event.targetRow,
-      config.sourceKey,
-      event.sourceRow[config.sourceKey as keyof CoupangShipmentWorksheetRow],
+      config.source.key,
+      event.sourceRow[config.source.key as keyof CoupangShipmentWorksheetRow],
     );
   }
 
@@ -3752,7 +3803,7 @@ export default function CoupangShipmentsPage() {
     setColumnConfigs((current) => [...current, nextConfig]);
     setColumnWidths((current) => ({
       ...current,
-      [nextConfig.id]: SHIPMENT_COLUMN_DEFAULT_WIDTHS[sourceKey],
+      [nextConfig.id]: resolveShipmentColumnDefaultWidth(nextConfig.source),
     }));
   }
 
@@ -3787,7 +3838,7 @@ export default function CoupangShipmentsPage() {
     setColumnConfigs(nextConfigs);
     setColumnWidths(
       Object.fromEntries(
-        nextConfigs.map((config) => [config.id, SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey]]),
+        nextConfigs.map((config) => [config.id, resolveShipmentColumnDefaultWidth(config.source)]),
       ),
     );
   }
@@ -3871,7 +3922,7 @@ export default function CoupangShipmentsPage() {
     const sortedRows = sortShipmentRowsForExcelExport(targetRows, sortKey);
     const rows = sortedRows.map((row) =>
       Object.fromEntries(
-        exportColumns.map((config) => [config.label, getShipmentExportValue(row, config.sourceKey)]),
+        exportColumns.map((config) => [config.label, getShipmentExportValue(row, config.source)]),
       ),
     );
     const worksheet = XLSX.utils.json_to_sheet(rows, {
@@ -3881,7 +3932,7 @@ export default function CoupangShipmentsPage() {
     worksheet["!cols"] = exportColumns.map((config) => ({
       wch: Math.max(
         10,
-        Math.round((columnWidths[config.id] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey]) / 8),
+        Math.round((columnWidths[config.id] ?? resolveShipmentColumnDefaultWidth(config.source)) / 8),
       ),
     }));
 
@@ -4458,8 +4509,8 @@ export default function CoupangShipmentsPage() {
   ) {
     const columnId = String(data.column.key);
     const config = columnConfigById.get(columnId);
-    const sourceKey = config?.sourceKey;
-    if (!config || !sourceKey || !isGridEditableSourceKey(sourceKey, worksheetMode)) {
+    const source = config?.source;
+    if (!config || !source || !isGridEditableSource(source, worksheetMode)) {
       return;
     }
 
@@ -4469,8 +4520,8 @@ export default function CoupangShipmentsPage() {
       .map((row) => {
         const nextRow = applyEditableCell(
           row,
-          sourceKey,
-          row[sourceKey as keyof CoupangShipmentWorksheetRow],
+          source.key,
+          row[source.key as keyof CoupangShipmentWorksheetRow],
         );
 
         return nextRow === row ? null : nextRow;
@@ -4577,11 +4628,11 @@ export default function CoupangShipmentsPage() {
       for (let columnOffset = 0; columnOffset < cells.length; columnOffset += 1) {
         const targetColumnId = editableColumnIds[startColumnIndex + columnOffset];
         const config = targetColumnId ? columnConfigById.get(targetColumnId) : undefined;
-        if (!config || !isGridEditableSourceKey(config.sourceKey, worksheetMode)) {
+        if (!config || !isGridEditableSource(config.source, worksheetMode)) {
           continue;
         }
 
-        workingRow = applyEditableCell(workingRow, config.sourceKey, cells[columnOffset]);
+        workingRow = applyEditableCell(workingRow, config.source.key, cells[columnOffset]);
       }
 
       updates.set(workingRow.id, workingRow);
@@ -4616,7 +4667,7 @@ export default function CoupangShipmentsPage() {
     }
 
     const config = columnConfigById.get(columnKey);
-    if (config && isGridEditableSourceKey(config.sourceKey, worksheetMode)) {
+    if (config && isGridEditableSource(config.source, worksheetMode)) {
       return;
     }
 
@@ -4892,9 +4943,7 @@ export default function CoupangShipmentsPage() {
         claimScopeCount: scopeCounts.claims,
         notExportedCount: activeSheet?.outputCounts.notExported ?? 0,
         activeColumnPreset,
-        shipmentColumnLabels: SHIPMENT_COLUMN_LABELS,
-        shipmentColumnDefaultWidths: SHIPMENT_COLUMN_DEFAULT_WIDTHS,
-        shipmentColumnSourceOptions: SHIPMENT_COLUMN_SOURCE_OPTIONS,
+        shipmentColumnSourceOptions,
         onBack: () => changeWorkspaceTab("worksheet"),
         onAdd: addColumnConfig,
         onApplyColumnPreset: applyColumnPreset,

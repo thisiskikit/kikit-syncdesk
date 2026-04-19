@@ -4,11 +4,14 @@ import type { ShipmentColumnPresetKey } from "./shipment-column-presets";
 import { formatShipmentColumnPreviewValue } from "./shipment-column-preview";
 import {
   formatShipmentColumnSourceOptionLabel,
+  getShipmentColumnSourceStorageKey,
+  resolveShipmentColumnDefaultWidth,
   resolveShipmentColumnLabelForSourceChange,
+  resolveShipmentColumnSourceLabel,
 } from "./worksheet-config";
 import type {
   ShipmentColumnConfig,
-  ShipmentColumnSourceKey,
+  ShipmentColumnSourceOption,
   ShipmentExcelExportScope,
 } from "./types";
 
@@ -32,9 +35,7 @@ export interface ShipmentColumnSettingsPanelProps {
   notExportedCount: number;
   activeColumnPreset: ShipmentColumnPresetKey | "custom";
   columnPresetOptions: readonly ShipmentColumnPresetOption[];
-  shipmentColumnLabels: Record<ShipmentColumnSourceKey, string>;
-  shipmentColumnDefaultWidths: Record<ShipmentColumnSourceKey, number>;
-  shipmentColumnSourceOptions: ShipmentColumnSourceKey[];
+  shipmentColumnSourceOptions: ShipmentColumnSourceOption[];
   onBack: () => void;
   onAdd: () => void;
   onApplyColumnPreset: (preset: ShipmentColumnPresetKey) => void;
@@ -47,35 +48,41 @@ export interface ShipmentColumnSettingsPanelProps {
   onOpenExcelSortDialog: (scope: ShipmentExcelExportScope) => void;
 }
 
+function groupSourceOptions(options: ShipmentColumnSourceOption[]) {
+  const grouped = new Map<string, ShipmentColumnSourceOption[]>();
+
+  for (const option of options) {
+    const current = grouped.get(option.group) ?? [];
+    current.push(option);
+    grouped.set(option.group, current);
+  }
+
+  return Array.from(grouped.entries());
+}
+
 export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSettingsPanelProps) {
+  const sourceOptionByKey = new Map(
+    props.shipmentColumnSourceOptions.map((option) => [option.key, option] as const),
+  );
+  const groupedSourceOptions = groupSourceOptions(props.shipmentColumnSourceOptions);
+
   return (
     <div className="card">
       <div className="card-header">
         <div>
           <h2 style={{ margin: 0 }}>다운로드 컬럼 설정</h2>
           <div className="muted shipment-grid-note">
-            컬럼명 변경, 필드 변경, 삭제, 추가가 가능합니다. 여기에서 바꾸는 순서와 구성은
-            워크시트와 엑셀 다운로드에 같이 적용됩니다.
+            컬럼명 변경, 필드 변경, 삭제, 추가가 가능합니다. 여기서 바꾼 구성은 워크시트와 엑셀 다운로드에
+            함께 적용됩니다.
           </div>
           <div className="muted shipment-grid-note">
-            각 열은 `다운로드 헤더`와 `source column`을 따로 볼 수 있습니다. source column은
-            `productName`, `invoiceNumber`처럼 쿠팡/워크시트 원본 key 기준으로 선택할 수 있습니다.
+            source column은 `기본 필드`와 `쿠팡 raw field`로 나뉩니다. raw field는 수집된
+            `order.*`, `detail.*`, `product.*` 평탄화 맵에서 읽어오며 읽기 전용입니다.
           </div>
           <div className="muted shipment-grid-note">
             {props.previewRowDescription
               ? `미리보기 기준: ${props.previewRowDescription}`
-              : "배송 시트를 불러오면 여기에서 컬럼별 실제 값을 미리 볼 수 있습니다."}
-          </div>
-          <div className="muted shipment-grid-note">
-            `노출상품명`은 현재 워크시트 조합값이고, `쿠팡 원본 노출상품명`은 상품 상세에서 받은
-            `displayProductName` 기준으로 따로 저장됩니다.
-          </div>
-          <div className="muted shipment-grid-note">
-            추천 프리셋을 적용하면 기본 열 수와 폭을 한 번에 바꿀 수 있습니다. 현재 프리셋:
-            {" "}
-            {props.activeColumnPreset === "custom"
-              ? "사용자 정의"
-              : props.columnPresetOptions.find((preset) => preset.key === props.activeColumnPreset)?.label ?? "사용자 정의"}
+              : "배송 시트를 불러오면 여기에서 컬럼별 실제 미리보기 값을 확인할 수 있습니다."}
           </div>
         </div>
         <div className="toolbar">
@@ -100,12 +107,12 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
             onClick={() => props.onOpenExcelSortDialog("notExported")}
             disabled={props.openNotExportedExcelExportDisabled}
           >
-            미출력건 전체 다운로드
+            미출력 전체 엑셀 다운로드
           </button>
         </div>
         {props.selectedRowsCount > 0 && props.selectedExportBlockedRowCount > 0 ? (
           <div className="muted action-disabled-reason">
-            선택한 클레임 {props.selectedExportBlockedRowCount}건은 엑셀 다운로드에서 제외됩니다.
+            선택한 클레임 {props.selectedExportBlockedRowCount}건은 다운로드에서 제외됩니다.
           </div>
         ) : null}
         {props.notExportedCount > 0 && props.claimScopeCount > 0 ? (
@@ -120,7 +127,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
           <div>
             <strong>추천 보기 프리셋</strong>
             <div className="muted shipment-grid-note">
-              가로 스크롤을 줄이고 싶다면 먼저 프리셋을 적용한 뒤 필요할 때만 개별 컬럼을 조정하세요.
+              가로 스크롤을 줄이고 싶다면 먼저 프리셋을 적용한 뒤 필요한 컬럼만 조정하세요.
             </div>
           </div>
           <div className="toolbar shipment-column-preset-actions">
@@ -141,18 +148,22 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
 
       <div className="column-settings-list">
         {props.columnConfigs.map((config) => {
-          const previewValue = formatShipmentColumnPreviewValue(props.previewRow, config.sourceKey);
-          const combinedPreviewValue = formatShipmentColumnPreviewValue(
-            props.previewRow,
-            "exposedProductName",
-          );
-          const rawCoupangPreviewValue = formatShipmentColumnPreviewValue(
-            props.previewRow,
-            "coupangDisplayProductName",
-          );
+          const configSourceKey = getShipmentColumnSourceStorageKey(config.source);
+          const selectedOption = sourceOptionByKey.get(configSourceKey);
+          const previewValue = formatShipmentColumnPreviewValue(props.previewRow, config.source);
+          const combinedPreviewValue = formatShipmentColumnPreviewValue(props.previewRow, {
+            kind: "builtin",
+            key: "exposedProductName",
+          });
+          const rawCoupangPreviewValue = formatShipmentColumnPreviewValue(props.previewRow, {
+            kind: "builtin",
+            key: "coupangDisplayProductName",
+          });
           const shouldShowCoupangNameComparison =
-            config.sourceKey === "exposedProductName" ||
-            config.sourceKey === "coupangDisplayProductName";
+            config.source.kind === "builtin" &&
+            (config.source.key === "exposedProductName" ||
+              config.source.key === "coupangDisplayProductName");
+
           return (
             <div
               key={config.id}
@@ -177,7 +188,7 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                   <button
                     type="button"
                     className="button ghost"
-                    onClick={() => props.onUpdate(config.id, { label: config.sourceKey })}
+                    onClick={() => props.onUpdate(config.id, { label: configSourceKey })}
                   >
                     key명 적용
                   </button>
@@ -186,11 +197,20 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                     className="button ghost"
                     onClick={() =>
                       props.onUpdate(config.id, {
-                        label: props.shipmentColumnLabels[config.sourceKey],
+                        label: resolveShipmentColumnSourceLabel(
+                          config.source,
+                          props.shipmentColumnSourceOptions
+                            .map((option) => option.catalogItem)
+                            .filter(
+                              (
+                                item,
+                              ): item is NonNullable<typeof item> => Boolean(item),
+                            ),
+                        ),
                       })
                     }
                   >
-                    한글명 적용
+                    표시명 적용
                   </button>
                 </div>
               </div>
@@ -199,27 +219,42 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                   source column
                 </div>
                 <select
-                  value={config.sourceKey}
+                  value={configSourceKey}
                   onChange={(event) => {
-                    const nextSourceKey = event.target.value as ShipmentColumnSourceKey;
+                    const nextOption = sourceOptionByKey.get(event.target.value);
+                    if (!nextOption) {
+                      return;
+                    }
+
                     props.onUpdate(config.id, {
-                      sourceKey: nextSourceKey,
+                      source: nextOption.source,
                       label: resolveShipmentColumnLabelForSourceChange({
                         currentLabel: config.label,
-                        previousSourceKey: config.sourceKey,
-                        nextSourceKey,
+                        previousSource: config.source,
+                        nextSource: nextOption.source,
+                        rawFieldCatalog: props.shipmentColumnSourceOptions
+                          .map((option) => option.catalogItem)
+                          .filter(
+                            (
+                              item,
+                            ): item is NonNullable<typeof item> => Boolean(item),
+                          ),
                       }),
                     });
                   }}
                 >
-                  {props.shipmentColumnSourceOptions.map((sourceKey) => (
-                    <option key={sourceKey} value={sourceKey}>
-                      {formatShipmentColumnSourceOptionLabel(sourceKey)}
-                    </option>
+                  {groupedSourceOptions.map(([group, options]) => (
+                    <optgroup key={group} label={group}>
+                      {options.map((option) => (
+                        <option key={option.key} value={option.key}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
                 <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
-                  현재 key: <code>{config.sourceKey}</code>
+                  현재 key: <code>{configSourceKey}</code>
                 </div>
               </div>
               <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
@@ -237,7 +272,13 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                   {previewValue}
                 </div>
                 <div className="muted" style={{ fontSize: "0.75rem", marginTop: 6 }}>
-                  기본 헤더: {props.shipmentColumnLabels[config.sourceKey]}
+                  기본 표시명:{" "}
+                  {resolveShipmentColumnSourceLabel(
+                    config.source,
+                    props.shipmentColumnSourceOptions
+                      .map((option) => option.catalogItem)
+                      .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+                  )}
                 </div>
                 {shouldShowCoupangNameComparison ? (
                   <div className="muted" style={{ fontSize: "0.75rem" }}>
@@ -248,7 +289,9 @@ export default function ShipmentColumnSettingsPanel(props: ShipmentColumnSetting
                 ) : null}
               </div>
               <div className="muted">
-                현재 너비 {props.columnWidths[config.id] ?? props.shipmentColumnDefaultWidths[config.sourceKey]}
+                현재 너비{" "}
+                {props.columnWidths[config.id] ??
+                  resolveShipmentColumnDefaultWidth(config.source, selectedOption?.catalogItem)}
                 px
               </div>
               <button

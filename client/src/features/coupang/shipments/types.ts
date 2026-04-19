@@ -1,6 +1,8 @@
 import type {
   CoupangStoreSummary,
+  CoupangShipmentWorksheetColumnSource,
   CoupangShipmentWorksheetColumnSourceKey,
+  CoupangShipmentWorksheetRawFieldCatalogItem,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetViewScope,
 } from "@shared/coupang";
@@ -51,10 +53,20 @@ export type EditableColumnKey =
   | "deliveryRequest";
 
 export type ShipmentColumnSourceKey = CoupangShipmentWorksheetColumnSourceKey;
+export type ShipmentColumnSource = CoupangShipmentWorksheetColumnSource;
+
+export type ShipmentColumnSourceOption = {
+  key: string;
+  source: ShipmentColumnSource;
+  label: string;
+  group: string;
+  defaultWidth: number;
+  catalogItem?: CoupangShipmentWorksheetRawFieldCatalogItem;
+};
 
 export type ShipmentColumnConfig = {
   id: string;
-  sourceKey: ShipmentColumnSourceKey;
+  source: ShipmentColumnSource;
   label: string;
 };
 

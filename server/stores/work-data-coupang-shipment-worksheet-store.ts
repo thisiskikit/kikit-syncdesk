@@ -26,6 +26,7 @@ import {
   toDateOrNull,
   toIsoString,
 } from "../services/shared/work-data-db";
+import { ensureWorksheetRawFields } from "../services/coupang/shipment-worksheet-raw-fields";
 import type {
   ArchiveCoupangShipmentWorksheetRowsInput,
   ArchiveCoupangShipmentWorksheetRowsResult,
@@ -210,6 +211,7 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
       typeof row.lastProductHydratedAt === "string" ? row.lastProductHydratedAt : null,
     ...invoiceTransmissionState,
     exportedAt: typeof row.exportedAt === "string" ? row.exportedAt : null,
+    rawFields: ensureWorksheetRawFields(row),
   } satisfies CoupangShipmentWorksheetRow;
 }
 

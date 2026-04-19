@@ -5,24 +5,23 @@ import {
   buildShipmentColumnPresetWidths,
   detectShipmentColumnPresetKey,
 } from "./shipment-column-presets";
+import { createBuiltinShipmentColumnSource } from "./worksheet-config";
 
 describe("shipment-column-presets", () => {
   it("builds a compact operations preset", () => {
     const configs = buildShipmentColumnPresetConfigs("operations");
 
-    expect(configs.map((config) => config.sourceKey)).toEqual([
-      "productName",
-      "optionName",
-      "receiverName",
-      "selpickOrderNumber",
-      "quantity",
-    ]);
+    expect(
+      configs.map((config) => (config.source.kind === "builtin" ? config.source.key : null)),
+    ).toEqual(["productName", "optionName", "receiverName", "selpickOrderNumber", "quantity"]);
   });
 
   it("builds an invoice-focused preset with courier and invoice columns", () => {
     const configs = buildShipmentColumnPresetConfigs("invoice_input");
 
-    expect(configs.map((config) => config.sourceKey)).toEqual([
+    expect(
+      configs.map((config) => (config.source.kind === "builtin" ? config.source.key : null)),
+    ).toEqual([
       "selpickOrderNumber",
       "productName",
       "receiverName",
@@ -42,7 +41,7 @@ describe("shipment-column-presets", () => {
         ...operationsConfigs.slice(0, 2),
         {
           ...operationsConfigs[2],
-          sourceKey: "invoiceNumber",
+          source: createBuiltinShipmentColumnSource("invoiceNumber"),
         },
       ]),
     ).toBe("custom");

@@ -1,4 +1,10 @@
-import type { CoupangShipmentWorksheetResponse, CoupangShipmentWorksheetRow } from "@shared/coupang";
+import type {
+  CoupangShipmentWorksheetColumnSource,
+  CoupangShipmentWorksheetRawFieldCatalogItem,
+  CoupangShipmentWorksheetResponse,
+  CoupangShipmentWorksheetRow,
+  CoupangShipmentWorksheetSortField,
+} from "@shared/coupang";
 import type {
   InvoiceStatusCardKey,
   OrderStatusCardKey,
@@ -13,7 +19,9 @@ import type {
   EditableColumnKey,
   FilterState,
   ShipmentColumnConfig,
+  ShipmentColumnSource,
   ShipmentColumnSourceKey,
+  ShipmentColumnSourceOption,
 } from "./types";
 
 type QuickFilterCardOption<TValue extends string> = {
@@ -68,11 +76,11 @@ export const SHIPMENT_COLUMN_LABELS: Record<ShipmentColumnSourceKey, string> = {
   productName: "상품명",
   optionName: "옵션명",
   productOrderNumber: "상품주문번호",
-  collectedPlatform: "수집한플랫폼",
+  collectedPlatform: "수집 플랫폼",
   ordererName: "주문자명",
   contact: "연락처",
-  receiverName: "수령자명",
-  collectedAccountName: "수집한계정명",
+  receiverName: "수령인명",
+  collectedAccountName: "수집 계정명",
   deliveryCompanyCode: "택배사",
   selpickOrderNumber: "셀픽주문번호",
   invoiceNumber: "송장번호",
@@ -80,12 +88,12 @@ export const SHIPMENT_COLUMN_LABELS: Record<ShipmentColumnSourceKey, string> = {
   shippingFee: "배송비",
   receiverAddress: "수령지",
   deliveryRequest: "요청사항",
-  buyerPhoneNumber: "구매자전화번호",
+  buyerPhoneNumber: "구매자 전화번호",
   productNumber: "상품번호",
-  exposedProductName: "노출상품명",
-  coupangDisplayProductName: "쿠팡 원본 노출상품명",
-  productOptionNumber: "상품옵션번호",
-  sellerProductCode: "판매자상품코드",
+  exposedProductName: "노출 상품명",
+  coupangDisplayProductName: "쿠팡 원본 노출 상품명",
+  productOptionNumber: "상품 옵션번호",
+  sellerProductCode: "판매자 상품코드",
 };
 
 export const SHIPMENT_COLUMN_DEFAULT_WIDTHS: Record<ShipmentColumnSourceKey, number> = {
@@ -117,44 +125,38 @@ export const SHIPMENT_COLUMN_DEFAULT_WIDTHS: Record<ShipmentColumnSourceKey, num
 
 export const ORDER_STATUS_OPTIONS = [
   { value: "", label: "전체 상태" },
-  { value: "ACCEPT", label: "주문접수" },
+  { value: "ACCEPT", label: "결제완료" },
   { value: "INSTRUCT", label: "상품준비중" },
-  { value: "DEPARTURE", label: "출고완료" },
+  { value: "DEPARTURE", label: "배송지시" },
   { value: "DELIVERING", label: "배송중" },
   { value: "FINAL_DELIVERY", label: "배송완료" },
   { value: "NONE_TRACKING", label: "추적없음" },
 ] as const;
 
-export const SHIPMENT_COLUMN_SOURCE_OPTIONS: ShipmentColumnSourceKey[] = [
+const BUILTIN_SOURCE_OPTIONS: ShipmentColumnSourceKey[] = [
   "blank",
   ...DEFAULT_SHIPMENT_COLUMN_ORDER,
   "coupangDisplayProductName",
 ];
 
-export function formatShipmentColumnSourceOptionLabel(sourceKey: ShipmentColumnSourceKey) {
-  return `${sourceKey} · ${SHIPMENT_COLUMN_LABELS[sourceKey]}`;
-}
+const EDITABLE_COLUMN_KEY_SET = new Set<string>(EDITABLE_COLUMN_KEYS);
+const INVOICE_INPUT_SOURCE_KEY_SET = new Set<string>(INVOICE_INPUT_SOURCE_KEYS);
 
-export function resolveShipmentColumnLabelForSourceChange(input: {
-  currentLabel: string;
-  previousSourceKey: ShipmentColumnSourceKey;
-  nextSourceKey: ShipmentColumnSourceKey;
-}) {
-  const normalizedCurrentLabel = input.currentLabel.trim();
-  if (!normalizedCurrentLabel) {
-    return SHIPMENT_COLUMN_LABELS[input.nextSourceKey];
-  }
+const RAW_FIELD_GROUP_ORDER = [
+  "워크시트",
+  "주문",
+  "주문상세",
+  "주문상세 상품",
+  "상품",
+  "상품 옵션",
+];
 
-  if (normalizedCurrentLabel === input.previousSourceKey) {
-    return input.nextSourceKey;
-  }
-
-  if (normalizedCurrentLabel === SHIPMENT_COLUMN_LABELS[input.previousSourceKey]) {
-    return SHIPMENT_COLUMN_LABELS[input.nextSourceKey];
-  }
-
-  return input.currentLabel;
-}
+const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 
 export const ORDER_STATUS_LABEL_BY_VALUE = new Map<string, string>(
   ORDER_STATUS_OPTIONS.map((option) => [option.value, option.label]),
@@ -163,17 +165,17 @@ export const ORDER_STATUS_LABEL_BY_VALUE = new Map<string, string>(
 export const INVOICE_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<InvoiceStatusCardKey>[] = [
   { value: "all", label: "전체", toneClassName: "neutral" },
   { value: "idle", label: "입력 전", toneClassName: "neutral" },
-  { value: "ready", label: "전송 전", toneClassName: "ready" },
+  { value: "ready", label: "전송 가능", toneClassName: "ready" },
   { value: "pending", label: "송장 전송 중", toneClassName: "progress" },
   { value: "failed", label: "전송 실패", toneClassName: "danger" },
-  { value: "applied", label: "전송", toneClassName: "success" },
+  { value: "applied", label: "전송됨", toneClassName: "success" },
 ] as const;
 
 export const ORDER_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OrderStatusCardKey>[] = [
   { value: "all", label: "전체", toneClassName: "neutral" },
-  { value: "ACCEPT", label: "주문접수", toneClassName: "progress" },
+  { value: "ACCEPT", label: "결제완료", toneClassName: "progress" },
   { value: "INSTRUCT", label: "상품준비중", toneClassName: "progress" },
-  { value: "DEPARTURE", label: "출고완료", toneClassName: "progress" },
+  { value: "DEPARTURE", label: "배송지시", toneClassName: "progress" },
   { value: "DELIVERING", label: "배송중", toneClassName: "progress" },
   { value: "FINAL_DELIVERY", label: "배송완료", toneClassName: "success" },
   { value: "NONE_TRACKING", label: "추적없음", toneClassName: "attention" },
@@ -187,35 +189,162 @@ export const OUTPUT_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OutputSt
 
 export const SELPICK_ORDER_NUMBER_PATTERN = /^O\d{8}[A-Z0-9]\d{4}$/i;
 
-const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Seoul",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-const EDITABLE_COLUMN_KEY_SET = new Set<string>(EDITABLE_COLUMN_KEYS);
-const INVOICE_INPUT_SOURCE_KEY_SET = new Set<string>(INVOICE_INPUT_SOURCE_KEYS);
-
-export function isEditableSourceKey(
-  sourceKey: ShipmentColumnSourceKey,
-): sourceKey is EditableColumnKey {
-  return EDITABLE_COLUMN_KEY_SET.has(sourceKey);
+export function createBuiltinShipmentColumnSource(
+  key: ShipmentColumnSourceKey,
+): ShipmentColumnSource {
+  return {
+    kind: "builtin",
+    key,
+  };
 }
 
-export function isInvoiceInputSourceKey(
-  sourceKey: ShipmentColumnSourceKey,
-): sourceKey is EditableColumnKey {
-  return INVOICE_INPUT_SOURCE_KEY_SET.has(sourceKey);
+export function createRawShipmentColumnSource(key: string): ShipmentColumnSource {
+  return {
+    kind: "raw",
+    key: key.trim(),
+  };
 }
 
-export function isGridEditableSourceKey(
-  sourceKey: ShipmentColumnSourceKey,
+export function isBuiltinShipmentColumnSource(
+  source: ShipmentColumnSource,
+): source is Extract<CoupangShipmentWorksheetColumnSource, { kind: "builtin" }> {
+  return source.kind === "builtin";
+}
+
+export function isRawShipmentColumnSource(
+  source: ShipmentColumnSource,
+): source is Extract<CoupangShipmentWorksheetColumnSource, { kind: "raw" }> {
+  return source.kind === "raw";
+}
+
+export function getShipmentColumnSourceStorageKey(source: ShipmentColumnSource) {
+  return isBuiltinShipmentColumnSource(source) ? source.key : `raw:${source.key}`;
+}
+
+export function resolveShipmentColumnDefaultWidth(
+  source: ShipmentColumnSource,
+  catalogItem?: CoupangShipmentWorksheetRawFieldCatalogItem,
+) {
+  if (isBuiltinShipmentColumnSource(source)) {
+    return SHIPMENT_COLUMN_DEFAULT_WIDTHS[source.key];
+  }
+
+  switch (catalogItem?.sampleValueType) {
+    case "number":
+      return 120;
+    case "boolean":
+      return 110;
+    default:
+      return 180;
+  }
+}
+
+export function resolveShipmentColumnSourceLabel(
+  source: ShipmentColumnSource,
+  rawFieldCatalog?: readonly CoupangShipmentWorksheetRawFieldCatalogItem[],
+) {
+  if (isBuiltinShipmentColumnSource(source)) {
+    return SHIPMENT_COLUMN_LABELS[source.key];
+  }
+
+  return rawFieldCatalog?.find((item) => item.key === source.key)?.label ?? source.key;
+}
+
+export function formatShipmentColumnSourceOptionLabel(
+  source: ShipmentColumnSource,
+  rawFieldCatalog?: readonly CoupangShipmentWorksheetRawFieldCatalogItem[],
+) {
+  const sourceKey = isBuiltinShipmentColumnSource(source) ? source.key : source.key;
+  return `${sourceKey} · ${resolveShipmentColumnSourceLabel(source, rawFieldCatalog)}`;
+}
+
+export function buildShipmentColumnSourceOptions(
+  rawFieldCatalog: readonly CoupangShipmentWorksheetRawFieldCatalogItem[] = [],
+): ShipmentColumnSourceOption[] {
+  const builtinOptions = BUILTIN_SOURCE_OPTIONS.map((key) => ({
+    key: `builtin:${key}`,
+    source: createBuiltinShipmentColumnSource(key),
+    label: formatShipmentColumnSourceOptionLabel(createBuiltinShipmentColumnSource(key)),
+    group: "기본 필드",
+    defaultWidth: SHIPMENT_COLUMN_DEFAULT_WIDTHS[key],
+  }));
+
+  const rawOptions = rawFieldCatalog.map((item) => ({
+    key: `raw:${item.key}`,
+    source: createRawShipmentColumnSource(item.key),
+    label: `${item.key} · ${item.label}`,
+    group: item.group,
+    defaultWidth: resolveShipmentColumnDefaultWidth(createRawShipmentColumnSource(item.key), item),
+    catalogItem: item,
+  }));
+
+  rawOptions.sort((left, right) => {
+    const leftGroupIndex = RAW_FIELD_GROUP_ORDER.indexOf(left.group);
+    const rightGroupIndex = RAW_FIELD_GROUP_ORDER.indexOf(right.group);
+    const normalizedLeftIndex = leftGroupIndex >= 0 ? leftGroupIndex : RAW_FIELD_GROUP_ORDER.length;
+    const normalizedRightIndex =
+      rightGroupIndex >= 0 ? rightGroupIndex : RAW_FIELD_GROUP_ORDER.length;
+
+    if (normalizedLeftIndex !== normalizedRightIndex) {
+      return normalizedLeftIndex - normalizedRightIndex;
+    }
+
+    return left.label.localeCompare(right.label, "ko-KR", {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
+  return [...builtinOptions, ...rawOptions];
+}
+
+export function resolveShipmentColumnLabelForSourceChange(input: {
+  currentLabel: string;
+  previousSource: ShipmentColumnSource;
+  nextSource: ShipmentColumnSource;
+  rawFieldCatalog?: readonly CoupangShipmentWorksheetRawFieldCatalogItem[];
+}) {
+  const normalizedCurrentLabel = input.currentLabel.trim();
+  const previousStorageKey = getShipmentColumnSourceStorageKey(input.previousSource);
+  const nextStorageKey = getShipmentColumnSourceStorageKey(input.nextSource);
+  const previousLabel = resolveShipmentColumnSourceLabel(
+    input.previousSource,
+    input.rawFieldCatalog,
+  );
+  const nextLabel = resolveShipmentColumnSourceLabel(input.nextSource, input.rawFieldCatalog);
+
+  if (!normalizedCurrentLabel) {
+    return nextLabel;
+  }
+
+  if (normalizedCurrentLabel === previousStorageKey) {
+    return nextStorageKey;
+  }
+
+  if (normalizedCurrentLabel === previousLabel) {
+    return nextLabel;
+  }
+
+  return input.currentLabel;
+}
+
+export function isEditableSource(
+  source: ShipmentColumnSource,
+): source is { kind: "builtin"; key: EditableColumnKey } {
+  return isBuiltinShipmentColumnSource(source) && EDITABLE_COLUMN_KEY_SET.has(source.key);
+}
+
+export function isInvoiceInputSource(
+  source: ShipmentColumnSource,
+): source is { kind: "builtin"; key: EditableColumnKey } {
+  return isBuiltinShipmentColumnSource(source) && INVOICE_INPUT_SOURCE_KEY_SET.has(source.key);
+}
+
+export function isGridEditableSource(
+  source: ShipmentColumnSource,
   worksheetMode: "default" | "invoice",
-): sourceKey is EditableColumnKey {
-  return worksheetMode === "invoice"
-    ? isInvoiceInputSourceKey(sourceKey)
-    : isEditableSourceKey(sourceKey);
+): source is { kind: "builtin"; key: EditableColumnKey } {
+  return worksheetMode === "invoice" ? isInvoiceInputSource(source) : isEditableSource(source);
 }
 
 function getSeoulDateParts(date: Date) {
@@ -332,13 +461,41 @@ function createShipmentColumnId() {
   return `shipment-column-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function isShipmentColumnSourceKey(value: unknown): value is ShipmentColumnSourceKey {
+  return typeof value === "string" && value in SHIPMENT_COLUMN_LABELS;
+}
+
+function normalizeShipmentColumnSource(value: unknown): ShipmentColumnSource | null {
+  if (isShipmentColumnSourceKey(value)) {
+    return createBuiltinShipmentColumnSource(value);
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const source = value as Partial<ShipmentColumnSource>;
+  if (source.kind === "builtin" && isShipmentColumnSourceKey(source.key)) {
+    return createBuiltinShipmentColumnSource(source.key);
+  }
+
+  if (source.kind === "raw" && typeof source.key === "string" && source.key.trim()) {
+    return createRawShipmentColumnSource(source.key);
+  }
+
+  return null;
+}
+
 export function createShipmentColumnConfig(
-  sourceKey: ShipmentColumnSourceKey,
+  source: ShipmentColumnSource | ShipmentColumnSourceKey,
 ): ShipmentColumnConfig {
+  const normalizedSource =
+    typeof source === "string" ? createBuiltinShipmentColumnSource(source) : source;
+
   return {
     id: createShipmentColumnId(),
-    sourceKey,
-    label: SHIPMENT_COLUMN_LABELS[sourceKey],
+    source: normalizedSource,
+    label: resolveShipmentColumnSourceLabel(normalizedSource),
   };
 }
 
@@ -346,22 +503,37 @@ export function createDefaultShipmentColumnConfigs() {
   return DEFAULT_SHIPMENT_COLUMN_ORDER.map((sourceKey) => createShipmentColumnConfig(sourceKey));
 }
 
-function isShipmentColumnSourceKey(value: unknown): value is ShipmentColumnSourceKey {
-  return typeof value === "string" && value in SHIPMENT_COLUMN_LABELS;
-}
-
-export function normalizeShipmentColumnConfigs(value: ShipmentColumnConfig[]) {
+export function normalizeShipmentColumnConfigs(
+  value: unknown,
+): ShipmentColumnConfig[] {
   const items = Array.isArray(value)
     ? value
-        .filter(
-          (item): item is ShipmentColumnConfig =>
-            Boolean(item) && isShipmentColumnSourceKey(item.sourceKey),
-        )
-        .map((item) => ({
-          id: item.id || createShipmentColumnId(),
-          sourceKey: item.sourceKey,
-          label: item.label?.trim() || SHIPMENT_COLUMN_LABELS[item.sourceKey],
-        }))
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+
+          const config = item as Partial<ShipmentColumnConfig> & {
+            sourceKey?: unknown;
+          };
+          const source =
+            normalizeShipmentColumnSource(config.source) ??
+            normalizeShipmentColumnSource(config.sourceKey);
+
+          if (!source) {
+            return null;
+          }
+
+          return {
+            id: typeof config.id === "string" && config.id.trim() ? config.id : createShipmentColumnId(),
+            source,
+            label:
+              typeof config.label === "string" && config.label.trim()
+                ? config.label.trim()
+                : resolveShipmentColumnSourceLabel(source),
+          } satisfies ShipmentColumnConfig;
+        })
+        .filter((item): item is ShipmentColumnConfig => Boolean(item))
     : [];
 
   return items.length ? items : createDefaultShipmentColumnConfigs();
@@ -386,6 +558,16 @@ export function moveColumnConfigs(
   return next;
 }
 
+export function serializeShipmentWorksheetSortField(
+  source: ShipmentColumnSource,
+): CoupangShipmentWorksheetSortField | null {
+  if (isBuiltinShipmentColumnSource(source)) {
+    return source.key === "blank" ? null : source.key;
+  }
+
+  return source.key ? (`raw:${source.key}` as CoupangShipmentWorksheetSortField) : null;
+}
+
 export function summarizeWorksheetMessage(sheet: CoupangShipmentWorksheetResponse | null | undefined) {
   if (!sheet?.message) {
     return null;
@@ -402,7 +584,7 @@ export function summarizeWorksheetSync(sheet: CoupangShipmentWorksheetResponse |
     return null;
   }
 
-  const modeLabel = sheet.syncSummary.mode === "full" ? "전체 재동기화" : "빠른 수집";
+  const modeLabel = sheet.syncSummary.mode === "full" ? "전체 동기화" : "빠른 수집";
   const scopeLabel =
     sheet.syncSummary.fetchCreatedAtFrom && sheet.syncSummary.fetchCreatedAtTo
       ? `${sheet.syncSummary.fetchCreatedAtFrom} ~ ${sheet.syncSummary.fetchCreatedAtTo}`
@@ -411,6 +593,10 @@ export function summarizeWorksheetSync(sheet: CoupangShipmentWorksheetResponse |
     ORDER_STATUS_LABEL_BY_VALUE.get(sheet.syncSummary.statusFilter ?? "") ??
     sheet.syncSummary.statusFilter ??
     "전체 상태";
+  const checkpointLabel =
+    sheet.syncSummary.checkpointCount && sheet.syncSummary.checkpointPersistedCount
+      ? ` · 체크포인트 ${sheet.syncSummary.checkpointCount}회 / ${sheet.syncSummary.checkpointPersistedCount}행`
+      : "";
 
   return {
     title: "최근 수집",
@@ -418,6 +604,6 @@ export function summarizeWorksheetSync(sheet: CoupangShipmentWorksheetResponse |
       `${modeLabel}${sheet.syncSummary.autoExpanded ? " (자동 확장)" : ""} · ` +
       `범위 ${scopeLabel} · 상태 ${statusLabel} · ` +
       `추가 ${sheet.syncSummary.insertedCount}건 · 갱신 ${sheet.syncSummary.updatedCount}건 · ` +
-      `조회 ${sheet.syncSummary.fetchedCount}건`,
+      `조회 ${sheet.syncSummary.fetchedCount}건${checkpointLabel}`,
   };
 }

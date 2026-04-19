@@ -60,6 +60,15 @@ import {
   resolveShipmentWorksheetFilteredRows,
   resolveShipmentWorksheetRows,
 } from "./shipment-worksheet-view";
+import {
+  buildWorksheetRawFieldCatalog,
+  buildWorksheetRawFields,
+  ensureWorksheetRawFields,
+  resolveWorksheetDisplayProductNameFromRawFields,
+  resolveWorksheetOptionNameFromRawFields,
+  resolveWorksheetOverseasFlagFromRawFields,
+  resolveWorksheetProductNameFromRawFields,
+} from "./shipment-worksheet-raw-fields";
 
 type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsStore.getStore>>>;
 
@@ -459,9 +468,11 @@ function buildWorksheetResponse(
   sheet: WorksheetStoreSheet,
   messageOverride?: string | null,
 ): CoupangShipmentWorksheetResponse {
+  const rows = buildWorksheetRows(sheet);
   return {
     store: asStoreRef(store),
-    items: buildWorksheetRows(sheet),
+    items: rows,
+    rawFieldCatalog: buildWorksheetRawFieldCatalog(rows),
     fetchedAt: new Date().toISOString(),
     collectedAt: sheet.collectedAt,
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
@@ -500,6 +511,7 @@ function buildShipmentArchiveViewResponse(
 ): CoupangShipmentArchiveViewResponse {
   const normalizedQuery = normalizeShipmentArchiveQuery(query);
   const allRows = buildArchiveRows(rows);
+  const rawFieldCatalog = buildWorksheetRawFieldCatalog(allRows);
   const filteredRows = normalizedQuery.query
     ? allRows.filter((row) => matchesShipmentWorksheetQuery(row, normalizedQuery.query))
     : allRows;
@@ -517,6 +529,7 @@ function buildShipmentArchiveViewResponse(
   return {
     store: asStoreRef(store),
     items: sortedRows.slice(pageStart, pageStart + normalizedQuery.pageSize),
+    rawFieldCatalog,
     fetchedAt: new Date().toISOString(),
     message: normalizeLegacyWorksheetMessage(messageOverride),
     page,
@@ -533,11 +546,13 @@ function buildWorksheetViewResponse(
   query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
   messageOverride?: string | null,
 ): CoupangShipmentWorksheetViewResponse {
-  const view = buildShipmentWorksheetViewData(buildWorksheetRows(sheet), query);
+  const rows = buildWorksheetRows(sheet);
+  const view = buildShipmentWorksheetViewData(rows, query);
 
   return {
     store: asStoreRef(store),
     items: view.items,
+    rawFieldCatalog: buildWorksheetRawFieldCatalog(rows),
     fetchedAt: new Date().toISOString(),
     collectedAt: sheet.collectedAt,
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
@@ -2285,15 +2300,34 @@ function buildWorksheetRow(input: {
 }) {
   const { store, row, currentRow, nowIso, detail, productDetail, selpickOrderNumber } = input;
   const preparedShipmentBoxIds = input.preparedShipmentBoxIds ?? new Set<string>();
-  const isOverseas = productDetail
+  const isOverseasHint = productDetail
     ? resolveProductOverseasFlag(productDetail, row)
     : currentRow?.isOverseas ?? false;
-  const productName = resolveWorksheetProductName(detail, productDetail, row, currentRow);
-  const optionName = resolveWorksheetOptionName(detail, productDetail, row, currentRow, productName);
-  const coupangDisplayProductName = resolveWorksheetCoupangDisplayProductName(
+  const rawFields = buildWorksheetRawFields({
+    row,
+    detail,
     productDetail,
     currentRow,
-  );
+    selpickOrderNumber,
+    isOverseas: isOverseasHint,
+  });
+  const isOverseas = resolveWorksheetOverseasFlagFromRawFields({
+    rawFields,
+    currentRow,
+  });
+  const productName = resolveWorksheetProductNameFromRawFields({
+    rawFields,
+    currentRow,
+  });
+  const optionName = resolveWorksheetOptionNameFromRawFields({
+    rawFields,
+    currentRow,
+    productName,
+  });
+  const coupangDisplayProductName = resolveWorksheetDisplayProductNameFromRawFields({
+    rawFields,
+    currentRow,
+  });
   const receiverBaseName =
     currentRow?.receiverBaseName ??
     detail?.receiver.name ??
@@ -2402,6 +2436,7 @@ function buildWorksheetRow(input: {
     invoiceAppliedAt: currentRow?.invoiceAppliedAt ?? null,
     createdAt: currentRow?.createdAt ?? nowIso,
     updatedAt: nowIso,
+    rawFields,
   } satisfies CoupangShipmentWorksheetRow;
 }
 
@@ -2765,6 +2800,7 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
   const optionName = normalizeWorksheetOptionName(row.optionName, row.productName);
   const exposedProductName = buildExposedProductName(row.productName, optionName);
   const coupangDisplayProductName = normalizeWhitespace(row.coupangDisplayProductName);
+  const rawFields = ensureWorksheetRawFields(row);
   const customerServiceIssueCount = Number.isFinite(row.customerServiceIssueCount)
     ? Math.max(0, Math.trunc(row.customerServiceIssueCount))
     : 0;
@@ -2810,7 +2846,8 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     customerServiceIssueBreakdown === row.customerServiceIssueBreakdown &&
     coupangDeliveryCompanyCode === row.coupangDeliveryCompanyCode &&
     coupangInvoiceNumber === row.coupangInvoiceNumber &&
-    coupangInvoiceUploadedAt === row.coupangInvoiceUploadedAt
+    coupangInvoiceUploadedAt === row.coupangInvoiceUploadedAt &&
+    rawFields === row.rawFields
   ) {
     return row;
   }
@@ -2826,6 +2863,7 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     coupangDeliveryCompanyCode,
     coupangInvoiceNumber,
     coupangInvoiceUploadedAt,
+    rawFields,
   };
 }
 

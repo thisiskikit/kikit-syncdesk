@@ -21,6 +21,7 @@ import type {
   CoupangReturnActionTarget,
   CoupangReturnCollectionInvoiceTarget,
   CoupangShipmentArchiveViewQuery,
+  CoupangShipmentWorksheetSortField,
   CoupangShipmentWorksheetViewQuery,
   PatchCoupangShipmentWorksheetInput,
   PatchCoupangShipmentWorksheetItemInput,
@@ -315,6 +316,7 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
   const outputStatusCard = asOptionalString(item.outputStatusCard);
   const sortField = asOptionalString(item.sortField);
   const sortDirection = asOptionalString(item.sortDirection);
+  const isRawSortField = Boolean(sortField && /^raw:[A-Za-z0-9_.-]+$/.test(sortField));
 
   return {
     storeId: asString(item.storeId),
@@ -380,8 +382,9 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
       sortField === "productNumber" ||
       sortField === "exposedProductName" ||
       sortField === "productOptionNumber" ||
-      sortField === "sellerProductCode"
-        ? sortField
+      sortField === "sellerProductCode" ||
+      isRawSortField
+        ? (sortField as CoupangShipmentWorksheetSortField)
         : undefined,
     sortDirection: sortDirection === "desc" ? "desc" : "asc",
   };

@@ -17,7 +17,7 @@ import {
 } from "./shipment-column-presets";
 import type {
   ShipmentColumnConfig,
-  ShipmentColumnSourceKey,
+  ShipmentColumnSourceOption,
   WorksheetMode,
 } from "./types";
 
@@ -107,9 +107,7 @@ type FulfillmentGridControllerProps = {
     claimScopeCount: number;
     notExportedCount: number;
     activeColumnPreset: ShipmentColumnPresetKey | "custom";
-    shipmentColumnLabels: Record<ShipmentColumnSourceKey, string>;
-    shipmentColumnDefaultWidths: Record<ShipmentColumnSourceKey, number>;
-    shipmentColumnSourceOptions: ShipmentColumnSourceKey[];
+    shipmentColumnSourceOptions: ShipmentColumnSourceOption[];
     onBack: () => void;
     onAdd: () => void;
     onApplyColumnPreset: (preset: ShipmentColumnPresetKey) => void;
@@ -242,8 +240,6 @@ export default function FulfillmentGridController({
         notExportedCount={settings.notExportedCount}
         activeColumnPreset={settings.activeColumnPreset}
         columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
-        shipmentColumnLabels={settings.shipmentColumnLabels}
-        shipmentColumnDefaultWidths={settings.shipmentColumnDefaultWidths}
         shipmentColumnSourceOptions={settings.shipmentColumnSourceOptions}
         onBack={settings.onBack}
         onAdd={settings.onAdd}

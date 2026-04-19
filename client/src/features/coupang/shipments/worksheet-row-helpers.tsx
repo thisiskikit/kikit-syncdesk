@@ -26,11 +26,14 @@ import {
   getFulfillmentDecision,
   getFulfillmentDecisionReasonLabel,
 } from "./fulfillment-decision";
-import { SHIPMENT_COLUMN_DEFAULT_WIDTHS } from "./worksheet-config";
+import {
+  isBuiltinShipmentColumnSource,
+  resolveShipmentColumnDefaultWidth,
+} from "./worksheet-config";
 import type {
   EditableColumnKey,
   ShipmentColumnConfig,
-  ShipmentColumnSourceKey,
+  ShipmentColumnSource,
   ShipmentExcelExportScope,
   ShipmentExcelSortKey,
 } from "./types";
@@ -189,8 +192,8 @@ function formatExportText(value: string | null | undefined) {
 }
 
 export function compareShipmentSortValues(
-  left: string | number | null | undefined,
-  right: string | number | null | undefined,
+  left: string | number | boolean | null | undefined,
+  right: string | number | boolean | null | undefined,
 ) {
   if (left === right) {
     return 0;
@@ -206,6 +209,10 @@ export function compareShipmentSortValues(
 
   if (typeof left === "number" && typeof right === "number") {
     return left - right;
+  }
+
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
   }
 
   return String(left).localeCompare(String(right), "ko-KR", {
@@ -260,7 +267,11 @@ function getShipmentSortValue(
     return null;
   }
 
-  switch (config.sourceKey) {
+  if (!isBuiltinShipmentColumnSource(config.source)) {
+    return row.rawFields?.[config.source.key] ?? null;
+  }
+
+  switch (config.source.key) {
     case "blank":
       return null;
     case "quantity":
@@ -272,7 +283,7 @@ function getShipmentSortValue(
     case "orderDateText":
       return row.orderDateKey;
     default:
-      return row[config.sourceKey] as string | null | undefined;
+      return row[config.source.key] as string | null | undefined;
   }
 }
 
@@ -648,9 +659,20 @@ export function renderShipmentEditCell(
 
 export function renderShipmentColumnValue(
   row: CoupangShipmentWorksheetRow,
-  sourceKey: ShipmentColumnSourceKey,
+  source: ShipmentColumnSource,
 ): ReactNode {
-  switch (sourceKey) {
+  if (!isBuiltinShipmentColumnSource(source)) {
+    const rawValue = row.rawFields?.[source.key];
+    if (typeof rawValue === "number") {
+      return formatNumber(rawValue);
+    }
+    if (typeof rawValue === "boolean") {
+      return renderTextCell(rawValue ? "true" : "false");
+    }
+    return renderTextCell(rawValue ?? null);
+  }
+
+  switch (source.key) {
     case "blank":
       return renderTextCell(null);
     case "quantity":
@@ -660,15 +682,23 @@ export function renderShipmentColumnValue(
     case "shippingFee":
       return formatCurrency(row.shippingFee);
     default:
-      return renderTextCell(row[sourceKey] as string | null | undefined);
+      return renderTextCell(row[source.key] as string | null | undefined);
   }
 }
 
 export function getShipmentExportValue(
   row: CoupangShipmentWorksheetRow,
-  sourceKey: ShipmentColumnSourceKey,
+  source: ShipmentColumnSource,
 ) {
-  switch (sourceKey) {
+  if (!isBuiltinShipmentColumnSource(source)) {
+    const rawValue = row.rawFields?.[source.key];
+    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+      return String(rawValue);
+    }
+    return formatExportText(rawValue ?? null);
+  }
+
+  switch (source.key) {
     case "blank":
       return "";
     case "quantity":
@@ -678,7 +708,7 @@ export function getShipmentExportValue(
     case "shippingFee":
       return formatExportCurrency(row.shippingFee);
     default:
-      return formatExportText(row[sourceKey] as string | null | undefined);
+      return formatExportText(row[source.key] as string | null | undefined);
   }
 }
 
@@ -716,6 +746,9 @@ export function matchesQuery(row: CoupangShipmentWorksheetRow, query: string) {
     row.exposedProductName,
     row.productOptionNumber,
     row.sellerProductCode,
+    ...Object.values(row.rawFields ?? {}).map((value) =>
+      value === null || value === undefined ? "" : String(value),
+    ),
   ]
     .filter(Boolean)
     .join(" ")
@@ -727,5 +760,5 @@ export function getWorksheetColumnWidth(
   columnWidths: Record<string, number>,
   config: ShipmentColumnConfig,
 ) {
-  return columnWidths[config.id] ?? SHIPMENT_COLUMN_DEFAULT_WIDTHS[config.sourceKey];
+  return columnWidths[config.id] ?? resolveShipmentColumnDefaultWidth(config.source);
 }

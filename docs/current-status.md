@@ -56,6 +56,11 @@
 - `컬럼 설정`에서는 각 열의 다운로드 헤더와 source column을 분리해서 볼 수 있습니다.
 - source column 선택지는 `productName · 상품명`, `invoiceNumber · 송장번호`처럼 원본 key와 한글명을 함께 보여줍니다.
 - 각 열마다 `key명 적용` / `한글명 적용` 버튼으로 다운로드 헤더를 빠르게 맞출 수 있습니다.
+- 쿠팡 배송 시트 row는 이제 정규화 필드만 저장하지 않고, `row_data_json.rawFields` 안에 `order.* / detail.* / detailItem.* / product.* / productItem.* / worksheet.*` 평탄화 맵을 함께 유지합니다.
+- 메인 그리드, 정렬, 컬럼 미리보기, 상세 패널, 엑셀 다운로드는 같은 `builtin/raw source` resolver를 사용해 값을 읽습니다.
+- 기본 builtin 컬럼은 계속 1급 필드로 남아 송장 입력/수정 경로를 유지하고, raw field 컬럼은 읽기 전용으로만 노출합니다.
+- 화면 설정의 raw source 선택지는 현재 페이지 행이 아니라 `worksheet/view`, `worksheet`, `archive/view` 응답의 `rawFieldCatalog` 기준으로 구성됩니다.
+- archive row는 live API 재호출 없이 기존 row에서 합성한 synthetic `rawFields`를 사용해, active worksheet보다 원본 품질은 낮아도 같은 컬럼 resolver를 공유합니다.
 
 ### 빠른 수집 직후 신규 주문 우선 보기
 - `빠른 수집(new_only)` 응답은 `insertedSourceKeys`를 반환합니다.
@@ -92,6 +97,8 @@
 - `옵션명` 컬럼은 collect 직후부터 `실제 옵션값` 기준으로 맞추고, 주문 목록의 노출 옵션 문자열은 `옵션명`에 다시 쓰지 않습니다.
 - 실제 옵션값을 collect 시점에 못 가져오면 기존 정상 `optionName`은 유지하고, 기존 값도 없으면 빈값으로 둡니다.
 - `노출상품명(exposedProductName)`은 계속 표시용 문자열이며, `옵션명`을 대신하지 않습니다.
+- 같은 규칙은 이제 `rawFields` 기반 파생으로 고정돼, `productItem.itemName -> detailItem.optionName -> 기존 stored optionName -> null` 우선순위로 `optionName`을 만듭니다.
+- `productName`, `coupangDisplayProductName`, `deliveryCompanyCode`, `invoiceNumber`, `isOverseas`도 같은 raw precedence를 따라 정규화 row로 다시 파생됩니다.
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
 - 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.

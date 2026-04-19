@@ -1,4 +1,5 @@
 import type {
+  CoupangShipmentWorksheetRawFieldCatalogItem,
   CoupangShipmentWorksheetInvoiceStatusCard,
   CoupangShipmentWorksheetOrderStatusCard,
   CoupangShipmentWorksheetOutputStatusCard,
@@ -82,6 +83,41 @@ const EMPTY_OUTPUT_COUNTS: Record<CoupangShipmentWorksheetOutputStatusCard, numb
   exported: 0,
 };
 
+const RAW_FIELD_GROUP_LABEL_BY_NAMESPACE: Record<string, string> = {
+  worksheet: "워크시트",
+  order: "주문",
+  detail: "주문상세",
+  detailItem: "주문상세 상품",
+  product: "상품",
+  productItem: "상품 옵션",
+};
+
+function buildQuickCollectRawFieldCatalog(
+  rows: readonly CoupangShipmentWorksheetRow[],
+): CoupangShipmentWorksheetRawFieldCatalogItem[] {
+  const catalog = new Map<string, CoupangShipmentWorksheetRawFieldCatalogItem>();
+
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row.rawFields ?? {})) {
+      if (catalog.has(key)) {
+        continue;
+      }
+
+      catalog.set(key, {
+        key,
+        label: key,
+        group: key.includes(".")
+          ? RAW_FIELD_GROUP_LABEL_BY_NAMESPACE[key.split(".")[0] ?? ""] ?? "raw"
+          : "raw",
+        sampleValueType:
+          typeof value === "number" ? "number" : typeof value === "boolean" ? "boolean" : "string",
+      });
+    }
+  }
+
+  return Array.from(catalog.values());
+}
+
 function resolveFallbackActiveSheet(input: {
   result: QuickCollectFocusRowsResult;
   selectedStore: SelectedStoreRef;
@@ -108,6 +144,7 @@ function resolveFallbackActiveSheet(input: {
     scopeRowCount: input.result.focusedRows.length,
     filteredRowCount: input.result.focusedRows.length,
     invoiceReadyCount: input.result.invoiceReadyCount,
+    rawFieldCatalog: buildQuickCollectRawFieldCatalog(input.result.focusedRows),
     scopeCounts: { ...EMPTY_SCOPE_COUNTS },
     invoiceCounts: { ...EMPTY_INVOICE_COUNTS },
     orderCounts: { ...EMPTY_ORDER_COUNTS },
