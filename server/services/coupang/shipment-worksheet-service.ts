@@ -45,6 +45,7 @@ import { buildCoupangCustomerServiceIssueState } from "./customer-service-issues
 import { getProductDetail } from "./product-service";
 import { coupangSettingsStore } from "./settings-store";
 import {
+  WORKSHEET_ROW_WRITE_CHUNK_SIZE,
   coupangShipmentWorksheetStore,
   type CoupangShipmentWorksheetSyncState,
 } from "./shipment-worksheet-store";
@@ -565,6 +566,7 @@ const ORDER_DETAIL_REFRESH_HOURS = 6;
 const QUICK_COLLECT_REQUIRED_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
 const QUICK_COLLECT_PAGE_SIZE = 50;
 const QUICK_COLLECT_MAX_PAGES = 10;
+const WORKSHEET_CHECKPOINT_FLUSH_SIZE = 100;
 const WORKSHEET_AUDIT_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
 const WORKSHEET_AUDIT_MAX_RANGE_DAYS = 7;
 const WORKSHEET_AUDIT_PAGE_SIZE = 50;
@@ -625,9 +627,15 @@ type ShipmentWorksheetRefreshPhaseState = {
   warningPhases: CoupangShipmentWorksheetSyncPhase[];
 };
 
+type ShipmentQuickCollectStatusBatch = {
+  status: string;
+  items: CoupangOrderRow[];
+};
+
 type ShipmentOrderLookupResult = Pick<CoupangOrderListResponse, "items" | "source" | "message"> & {
   hasRequiredFailure?: boolean;
   failedStatuses?: string[];
+  statusBatches?: ShipmentQuickCollectStatusBatch[];
 };
 
 function createEmptySyncState(): CoupangShipmentWorksheetSyncState {
@@ -953,6 +961,7 @@ async function fetchQuickCollectOrders(input: {
     : [...QUICK_COLLECT_REQUIRED_STATUSES];
   const collectedBySourceKey = new Map<string, CoupangOrderRow>();
   const failures: string[] = [];
+  const statusBatches: ShipmentQuickCollectStatusBatch[] = [];
   let hasRequiredFailure = false;
   let succeededStatusCount = 0;
   const quickCollectPageSize = Math.max(QUICK_COLLECT_PAGE_SIZE, input.maxPerPage ?? QUICK_COLLECT_PAGE_SIZE);
@@ -1007,6 +1016,11 @@ async function fetchQuickCollectOrders(input: {
         return;
       }
 
+      statusBatches.push({
+        status,
+        items: response.items,
+      });
+
       for (const row of response.items) {
         const sourceKey = buildSourceKey(input.storeId, row);
         const existing = collectedBySourceKey.get(sourceKey);
@@ -1060,6 +1074,7 @@ async function fetchQuickCollectOrders(input: {
     ]),
     hasRequiredFailure,
     failedStatuses,
+    statusBatches,
   } satisfies ShipmentOrderLookupResult;
 }
 
@@ -1910,6 +1925,9 @@ function buildSyncSummary(input: {
   degraded?: boolean;
   failedStatuses?: string[];
   autoAuditRecommended?: boolean;
+  checkpointCount?: number;
+  checkpointPersistedCount?: number;
+  lastCheckpointAt?: string | null;
 }): CoupangShipmentWorksheetSyncSummary {
   return {
     mode: input.plan.mode,
@@ -1929,7 +1947,249 @@ function buildSyncSummary(input: {
     degraded: input.degraded === true,
     failedStatuses: input.failedStatuses ?? [],
     autoAuditRecommended: input.autoAuditRecommended === true,
+    checkpointCount:
+      input.plan.mode === "new_only" ? Math.max(0, input.checkpointCount ?? 0) : 0,
+    checkpointPersistedCount:
+      input.plan.mode === "new_only" ? Math.max(0, input.checkpointPersistedCount ?? 0) : 0,
+    lastCheckpointAt:
+      input.plan.mode === "new_only" ? input.lastCheckpointAt ?? null : null,
   };
+}
+
+type ShipmentWorksheetPersistContext = {
+  operation: "set" | "upsert";
+  storeId: string;
+  mode: CoupangShipmentSyncMode;
+  persistRowCount: number;
+  createdAtFrom: string;
+  createdAtTo: string;
+};
+
+function getWorksheetPersistChunkCount(rowCount: number) {
+  if (rowCount <= 0) {
+    return 0;
+  }
+
+  return Math.ceil(rowCount / WORKSHEET_ROW_WRITE_CHUNK_SIZE);
+}
+
+function extractWorksheetDatabaseErrorInfo(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return {
+      code: null,
+      constraint: null,
+      column: null,
+      detail: null,
+    };
+  }
+
+  const record = error as Record<string, unknown>;
+  return {
+    code: typeof record.code === "string" ? record.code : null,
+    constraint: typeof record.constraint === "string" ? record.constraint : null,
+    column: typeof record.column === "string" ? record.column : null,
+    detail: typeof record.detail === "string" ? record.detail : null,
+  };
+}
+
+function buildWorksheetPersistErrorMessage(
+  context: ShipmentWorksheetPersistContext,
+  error: unknown,
+) {
+  const info = extractWorksheetDatabaseErrorInfo(error);
+  const chunkCount = getWorksheetPersistChunkCount(context.persistRowCount);
+
+  if (info.code === "23505") {
+    return `배송 시트 저장 중 중복 키 충돌이 발생했습니다. 제약=${info.constraint ?? "unknown"}, mode=${context.mode}, storeId=${context.storeId}`;
+  }
+
+  if (info.code === "23502") {
+    return `배송 시트 저장 중 필수 컬럼 누락이 발생했습니다. 컬럼=${info.column ?? "unknown"}, mode=${context.mode}, storeId=${context.storeId}`;
+  }
+
+  return `배송 시트 저장 중 DB 쓰기 오류가 발생했습니다. rows=${context.persistRowCount}, chunks=${chunkCount}, mode=${context.mode}, storeId=${context.storeId}`;
+}
+
+async function recordWorksheetPersistError(
+  context: ShipmentWorksheetPersistContext,
+  error: unknown,
+) {
+  const info = extractWorksheetDatabaseErrorInfo(error);
+  const chunkCount = getWorksheetPersistChunkCount(context.persistRowCount);
+
+  await recordSystemErrorEvent({
+    source: "coupang.shipment.collect.persist",
+    channel: "coupang",
+    error,
+    meta: {
+      phase: "worksheet_persist",
+      operation: context.operation,
+      storeId: context.storeId,
+      mode: context.mode,
+      persistRowCount: context.persistRowCount,
+      chunkSize: WORKSHEET_ROW_WRITE_CHUNK_SIZE,
+      chunkCount,
+      createdAtFrom: context.createdAtFrom,
+      createdAtTo: context.createdAtTo,
+      dbCode: info.code,
+      constraint: info.constraint,
+      column: info.column,
+      detail: info.detail,
+    },
+  });
+}
+
+async function setWorksheetStoreSheetWithDiagnostics(
+  input: Parameters<typeof coupangShipmentWorksheetStore.setStoreSheet>[0],
+  context: Omit<ShipmentWorksheetPersistContext, "operation" | "persistRowCount">,
+) {
+  try {
+    return await coupangShipmentWorksheetStore.setStoreSheet(input);
+  } catch (error) {
+    await recordWorksheetPersistError(
+      {
+        ...context,
+        operation: "set",
+        persistRowCount: input.items.length,
+      },
+      error,
+    );
+    throw new Error(
+      buildWorksheetPersistErrorMessage(
+        {
+          ...context,
+          operation: "set",
+          persistRowCount: input.items.length,
+        },
+        error,
+      ),
+    );
+  }
+}
+
+async function upsertWorksheetStoreRowsWithDiagnostics(
+  input: Parameters<typeof coupangShipmentWorksheetStore.upsertStoreRows>[0],
+  context: Omit<ShipmentWorksheetPersistContext, "operation" | "persistRowCount">,
+) {
+  try {
+    return await coupangShipmentWorksheetStore.upsertStoreRows(input);
+  } catch (error) {
+    await recordWorksheetPersistError(
+      {
+        ...context,
+        operation: "upsert",
+        persistRowCount: input.items.length,
+      },
+      error,
+    );
+    throw new Error(
+      buildWorksheetPersistErrorMessage(
+        {
+          ...context,
+          operation: "upsert",
+          persistRowCount: input.items.length,
+        },
+        error,
+      ),
+    );
+  }
+}
+
+async function buildCollectedWorksheetRows(input: {
+  store: StoredCoupangStore;
+  collectionCandidates: ShipmentWorksheetCollectionCandidate[];
+  nowIso: string;
+  selpickAllocator: ReturnType<typeof createSelpickAllocator>;
+  platformKey: ReturnType<typeof resolvePlatformKey>;
+  shouldHydrateOptionsDuringCollect: (
+    currentRow: CoupangShipmentWorksheetRow | undefined,
+  ) => boolean;
+}) {
+  const optionHydrationCandidates = input.collectionCandidates.filter((candidate) =>
+    input.shouldHydrateOptionsDuringCollect(candidate.currentRow),
+  );
+  const optionDetailByShipmentBoxId = new Map<string, CoupangOrderDetail | null>();
+
+  if (optionHydrationCandidates.length) {
+    const detailTargets = Array.from(
+      new Set(
+        optionHydrationCandidates
+          .map((candidate) => normalizeWhitespace(candidate.row.shipmentBoxId))
+          .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+      ),
+    );
+
+    const detailResults = await mapWithConcurrency(detailTargets, 4, async (shipmentBoxId) => {
+      try {
+        const response = await getOrderDetail({
+          storeId: input.store.id,
+          shipmentBoxId,
+          includeCustomerService: false,
+        });
+
+        return response.source === "live" ? response.item : null;
+      } catch {
+        return null;
+      }
+    });
+
+    detailTargets.forEach((shipmentBoxId, index) => {
+      optionDetailByShipmentBoxId.set(shipmentBoxId, detailResults[index] ?? null);
+    });
+  }
+
+  const collectProductDetailPromiseBySellerProductId = new Map<
+    string,
+    Promise<Awaited<ReturnType<typeof getProductDetail>> | null>
+  >();
+  const getCollectProductDetailCached = (row: CoupangOrderRow) => {
+    if (!row.sellerProductId) {
+      return Promise.resolve(null);
+    }
+
+    const cached = collectProductDetailPromiseBySellerProductId.get(row.sellerProductId);
+    if (cached) {
+      return cached;
+    }
+
+    const nextPromise = getProductDetail({
+      storeId: input.store.id,
+      sellerProductId: row.sellerProductId,
+    })
+      .then((response) => (response?.source === "live" && response.item ? response : null))
+      .catch(() => null);
+
+    collectProductDetailPromiseBySellerProductId.set(row.sellerProductId, nextPromise);
+    return nextPromise;
+  };
+
+  return mapWithConcurrency(input.collectionCandidates, 4, async (candidate) =>
+    buildWorksheetRow({
+      store: input.store,
+      row: candidate.row,
+      currentRow: candidate.currentRow,
+      nowIso: input.nowIso,
+      detail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
+        ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
+        : null,
+      productDetail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
+        ? await getCollectProductDetailCached(candidate.row)
+        : null,
+      selpickOrderNumber:
+        candidate.currentRow?.selpickOrderNumber ??
+        input.selpickAllocator.next(
+          input.store.storeName,
+          resolveWorksheetOrderDateParts({
+            orderedAt: candidate.row.orderedAt,
+            paidAt: candidate.row.paidAt,
+            currentOrderedAtRaw: candidate.currentRow?.orderedAtRaw,
+            currentCreatedAt: candidate.currentRow?.createdAt,
+            nowIso: input.nowIso,
+          }).key,
+          input.platformKey.key,
+        ),
+    }),
+  );
 }
 
 export function isShipmentWorksheetCandidate(row: ShipmentWorksheetCandidateRow) {
@@ -2143,6 +2403,217 @@ function buildWorksheetRow(input: {
     createdAt: currentRow?.createdAt ?? nowIso,
     updatedAt: nowIso,
   } satisfies CoupangShipmentWorksheetRow;
+}
+
+async function collectShipmentWorksheetNewOnly(input: {
+  request: CollectCoupangShipmentInput;
+  store: StoredCoupangStore;
+  currentSheet: WorksheetStoreSheet;
+  archivedSourceKeys: Set<string>;
+  selpickAllocator: ReturnType<typeof createSelpickAllocator>;
+  platformKey: ReturnType<typeof resolvePlatformKey>;
+  nowIso: string;
+  syncPlan: ShipmentWorksheetSyncPlan & { mode: "new_only" };
+  listResponse: ShipmentOrderLookupResult;
+  failedStatuses: string[];
+  syncModeLabel: string;
+}) {
+  const mergedBySourceKey = new Map(
+    input.currentSheet.items.map((row) => [row.sourceKey, row] as const),
+  );
+  const statusBatches =
+    input.listResponse.statusBatches ??
+    (input.listResponse.items.length
+      ? [
+          {
+            status: input.syncPlan.statusFilter ?? "UNKNOWN",
+            items: input.listResponse.items,
+          },
+        ]
+      : []);
+  const checkpointSyncState = input.currentSheet.syncState ?? createEmptySyncState();
+  const finalSyncState = buildNextSyncState(checkpointSyncState, input.syncPlan, input.nowIso);
+  const buildBaseMessage = () =>
+    mergeMessages([
+      input.listResponse.message,
+      input.platformKey.warning,
+      collectionCandidateCount > 0
+        ? "워크시트 반영 후 주문 상세, 상품 상세, CS 상태 보강이 이어서 진행됩니다."
+        : null,
+    ]);
+
+  let collectionCandidateCount = 0;
+  let insertedCount = 0;
+  const insertedSourceKeys: string[] = [];
+  let skippedHydrationCount = 0;
+  let checkpointCount = 0;
+  let checkpointPersistedCount = 0;
+  let lastCheckpointAt: string | null = null;
+  let pendingCheckpointRows: CoupangShipmentWorksheetRow[] = [];
+
+  const buildPhaseState = () =>
+    buildCollectPhaseState({
+      hasCollectWarnings: Boolean(input.listResponse.message || input.platformKey.warning),
+      hasOrderDetailHydration: collectionCandidateCount > 0,
+      hasProductDetailHydration: collectionCandidateCount > 0,
+      hasCustomerServiceRefresh: collectionCandidateCount > 0,
+    });
+  const buildSummary = (override?: {
+    checkpointCount?: number;
+    checkpointPersistedCount?: number;
+    lastCheckpointAt?: string | null;
+  }) =>
+    buildSyncSummary({
+      plan: input.syncPlan,
+      fetchedCount: collectionCandidateCount,
+      insertedCount,
+      insertedSourceKeys,
+      updatedCount: 0,
+      skippedHydrationCount,
+      phaseState: buildPhaseState(),
+      degraded: input.failedStatuses.length > 0,
+      failedStatuses: input.failedStatuses,
+      autoAuditRecommended: input.failedStatuses.length > 0,
+      checkpointCount: override?.checkpointCount ?? checkpointCount,
+      checkpointPersistedCount:
+        override?.checkpointPersistedCount ?? checkpointPersistedCount,
+      lastCheckpointAt: override?.lastCheckpointAt ?? lastCheckpointAt,
+    });
+  const persistCheckpoint = async (rows: CoupangShipmentWorksheetRow[]) => {
+    if (!rows.length) {
+      return;
+    }
+
+    const nextCheckpointCount = checkpointCount + 1;
+    const nextCheckpointPersistedCount = checkpointPersistedCount + rows.length;
+    const checkpointAt = new Date().toISOString();
+
+    await upsertWorksheetStoreRowsWithDiagnostics(
+      {
+        storeId: input.request.storeId,
+        items: rows,
+        collectedAt: input.nowIso,
+        source: input.listResponse.source,
+        message: buildBaseMessage(),
+        syncState: checkpointSyncState,
+        syncSummary: buildSummary({
+          checkpointCount: nextCheckpointCount,
+          checkpointPersistedCount: nextCheckpointPersistedCount,
+          lastCheckpointAt: checkpointAt,
+        }),
+      },
+      {
+        storeId: input.request.storeId,
+        mode: input.syncPlan.mode,
+        createdAtFrom: input.syncPlan.fetchCreatedAtFrom,
+        createdAtTo: input.syncPlan.fetchCreatedAtTo,
+      },
+    );
+
+    checkpointCount = nextCheckpointCount;
+    checkpointPersistedCount = nextCheckpointPersistedCount;
+    lastCheckpointAt = checkpointAt;
+  };
+  const flushPendingCheckpointRows = async (force = false) => {
+    while (pendingCheckpointRows.length >= WORKSHEET_CHECKPOINT_FLUSH_SIZE) {
+      const rows = pendingCheckpointRows.slice(0, WORKSHEET_CHECKPOINT_FLUSH_SIZE);
+      await persistCheckpoint(rows);
+      pendingCheckpointRows = pendingCheckpointRows.slice(WORKSHEET_CHECKPOINT_FLUSH_SIZE);
+    }
+
+    if (force && pendingCheckpointRows.length) {
+      const rows = pendingCheckpointRows;
+      pendingCheckpointRows = [];
+      await persistCheckpoint(rows);
+    }
+  };
+
+  for (const statusBatch of statusBatches) {
+    const batchCandidates: ShipmentWorksheetCollectionCandidate[] = statusBatch.items
+      .filter(isShipmentWorksheetCandidate)
+      .map((row) => {
+        const sourceKey = buildSourceKey(input.request.storeId, row);
+        const currentRow = mergedBySourceKey.get(sourceKey);
+
+        return {
+          row,
+          sourceKey,
+          currentRow,
+          shouldHydrateOrder: shouldHydrateOrderRow(row, currentRow, input.nowIso),
+          shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
+        } satisfies ShipmentWorksheetCollectionCandidate;
+      })
+      .filter((candidate) => !input.archivedSourceKeys.has(candidate.sourceKey))
+      .filter((candidate) => !candidate.currentRow);
+
+    if (!batchCandidates.length) {
+      continue;
+    }
+
+    collectionCandidateCount += batchCandidates.length;
+    skippedHydrationCount += batchCandidates.filter(
+      (candidate) => !candidate.shouldHydrateOrder && !candidate.shouldHydrateProduct,
+    ).length;
+
+    const batchRows = await buildCollectedWorksheetRows({
+      store: input.store,
+      collectionCandidates: batchCandidates,
+      nowIso: input.nowIso,
+      selpickAllocator: input.selpickAllocator,
+      platformKey: input.platformKey,
+      shouldHydrateOptionsDuringCollect: () => false,
+    });
+
+    for (const row of batchRows) {
+      insertedCount += 1;
+      insertedSourceKeys.push(row.sourceKey);
+      mergedBySourceKey.set(row.sourceKey, row);
+      pendingCheckpointRows.push(row);
+    }
+
+    await flushPendingCheckpointRows(true);
+  }
+
+  const finalMessage = mergeMessages([
+    buildBaseMessage(),
+    insertedCount > 0
+      ? `${input.syncModeLabel}에서 신규 주문 ${insertedCount}건을 워크시트에 추가했습니다.`
+      : "이미 동일한 신규 주문 정보가 반영되어 있어 변경한 내용이 없습니다.",
+  ]);
+  const finalSummary = buildSummary();
+
+  await upsertWorksheetStoreRowsWithDiagnostics(
+    {
+      storeId: input.request.storeId,
+      items: [],
+      collectedAt: input.nowIso,
+      source: input.listResponse.source,
+      message: finalMessage,
+      syncState: finalSyncState,
+      syncSummary: finalSummary,
+    },
+    {
+      storeId: input.request.storeId,
+      mode: input.syncPlan.mode,
+      createdAtFrom: input.syncPlan.fetchCreatedAtFrom,
+      createdAtTo: input.syncPlan.fetchCreatedAtTo,
+    },
+  );
+
+  return buildWorksheetResponse(
+    input.store,
+    {
+      ...input.currentSheet,
+      items: Array.from(mergedBySourceKey.values()),
+      collectedAt: input.nowIso,
+      source: input.listResponse.source,
+      message: finalMessage,
+      syncState: finalSyncState,
+      syncSummary: finalSummary,
+      updatedAt: input.nowIso,
+    },
+    finalMessage,
+  );
 }
 
 function shouldRefreshWorksheetOrderDetail(
@@ -3026,6 +3497,27 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     );
   }
 
+  const failedStatuses =
+    insertOnlyMode && "failedStatuses" in listResponse ? listResponse.failedStatuses ?? [] : [];
+  if (insertOnlyMode) {
+    return collectShipmentWorksheetNewOnly({
+      request: input,
+      store,
+      currentSheet,
+      archivedSourceKeys,
+      selpickAllocator,
+      platformKey,
+      nowIso: now,
+      syncPlan: {
+        ...syncPlan,
+        mode: "new_only",
+      },
+      listResponse,
+      failedStatuses,
+      syncModeLabel,
+    });
+  }
+
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
   const claimWarnings: string[] = [];
   const collectionCandidates: ShipmentWorksheetCollectionCandidate[] = candidateRows
@@ -3041,53 +3533,12 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
       } satisfies ShipmentWorksheetCollectionCandidate;
     })
-    .filter((candidate) => !archivedSourceKeys.has(candidate.sourceKey))
-    .filter((candidate) => !insertOnlyMode || !candidate.currentRow);
-  const failedStatuses =
-    insertOnlyMode && "failedStatuses" in listResponse ? listResponse.failedStatuses ?? [] : [];
-  if (insertOnlyMode && !collectionCandidates.length) {
-    const syncState = buildNextSyncState(
-      currentSheet.syncState ?? createEmptySyncState(),
-      syncPlan,
-      now,
-    );
-    const syncSummary = buildSyncSummary({
-      plan: syncPlan,
-      fetchedCount: 0,
-      insertedCount: 0,
-      insertedSourceKeys: [],
-      updatedCount: 0,
-      skippedHydrationCount: 0,
-      phaseState: buildCollectPhaseState({
-        hasCollectWarnings: Boolean(listResponse.message || platformKey.warning),
-        hasOrderDetailHydration: false,
-        hasProductDetailHydration: false,
-        hasCustomerServiceRefresh: false,
-      }),
-      degraded: failedStatuses.length > 0,
-      failedStatuses,
-      autoAuditRecommended: failedStatuses.length > 0,
-    });
-    const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
-      storeId: input.storeId,
-      items: currentSheet.items,
-      collectedAt: now,
-      source: listResponse.source,
-      message: mergeMessages([listResponse.message, platformKey.warning]),
-      syncState,
-      syncSummary,
-    });
-
-    return buildWorksheetResponse(store, sheet, sheet.message);
-  }
+    .filter((candidate) => !archivedSourceKeys.has(candidate.sourceKey));
   const collectionCandidateBySourceKey = new Map(
     collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
   );
   const claimGroupsBySourceKey = new Map<string, ShipmentWorksheetClaimGroup>();
-  const shouldLookupClaimsDuringCollect = !insertOnlyMode;
-  const shouldHydrateOptionsDuringCollect = (
-    currentRow: CoupangShipmentWorksheetRow | undefined,
-  ) => !insertOnlyMode && shouldHydrateWorksheetOptionDuringCollect(currentRow);
+  const shouldLookupClaimsDuringCollect = true;
   let returnsLookup: PromiseSettledResult<Awaited<ReturnType<typeof listReturns>>> | null = null;
   let exchangesLookup: PromiseSettledResult<Awaited<ReturnType<typeof listExchanges>>> | null = null;
 
@@ -3605,91 +4056,15 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
 
   */
-  const optionHydrationCandidates = collectionCandidates.filter((candidate) =>
-    shouldHydrateOptionsDuringCollect(candidate.currentRow),
-  );
-  const optionDetailByShipmentBoxId = new Map<string, CoupangOrderDetail | null>();
-
-  if (optionHydrationCandidates.length) {
-    const detailTargets = Array.from(
-      new Set(
-        optionHydrationCandidates
-          .map((candidate) => normalizeWhitespace(candidate.row.shipmentBoxId))
-          .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
-      ),
-    );
-
-    const detailResults = await mapWithConcurrency(detailTargets, 4, async (shipmentBoxId) => {
-      try {
-        const response = await getOrderDetail({
-          storeId: input.storeId,
-          shipmentBoxId,
-          includeCustomerService: false,
-        });
-
-        return response.source === "live" ? response.item : null;
-      } catch {
-        return null;
-      }
-    });
-
-    detailTargets.forEach((shipmentBoxId, index) => {
-      optionDetailByShipmentBoxId.set(shipmentBoxId, detailResults[index] ?? null);
-    });
-  }
-
-  const collectProductDetailPromiseBySellerProductId = new Map<
-    string,
-    Promise<Awaited<ReturnType<typeof getProductDetail>> | null>
-  >();
-  const getCollectProductDetailCached = (row: CoupangOrderRow) => {
-    if (!row.sellerProductId) {
-      return Promise.resolve(null);
-    }
-
-    const cached = collectProductDetailPromiseBySellerProductId.get(row.sellerProductId);
-    if (cached) {
-      return cached;
-    }
-
-    const nextPromise = getProductDetail({
-      storeId: input.storeId,
-      sellerProductId: row.sellerProductId,
-    })
-      .then((response) => (response?.source === "live" && response.item ? response : null))
-      .catch(() => null);
-
-    collectProductDetailPromiseBySellerProductId.set(row.sellerProductId, nextPromise);
-    return nextPromise;
-  };
-
-  const fetchedRows = await mapWithConcurrency(collectionCandidates, 4, async (candidate) =>
-    buildWorksheetRow({
-      store,
-      row: candidate.row,
-      currentRow: candidate.currentRow,
-      nowIso: now,
-      detail: shouldHydrateOptionsDuringCollect(candidate.currentRow)
-        ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
-        : null,
-      productDetail: shouldHydrateOptionsDuringCollect(candidate.currentRow)
-        ? await getCollectProductDetailCached(candidate.row)
-        : null,
-      selpickOrderNumber:
-        candidate.currentRow?.selpickOrderNumber ??
-        selpickAllocator.next(
-          store.storeName,
-          resolveWorksheetOrderDateParts({
-            orderedAt: candidate.row.orderedAt,
-            paidAt: candidate.row.paidAt,
-            currentOrderedAtRaw: candidate.currentRow?.orderedAtRaw,
-            currentCreatedAt: candidate.currentRow?.createdAt,
-            nowIso: now,
-          }).key,
-          platformKey.key,
-        ),
-    }),
-  );
+  const fetchedRows = await buildCollectedWorksheetRows({
+    store,
+    collectionCandidates,
+    nowIso: now,
+    selpickAllocator,
+    platformKey,
+    shouldHydrateOptionsDuringCollect: (currentRow) =>
+      shouldHydrateWorksheetOptionDuringCollect(currentRow),
+  });
 
   let insertedCount = 0;
   const insertedSourceKeys: string[] = [];
@@ -3737,7 +4112,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     failedStatuses,
     autoAuditRecommended: failedStatuses.length > 0,
   });
-  const sheet = await coupangShipmentWorksheetStore.setStoreSheet({
+  const sheet = await setWorksheetStoreSheetWithDiagnostics({
     storeId: input.storeId,
     items: Array.from(mergedBySourceKey.values()),
     collectedAt: now,
@@ -3765,6 +4140,11 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     ]),
     syncState,
     syncSummary,
+  }, {
+    storeId: input.storeId,
+    mode: syncPlan.mode,
+    createdAtFrom: syncPlan.fetchCreatedAtFrom,
+    createdAtTo: syncPlan.fetchCreatedAtTo,
   });
 
   return buildWorksheetResponse(store, sheet);

@@ -1159,6 +1159,9 @@ export interface CoupangShipmentWorksheetSyncSummary {
   degraded?: boolean;
   failedStatuses?: string[];
   autoAuditRecommended?: boolean;
+  checkpointCount?: number;
+  checkpointPersistedCount?: number;
+  lastCheckpointAt?: string | null;
 }
 
 export interface CoupangShipmentWorksheetResponse {

@@ -22,6 +22,36 @@
 - 검증:
   - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
 
+## 2026-04-19 / 쿠팡 배송 시트 저장 핫픽스와 체크포인트 누적 저장
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/interfaces/coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `shared/coupang.ts`
+  - `docs/change-log.md`
+  - `docs/current-status.md`
+- 변경 내용:
+  - `coupang_shipment_rows` 저장은 이제 200행 단위 청크 쓰기로 나눠 처리합니다.
+  - `setStoreSheet()`와 `upsertStoreRows()`는 같은 `storeId`에 대해 Postgres advisory transaction lock을 잡아 동시 collect/refresh/checkpoint 저장이 서로 엇갈리지 않게 했습니다.
+  - 저장소 포트에 `upsertStoreRows()`를 추가해 `source_key` 기준 누적 저장 경로를 만들었고, `new_only` 빠른 수집은 상태 배치 종료 또는 신규 100행 누적 시 체크포인트 저장을 수행합니다.
+  - collect DB 예외는 이제 `23505`, `23502`, 일반 쓰기 실패를 구분해 사용자 메시지와 시스템 로그 메타를 남깁니다.
+  - `syncSummary`에는 `checkpointCount`, `checkpointPersistedCount`, `lastCheckpointAt`가 optional로 추가됩니다.
+- 이유:
+  - 기존 구조는 `delete -> 단일 대량 insert` 한 번으로 전체 시트를 다시 써서, 2천 건 이상에서 SQL 크기/파라미터 수/메모리 부담이 커지고 Cloud Run 인스턴스가 중간에 죽을 여지가 있었습니다.
+  - 빠른 수집도 끝까지 완주해야만 결과가 남는 구조라, 중간 실패 시 앞에서 받은 신규 주문이 전혀 누적되지 않았습니다.
+- 남은 점:
+  - 이번 변경은 체크포인트 저장 기반과 메타데이터까지만 깔았습니다.
+  - 사용자에게 각 행별 수집 진행 상황을 바로 보여주는 UI는 아직 별도 작업이 필요합니다.
+- 검증:
+  - `npm test -- server/services/coupang/shipment-worksheet-collection.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `npm run check`
+
 ## 2026-04-19 / 쿠팡 API 기본 요청 스케줄러 완화
 
 - 변경 유형:

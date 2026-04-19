@@ -34,6 +34,16 @@ export type SetCoupangShipmentWorksheetStoreSheetInput = {
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
 };
 
+export type UpsertCoupangShipmentWorksheetRowsInput = {
+  storeId: string;
+  items: CoupangShipmentWorksheetRow[];
+  collectedAt: string | null;
+  source: CoupangDataSource;
+  message: string | null;
+  syncState: CoupangShipmentWorksheetSyncState;
+  syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+};
+
 export type PatchCoupangShipmentWorksheetRowsInput = {
   storeId: string;
   items: PatchCoupangShipmentWorksheetItemInput[];
@@ -63,6 +73,9 @@ export interface CoupangShipmentWorksheetStorePort {
   getStoreSheet(storeId: string): Promise<CoupangShipmentWorksheetStoreSheet>;
   setStoreSheet(
     input: SetCoupangShipmentWorksheetStoreSheetInput,
+  ): Promise<CoupangShipmentWorksheetStoreSheet>;
+  upsertStoreRows(
+    input: UpsertCoupangShipmentWorksheetRowsInput,
   ): Promise<CoupangShipmentWorksheetStoreSheet>;
   patchRows(input: PatchCoupangShipmentWorksheetRowsInput): Promise<PatchCoupangShipmentWorksheetRowsResult>;
   getArchivedRows(storeId: string): Promise<CoupangShipmentArchiveRow[]>;

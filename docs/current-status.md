@@ -57,6 +57,9 @@
 ### 빠른 수집 직후 신규 주문 우선 보기
 - `빠른 수집(new_only)` 응답은 `insertedSourceKeys`를 반환합니다.
 - `빠른 수집(new_only)`는 이제 마지막 수집 시점 기준 최근 24시간 겹침 구간만 다시 조회하고, 신규 row 저장만 먼저 끝낸 뒤 상세/상품/CS 보강은 `pending_after_collect` 백그라운드 refresh로 넘깁니다.
+- 같은 `빠른 수집(new_only)`는 상태 배치 종료 또는 신규 100행 누적 시점마다 `source_key` 기준 checkpoint upsert를 수행해, 중간에 작업이 끊겨도 앞에서 받은 신규 주문이 워크시트에 남도록 바뀌었습니다.
+- collect 저장 경로는 `delete -> 단일 대량 insert` 대신 200행 단위 청크 쓰기를 사용하고, 같은 스토어에 대한 저장 트랜잭션은 advisory lock으로 직렬화합니다.
+- collect 저장 실패 메시지는 이제 `중복 키(23505)`, `필수 컬럼 null(23502)`, 일반 DB 쓰기 실패를 구분해 남기며, 시스템 로그에도 `rowCount / chunkCount / mode / storeId / constraint / column` 메타를 함께 기록합니다.
 - 신규 주문이 실제로 추가되면 워크시트는 방금 추가된 주문만 임시로 먼저 보여줍니다.
 - 이 임시 집중 보기는 아래 동작에서 자동 해제됩니다.
   - 스토어 변경

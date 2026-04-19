@@ -18,6 +18,7 @@ const {
   getStoreSheetMock,
   getArchivedSourceKeysMock,
   setStoreSheetMock,
+  upsertStoreRowsMock,
   recordSystemErrorEventMock,
 } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
@@ -31,6 +32,7 @@ const {
   getStoreSheetMock: vi.fn(),
   getArchivedSourceKeysMock: vi.fn(),
   setStoreSheetMock: vi.fn(),
+  upsertStoreRowsMock: vi.fn(),
   recordSystemErrorEventMock: vi.fn(),
 }));
 
@@ -54,10 +56,12 @@ vi.mock("./product-service", () => ({
 }));
 
 vi.mock("./shipment-worksheet-store", () => ({
+  WORKSHEET_ROW_WRITE_CHUNK_SIZE: 200,
   coupangShipmentWorksheetStore: {
     getStoreSheet: getStoreSheetMock,
     getArchivedSourceKeys: getArchivedSourceKeysMock,
     setStoreSheet: setStoreSheetMock,
+    upsertStoreRows: upsertStoreRowsMock,
   },
 }));
 
@@ -379,6 +383,24 @@ describe("coupang shipment worksheet collection", () => {
     });
     getProductDetailMock.mockResolvedValue(null);
     setStoreSheetMock.mockImplementation(
+      async (input: {
+        items: unknown[];
+        collectedAt: string;
+        source: "live" | "fallback";
+        message: string | null;
+        syncState: unknown;
+        syncSummary: unknown;
+      }) => ({
+        items: input.items,
+        collectedAt: input.collectedAt,
+        source: input.source,
+        message: input.message,
+        syncState: input.syncState,
+        syncSummary: input.syncSummary,
+        updatedAt: input.collectedAt,
+      }),
+    );
+    upsertStoreRowsMock.mockImplementation(
       async (input: {
         items: unknown[];
         collectedAt: string;
@@ -1326,6 +1348,61 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
+  it("persists new-only checkpoints in 100-row batches before the final metadata update", async () => {
+    listOrdersMock.mockImplementation(async (input: { status?: string }) => {
+      if (input.status === "INSTRUCT") {
+        return {
+          items: Array.from({ length: 120 }, (_, index) =>
+            buildOrderRow({
+              id: `${200 + index}:V-${200 + index}`,
+              shipmentBoxId: String(200 + index),
+              orderId: `O-${200 + index}`,
+              vendorItemId: `V-${200 + index}`,
+              status: "INSTRUCT",
+              productName: `Checkpoint Product ${index + 1}`,
+              availableActions: ["uploadInvoice"],
+            }),
+          ),
+          source: "live" as const,
+          message: null,
+        };
+      }
+
+      return {
+        items: [],
+        source: "live" as const,
+        message: null,
+      };
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "new_only",
+    });
+
+    expect(upsertStoreRowsMock).toHaveBeenCalledTimes(3);
+    expect(
+      (upsertStoreRowsMock.mock.calls[0]?.[0] as { items: unknown[] } | undefined)?.items,
+    ).toHaveLength(100);
+    expect(
+      (upsertStoreRowsMock.mock.calls[1]?.[0] as { items: unknown[] } | undefined)?.items,
+    ).toHaveLength(20);
+    expect(
+      (upsertStoreRowsMock.mock.calls[2]?.[0] as { items: unknown[] } | undefined)?.items,
+    ).toHaveLength(0);
+    expect(result.syncSummary).toMatchObject({
+      mode: "new_only",
+      insertedCount: 120,
+      checkpointCount: 2,
+      checkpointPersistedCount: 120,
+    });
+    expect(result.syncSummary?.lastCheckpointAt).toBeTypeOf("string");
+  });
+
   it("narrows new-only quick collect to the recent overlap window", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
@@ -1597,6 +1674,147 @@ describe("coupang shipment worksheet collection", () => {
     expect(listExchangesMock).not.toHaveBeenCalled();
     expect(getOrderDetailMock).not.toHaveBeenCalled();
     expect(getProductDetailMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes duplicate key persistence errors with constraint details", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "300:V-300",
+          shipmentBoxId: "300",
+          orderId: "O-300",
+          vendorItemId: "V-300",
+          status: "INSTRUCT",
+          productName: "Duplicate Row",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    setStoreSheetMock.mockRejectedValueOnce({
+      code: "23505",
+      constraint: "coupang_shipment_rows_source_key_uidx",
+      message: "duplicate key value violates unique constraint",
+    });
+
+    await expect(
+      collectShipmentWorksheet({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-25",
+        createdAtTo: "2026-03-26",
+        status: "",
+        maxPerPage: 20,
+      }),
+    ).rejects.toThrow(
+      "배송 시트 저장 중 중복 키 충돌이 발생했습니다. 제약=coupang_shipment_rows_source_key_uidx, mode=full, storeId=store-1",
+    );
+    expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coupang.shipment.collect.persist",
+        meta: expect.objectContaining({
+          operation: "set",
+          storeId: "store-1",
+          mode: "full",
+          dbCode: "23505",
+          constraint: "coupang_shipment_rows_source_key_uidx",
+        }),
+      }),
+    );
+  });
+
+  it("normalizes not-null persistence errors with column details during checkpoint upsert", async () => {
+    listOrdersMock.mockImplementation(async (input: { status?: string }) => ({
+      items:
+        input.status === "INSTRUCT"
+          ? [
+              buildOrderRow({
+                id: "400:V-400",
+                shipmentBoxId: "400",
+                orderId: "O-400",
+                vendorItemId: "V-400",
+                status: "INSTRUCT",
+                productName: "Null Column Row",
+                availableActions: ["uploadInvoice"],
+              }),
+            ]
+          : [],
+      source: "live" as const,
+      message: null,
+    }));
+    upsertStoreRowsMock.mockRejectedValueOnce({
+      code: "23502",
+      column: "order_id",
+      message: "null value in column",
+    });
+
+    await expect(
+      collectShipmentWorksheet({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-25",
+        createdAtTo: "2026-03-26",
+        status: "",
+        maxPerPage: 20,
+        syncMode: "new_only",
+      }),
+    ).rejects.toThrow(
+      "배송 시트 저장 중 필수 컬럼 누락이 발생했습니다. 컬럼=order_id, mode=new_only, storeId=store-1",
+    );
+    expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coupang.shipment.collect.persist",
+        meta: expect.objectContaining({
+          operation: "upsert",
+          storeId: "store-1",
+          mode: "new_only",
+          dbCode: "23502",
+          column: "order_id",
+        }),
+      }),
+    );
+  });
+
+  it("normalizes generic persistence errors with row and chunk metadata", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "500:V-500",
+          shipmentBoxId: "500",
+          orderId: "O-500",
+          vendorItemId: "V-500",
+          status: "INSTRUCT",
+          productName: "Socket Failure Row",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    setStoreSheetMock.mockRejectedValueOnce(new Error("socket hang up"));
+
+    await expect(
+      collectShipmentWorksheet({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-25",
+        createdAtTo: "2026-03-26",
+        status: "",
+        maxPerPage: 20,
+      }),
+    ).rejects.toThrow(
+      "배송 시트 저장 중 DB 쓰기 오류가 발생했습니다. rows=1, chunks=1, mode=full, storeId=store-1",
+    );
+    expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coupang.shipment.collect.persist",
+        meta: expect.objectContaining({
+          operation: "set",
+          storeId: "store-1",
+          mode: "full",
+          persistRowCount: 1,
+          chunkCount: 1,
+        }),
+      }),
+    );
   });
 
   it("stores the invoice currently registered in Coupang separately from local edits", async () => {

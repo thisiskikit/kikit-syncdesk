@@ -1,10 +1,16 @@
+import { mkdtemp, rm } from "fs/promises";
+import os from "os";
+import path from "path";
 import { describe, expect, it } from "vitest";
 
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import type { CoupangShipmentRowRow } from "@shared/schema";
 
 import {
+  CoupangShipmentWorksheetStore,
+  WORKSHEET_ROW_WRITE_CHUNK_SIZE,
   buildCompactWorksheetRowData,
+  chunkWorksheetRows,
   restoreWorksheetRowFromDatabaseRow,
 } from "./work-data-coupang-shipment-worksheet-store";
 
@@ -132,5 +138,131 @@ describe("work-data coupang shipment worksheet row persistence", () => {
     const restored = restoreWorksheetRowFromDatabaseRow(buildDatabaseRow(row, compact));
 
     expect(restored).toEqual(row);
+  });
+
+  it("splits worksheet rows into fixed-size write chunks", () => {
+    const rows = Array.from({ length: 2500 }, (_, index) => ({ id: `row-${index}` }));
+
+    const chunks = chunkWorksheetRows(rows);
+
+    expect(chunks).toHaveLength(Math.ceil(2500 / WORKSHEET_ROW_WRITE_CHUNK_SIZE));
+    expect(chunks.every((chunk) => chunk.length <= WORKSHEET_ROW_WRITE_CHUNK_SIZE)).toBe(true);
+    expect(chunks[0]?.length).toBe(WORKSHEET_ROW_WRITE_CHUNK_SIZE);
+    expect(chunks.at(-1)?.length).toBe(100);
+  });
+
+  it("upserts worksheet rows in legacy mode while keeping untouched rows", async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "coupang-worksheet-store-"));
+    try {
+      const store = new CoupangShipmentWorksheetStore(path.join(tempDirectory, "worksheet.json"));
+
+      await store.setStoreSheet({
+        storeId: "store-1",
+        items: [
+          buildWorksheetRow(),
+          {
+            ...buildWorksheetRow(),
+            id: "row-2",
+            sourceKey: "source-2",
+            shipmentBoxId: "S-2",
+            orderId: "O-2",
+            vendorItemId: "VI-2",
+            selpickOrderNumber: "O20260410K0002",
+            productOrderNumber: "PO-2",
+            productNumber: "P-2",
+            productOptionNumber: "V-2",
+            sellerProductId: "SP-2",
+            sellerProductCode: "SKU-2",
+            invoiceNumber: "222222222",
+          },
+        ],
+        collectedAt: "2026-04-10T03:00:00.000Z",
+        source: "live",
+        message: "before upsert",
+        syncState: {
+          lastIncrementalCollectedAt: null,
+          lastFullCollectedAt: null,
+          coveredCreatedAtFrom: null,
+          coveredCreatedAtTo: null,
+          lastStatusFilter: null,
+        },
+        syncSummary: null,
+      });
+
+      const upserted = await store.upsertStoreRows({
+        storeId: "store-1",
+        items: [
+          {
+            ...buildWorksheetRow(),
+            productName: "updated product",
+            invoiceNumber: "999999999",
+          },
+          {
+            ...buildWorksheetRow(),
+            id: "row-3",
+            sourceKey: "source-3",
+            shipmentBoxId: "S-3",
+            orderId: "O-3",
+            vendorItemId: "VI-3",
+            selpickOrderNumber: "O20260410K0003",
+            productOrderNumber: "PO-3",
+            productNumber: "P-3",
+            productOptionNumber: "V-3",
+            sellerProductId: "SP-3",
+            sellerProductCode: "SKU-3",
+            invoiceNumber: "333333333",
+          },
+        ],
+        collectedAt: "2026-04-10T04:00:00.000Z",
+        source: "live",
+        message: "after upsert",
+        syncState: {
+          lastIncrementalCollectedAt: "2026-04-10T04:00:00.000Z",
+          lastFullCollectedAt: null,
+          coveredCreatedAtFrom: "2026-04-10",
+          coveredCreatedAtTo: "2026-04-10",
+          lastStatusFilter: null,
+        },
+        syncSummary: {
+          mode: "new_only",
+          fetchedCount: 2,
+          insertedCount: 1,
+          insertedSourceKeys: ["source-3"],
+          updatedCount: 1,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-04-10",
+          fetchCreatedAtTo: "2026-04-10",
+          statusFilter: null,
+          completedPhases: ["worksheet_collect"],
+          pendingPhases: ["order_detail_hydration"],
+          warningPhases: [],
+          checkpointCount: 1,
+          checkpointPersistedCount: 2,
+          lastCheckpointAt: "2026-04-10T04:00:00.000Z",
+        },
+      });
+
+      expect(upserted.items).toHaveLength(3);
+      expect(upserted.items.find((row) => row.sourceKey === "source-1")).toMatchObject({
+        productName: "updated product",
+        invoiceNumber: "999999999",
+      });
+      expect(upserted.items.find((row) => row.sourceKey === "source-2")).toMatchObject({
+        shipmentBoxId: "S-2",
+        invoiceNumber: "222222222",
+      });
+      expect(upserted.items.find((row) => row.sourceKey === "source-3")).toMatchObject({
+        shipmentBoxId: "S-3",
+        invoiceNumber: "333333333",
+      });
+      expect(upserted.message).toBe("after upsert");
+      expect(upserted.syncSummary).toMatchObject({
+        checkpointCount: 1,
+        checkpointPersistedCount: 2,
+      });
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
   });
 });

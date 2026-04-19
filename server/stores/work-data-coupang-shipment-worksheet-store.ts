@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
   COUPANG_INVOICE_ALREADY_PROCESSED_MESSAGE,
   isCoupangInvoiceAlreadyProcessedResult,
@@ -60,6 +60,11 @@ const defaultData: PersistedWorksheetStore = {
 const STALE_INVOICE_PENDING_THRESHOLD_MS = 5 * 60_000;
 const STALE_INVOICE_PENDING_MESSAGE =
   "\uC804\uC1A1 \uACB0\uACFC \uD655\uC778\uC774 \uC9C0\uC5F0\uB418\uC5B4 \uC2E4\uD328\uB85C \uC804\uD658\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC804\uC1A1\uD574 \uC8FC\uC138\uC694.";
+export const WORKSHEET_ROW_WRITE_CHUNK_SIZE = 200;
+
+type WorkDataDatabase = ReturnType<typeof assertWorkDataDatabaseEnabled>;
+type WorkDataTransaction = Parameters<Parameters<WorkDataDatabase["transaction"]>[0]>[0];
+
 const COLUMN_BACKED_WORKSHEET_ROW_KEYS = new Set<keyof CoupangShipmentWorksheetRow>([
   "id",
   "sourceKey",
@@ -431,6 +436,14 @@ function normalizeSyncSummary(
       ? value.failedStatuses.filter((item): item is string => typeof item === "string")
       : [],
     autoAuditRecommended: value.autoAuditRecommended === true,
+    checkpointCount: Number.isFinite(value.checkpointCount)
+      ? Math.max(0, value.checkpointCount ?? 0)
+      : 0,
+    checkpointPersistedCount: Number.isFinite(value.checkpointPersistedCount)
+      ? Math.max(0, value.checkpointPersistedCount ?? 0)
+      : 0,
+    lastCheckpointAt:
+      typeof value.lastCheckpointAt === "string" ? value.lastCheckpointAt : null,
   } satisfies CoupangShipmentWorksheetSyncSummary;
 }
 
@@ -548,6 +561,183 @@ function buildArchiveDatabaseRowValue(
   };
 }
 
+export function chunkWorksheetRows<T>(
+  items: readonly T[],
+  chunkSize = WORKSHEET_ROW_WRITE_CHUNK_SIZE,
+) {
+  const safeChunkSize = Math.max(1, Math.trunc(chunkSize) || WORKSHEET_ROW_WRITE_CHUNK_SIZE);
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += safeChunkSize) {
+    chunks.push(items.slice(index, index + safeChunkSize));
+  }
+
+  return chunks;
+}
+
+function hashAdvisoryLockPart(value: string) {
+  let hash = 0;
+
+  for (const character of value) {
+    hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  }
+
+  return hash;
+}
+
+async function acquireWorksheetStoreTransactionLock(tx: WorkDataTransaction, storeId: string) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(${hashAdvisoryLockPart("coupang_shipment_rows")}, ${hashAdvisoryLockPart(storeId)})`,
+  );
+}
+
+function buildWorksheetSheetDatabaseValue(
+  input: {
+    sheetId: string;
+    storeId: string;
+    collectedAt: string | null;
+    source: CoupangDataSource;
+    message: string | null;
+    syncState: CoupangShipmentWorksheetSyncState;
+    syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  },
+  timestamp: Date,
+) {
+  return {
+    id: input.sheetId,
+    storeId: input.storeId,
+    collectedAt: toDateOrNull(input.collectedAt),
+    source: input.source,
+    message: input.message,
+    syncStateJson: input.syncState,
+    syncSummaryJson: input.syncSummary,
+    updatedAt: timestamp,
+  };
+}
+
+async function upsertWorksheetSheetRecord(
+  tx: WorkDataTransaction,
+  input: {
+    sheetId: string;
+    storeId: string;
+    collectedAt: string | null;
+    source: CoupangDataSource;
+    message: string | null;
+    syncState: CoupangShipmentWorksheetSyncState;
+    syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  },
+  timestamp: Date,
+) {
+  const value = buildWorksheetSheetDatabaseValue(input, timestamp);
+
+  await tx
+    .insert(coupangShipmentSheets)
+    .values(value)
+    .onConflictDoUpdate({
+      target: coupangShipmentSheets.storeId,
+      set: {
+        collectedAt: value.collectedAt,
+        source: value.source,
+        message: value.message,
+        syncStateJson: value.syncStateJson,
+        syncSummaryJson: value.syncSummaryJson,
+        updatedAt: value.updatedAt,
+      },
+    });
+}
+
+async function insertWorksheetRowsInChunks(
+  tx: WorkDataTransaction,
+  input: {
+    sheetId: string;
+    storeId: string;
+    items: CoupangShipmentWorksheetRow[];
+    startIndex?: number;
+  },
+) {
+  if (!input.items.length) {
+    return;
+  }
+
+  const chunks = chunkWorksheetRows(input.items);
+  let offset = input.startIndex ?? 0;
+
+  for (const chunk of chunks) {
+    await tx.insert(coupangShipmentRows).values(
+      chunk.map((item, index) =>
+        buildWorksheetDatabaseRowValue(item, offset + index, {
+          sheetId: input.sheetId,
+          storeId: input.storeId,
+        }),
+      ),
+    );
+    offset += chunk.length;
+  }
+}
+
+async function upsertWorksheetRowsInChunks(
+  tx: WorkDataTransaction,
+  input: {
+    sheetId: string;
+    storeId: string;
+    items: CoupangShipmentWorksheetRow[];
+    nextSortOrder: number;
+    existingSortOrderBySourceKey: Map<string, number>;
+  },
+) {
+  if (!input.items.length) {
+    return;
+  }
+
+  const chunks = chunkWorksheetRows(input.items);
+  let nextSortOrder = input.nextSortOrder;
+
+  for (const chunk of chunks) {
+    const values = chunk.map((item) => {
+      const existingSortOrder = input.existingSortOrderBySourceKey.get(item.sourceKey);
+      const sortOrder = existingSortOrder ?? nextSortOrder++;
+
+      return buildWorksheetDatabaseRowValue(item, sortOrder, {
+        sheetId: input.sheetId,
+        storeId: input.storeId,
+      });
+    });
+
+    await tx
+      .insert(coupangShipmentRows)
+      .values(values)
+      .onConflictDoUpdate({
+        target: coupangShipmentRows.sourceKey,
+        set: {
+          sheetId: input.sheetId,
+          storeId: input.storeId,
+          selpickOrderNumber: sql`excluded.selpick_order_number`,
+          orderDateKey: sql`excluded.order_date_key`,
+          orderStatus: sql`excluded.order_status`,
+          orderedAtRaw: sql`excluded.ordered_at_raw`,
+          lastOrderHydratedAt: sql`excluded.last_order_hydrated_at`,
+          lastProductHydratedAt: sql`excluded.last_product_hydrated_at`,
+          shipmentBoxId: sql`excluded.shipment_box_id`,
+          orderId: sql`excluded.order_id`,
+          sellerProductId: sql`excluded.seller_product_id`,
+          vendorItemId: sql`excluded.vendor_item_id`,
+          receiverName: sql`excluded.receiver_name`,
+          receiverBaseName: sql`excluded.receiver_base_name`,
+          personalClearanceCode: sql`excluded.personal_clearance_code`,
+          deliveryCompanyCode: sql`excluded.delivery_company_code`,
+          invoiceNumber: sql`excluded.invoice_number`,
+          invoiceTransmissionStatus: sql`excluded.invoice_transmission_status`,
+          invoiceTransmissionMessage: sql`excluded.invoice_transmission_message`,
+          invoiceTransmissionAt: sql`excluded.invoice_transmission_at`,
+          invoiceAppliedAt: sql`excluded.invoice_applied_at`,
+          exportedAt: sql`excluded.exported_at`,
+          rowDataJson: sql`excluded.row_data_json`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      });
+  }
+}
+
 export class CoupangShipmentWorksheetStore {
   private readonly filePath: string;
   private readonly legacyMode: boolean;
@@ -625,41 +815,33 @@ export class CoupangShipmentWorksheetStore {
 
             for (const [storeId, entry] of Object.entries(parsed.stores)) {
               const sheetId = `sheet:${storeId}`;
-              await database
-                .insert(coupangShipmentSheets)
-                .values({
-                  id: sheetId,
-                  storeId,
-                  collectedAt: toDateOrNull(entry.collectedAt),
-                  source: entry.source,
-                  message: entry.message,
-                  syncStateJson: entry.syncState,
-                  syncSummaryJson: entry.syncSummary,
-                  updatedAt: toDateOrNull(entry.updatedAt) ?? new Date(),
-                })
-                .onConflictDoUpdate({
-                  target: coupangShipmentSheets.storeId,
-                  set: {
-                    collectedAt: toDateOrNull(entry.collectedAt),
+              const importedAt = toDateOrNull(entry.updatedAt) ?? new Date();
+              await database.transaction(async (tx) => {
+                await acquireWorksheetStoreTransactionLock(tx, storeId);
+                await upsertWorksheetSheetRecord(
+                  tx,
+                  {
+                    sheetId,
+                    storeId,
+                    collectedAt: entry.collectedAt,
                     source: entry.source,
                     message: entry.message,
-                    syncStateJson: entry.syncState,
-                    syncSummaryJson: entry.syncSummary,
-                    updatedAt: toDateOrNull(entry.updatedAt) ?? new Date(),
+                    syncState: entry.syncState,
+                    syncSummary: entry.syncSummary,
                   },
-                });
-
-              await database
-                .delete(coupangShipmentRows)
-                .where(eq(coupangShipmentRows.storeId, storeId));
-
-              if (entry.items.length) {
-                await database.insert(coupangShipmentRows).values(
-                  entry.items.map((item, index) =>
-                    buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId }),
-                  ),
+                  importedAt,
                 );
-              }
+
+                await tx
+                  .delete(coupangShipmentRows)
+                  .where(eq(coupangShipmentRows.storeId, storeId));
+
+                await insertWorksheetRowsInChunks(tx, {
+                  sheetId,
+                  storeId,
+                  items: entry.items,
+                });
+              });
 
               importedStoreCount += 1;
               importedRowCount += entry.items.length;
@@ -757,47 +939,138 @@ export class CoupangShipmentWorksheetStore {
     const sheetId = `sheet:${input.storeId}`;
 
     await database.transaction(async (tx) => {
-      await tx
-        .insert(coupangShipmentSheets)
-        .values({
-          id: sheetId,
+      await acquireWorksheetStoreTransactionLock(tx, input.storeId);
+      await upsertWorksheetSheetRecord(
+        tx,
+        {
+          sheetId,
           storeId: input.storeId,
-          collectedAt: toDateOrNull(nextEntry.collectedAt),
+          collectedAt: nextEntry.collectedAt,
           source: nextEntry.source,
           message: nextEntry.message,
-          syncStateJson: nextEntry.syncState,
-          syncSummaryJson: nextEntry.syncSummary,
-          updatedAt: timestamp,
-        })
-        .onConflictDoUpdate({
-          target: coupangShipmentSheets.storeId,
-          set: {
-            collectedAt: toDateOrNull(nextEntry.collectedAt),
-            source: nextEntry.source,
-            message: nextEntry.message,
-            syncStateJson: nextEntry.syncState,
-            syncSummaryJson: nextEntry.syncSummary,
-            updatedAt: timestamp,
-          },
-        });
+          syncState: nextEntry.syncState,
+          syncSummary: nextEntry.syncSummary,
+        },
+        timestamp,
+      );
 
       await tx
         .delete(coupangShipmentRows)
         .where(eq(coupangShipmentRows.storeId, input.storeId));
 
-      if (nextEntry.items.length) {
-        await tx.insert(coupangShipmentRows).values(
-          nextEntry.items.map((item, index) =>
-            buildWorksheetDatabaseRowValue(item, index, { sheetId, storeId: input.storeId }),
-          ),
-        );
-      }
+      await insertWorksheetRowsInChunks(tx, {
+        sheetId,
+        storeId: input.storeId,
+        items: nextEntry.items,
+      });
     });
 
     return normalizeStoreEntry({
       ...nextEntry,
       updatedAt: nextEntry.updatedAt,
     });
+  }
+
+  async upsertStoreRows(input: {
+    storeId: string;
+    items: CoupangShipmentWorksheetRow[];
+    collectedAt: string | null;
+    source: CoupangDataSource;
+    message: string | null;
+    syncState: CoupangShipmentWorksheetSyncState;
+    syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  }) {
+    const nextEntry = {
+      items: input.items.map(normalizeWorksheetRow),
+      collectedAt: input.collectedAt,
+      source: input.source,
+      message: input.message,
+      syncState: normalizeSyncState(input.syncState),
+      syncSummary: normalizeSyncSummary(input.syncSummary),
+      updatedAt: new Date().toISOString(),
+    } satisfies PersistedWorksheetStoreEntry;
+
+    if (this.legacyMode) {
+      const data = await this.loadLegacy();
+      const currentEntry = normalizeStoreEntry(data.stores[input.storeId]);
+      const mergedBySourceKey = new Map(
+        currentEntry.items.map((row) => [row.sourceKey, row] as const),
+      );
+
+      for (const row of nextEntry.items) {
+        mergedBySourceKey.set(row.sourceKey, row);
+      }
+
+      const persistedEntry = {
+        ...currentEntry,
+        items: Array.from(mergedBySourceKey.values()),
+        collectedAt: nextEntry.collectedAt,
+        source: nextEntry.source,
+        message: nextEntry.message,
+        syncState: nextEntry.syncState,
+        syncSummary: nextEntry.syncSummary,
+        updatedAt: nextEntry.updatedAt,
+      } satisfies PersistedWorksheetStoreEntry;
+
+      await this.persistLegacy({
+        version: 2,
+        stores: {
+          ...data.stores,
+          [input.storeId]: persistedEntry,
+        },
+        archives: data.archives,
+      });
+
+      return normalizeStoreEntry(persistedEntry);
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const timestamp = new Date();
+    const sheetId = `sheet:${input.storeId}`;
+
+    await database.transaction(async (tx) => {
+      await acquireWorksheetStoreTransactionLock(tx, input.storeId);
+      await upsertWorksheetSheetRecord(
+        tx,
+        {
+          sheetId,
+          storeId: input.storeId,
+          collectedAt: nextEntry.collectedAt,
+          source: nextEntry.source,
+          message: nextEntry.message,
+          syncState: nextEntry.syncState,
+          syncSummary: nextEntry.syncSummary,
+        },
+        timestamp,
+      );
+
+      if (nextEntry.items.length) {
+        const existingRows = await tx
+          .select({
+            sourceKey: coupangShipmentRows.sourceKey,
+            sortOrder: coupangShipmentRows.sortOrder,
+          })
+          .from(coupangShipmentRows)
+          .where(eq(coupangShipmentRows.storeId, input.storeId))
+          .orderBy(asc(coupangShipmentRows.sortOrder));
+        const existingSortOrderBySourceKey = new Map(
+          existingRows.map((row) => [row.sourceKey, row.sortOrder] as const),
+        );
+        const nextSortOrder =
+          existingRows.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
+
+        await upsertWorksheetRowsInChunks(tx, {
+          sheetId,
+          storeId: input.storeId,
+          items: nextEntry.items,
+          nextSortOrder,
+          existingSortOrderBySourceKey,
+        });
+      }
+    });
+
+    return this.getStoreSheet(input.storeId);
   }
 
   async getArchivedRows(storeId: string) {
