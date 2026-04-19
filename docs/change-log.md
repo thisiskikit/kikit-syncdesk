@@ -2,6 +2,26 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 출고 보기 프리셋 UI를 전체 열 보기만 노출하도록 제한
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/fulfillment-grid-controller.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-column-settings-panel.tsx`
+  - `docs/current-status.md`
+  - `docs/structure-overview.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 워크시트 화면과 컬럼 설정 패널에서 노출하는 보기 프리셋 목록을 `전체 열 보기` 하나로 제한했습니다.
+  - `작업 보기`, `송장 입력 보기` 프리셋 정의는 코드에 그대로 두고, UI에서만 일시적으로 숨겼습니다.
+  - 안내 문구도 현재 동작에 맞게 `전체 열 보기만 노출 중`인 상태로 정리했습니다.
+- 이유:
+  - 당분간 프리셋 선택지를 단순화해서, 사용자 화면에서 혼동 없이 하나의 기준 레이아웃만 보이게 하려는 목적입니다.
+- 검증:
+  - `npm run check`
+
 ## 2026-04-19 / 출고 컬럼 설정 preview 기준 행 선택 추가
 
 - 변경 유형:

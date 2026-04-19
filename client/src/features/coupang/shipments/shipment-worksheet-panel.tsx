@@ -67,7 +67,7 @@ export default function ShipmentWorksheetPanel({
             현재 조건에 맞는 주문만 얇은 목록으로 보여줍니다. 판단 근거와 긴 이력은 우측 패널에서 확인하세요.
           </div>
           <div className="muted shipment-grid-note">
-            가로 스크롤이 불편하면 `작업 보기`나 `송장 입력 보기` 프리셋을 적용해 기본 열 수를 줄여보세요.
+            현재 보기 프리셋은 `전체 열 보기`만 노출하고 있습니다. 필요한 컬럼은 화면 설정에서 직접 조정해 주세요.
           </div>
           <div className="muted shipment-grid-note">{invoiceModeNotice}</div>
           <div className="muted shipment-grid-note">{detailGuideNotice}</div>

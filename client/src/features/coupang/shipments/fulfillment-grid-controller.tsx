@@ -23,6 +23,7 @@ import type {
 } from "./types";
 
 const LazyShipmentColumnSettingsPanel = lazy(() => import("./shipment-column-settings-panel"));
+const VISIBLE_SHIPMENT_COLUMN_PRESETS = SHIPMENT_COLUMN_PRESETS.filter((preset) => preset.key === "full");
 
 type FulfillmentActiveTab = "worksheet" | "archive" | "settings";
 
@@ -157,7 +158,7 @@ export default function FulfillmentGridController({
         detailGuideNotice={worksheet.detailGuideNotice}
         worksheetMode={worksheet.worksheetMode}
         activeColumnPreset={worksheet.activeColumnPreset}
-        columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
+        columnPresetOptions={VISIBLE_SHIPMENT_COLUMN_PRESETS}
         isLoading={worksheet.isLoading}
         hasSheetRows={worksheet.hasSheetRows}
         hasRowsForCurrentFilters={worksheet.hasRowsForCurrentFilters}
@@ -245,7 +246,7 @@ export default function FulfillmentGridController({
         claimScopeCount={settings.claimScopeCount}
         notExportedCount={settings.notExportedCount}
         activeColumnPreset={settings.activeColumnPreset}
-        columnPresetOptions={SHIPMENT_COLUMN_PRESETS}
+        columnPresetOptions={VISIBLE_SHIPMENT_COLUMN_PRESETS}
         shipmentColumnSourceOptions={settings.shipmentColumnSourceOptions}
         onBack={settings.onBack}
         onAdd={settings.onAdd}

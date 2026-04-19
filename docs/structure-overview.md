@@ -173,8 +173,8 @@ docs/
 ### 컬럼 보기 프리셋
 `client/src/features/coupang/shipments/shipment-column-presets.ts`
 
-- `작업 보기`
-- `송장 입력 보기`
+- 현재 UI 노출: `전체 열 보기`
+- 숨김 상태: `작업 보기`, `송장 입력 보기`
 - `전체 열 보기`
 
 의도:

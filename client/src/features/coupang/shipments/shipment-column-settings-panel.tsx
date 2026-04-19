@@ -137,9 +137,9 @@ export default function ShipmentColumnSettingsPanel(
       <div className="card shipment-column-preset-card">
         <div className="shipment-column-preset-card-header">
           <div>
-            <strong>추천 보기 프리셋</strong>
+            <strong>보기 프리셋</strong>
             <div className="muted shipment-grid-note">
-              먼저 프리셋을 적용한 뒤 필요한 컬럼만 세부 조정하는 흐름에 맞춰져 있습니다.
+              현재는 `전체 열 보기`만 남겨 두었고, 필요한 컬럼은 아래에서 직접 조정할 수 있습니다.
             </div>
           </div>
           <div className="toolbar shipment-column-preset-actions">
