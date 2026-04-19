@@ -206,15 +206,15 @@ export function createRawShipmentColumnSource(key: string): ShipmentColumnSource
 }
 
 export function isBuiltinShipmentColumnSource(
-  source: ShipmentColumnSource,
+  source: ShipmentColumnSource | null | undefined,
 ): source is Extract<CoupangShipmentWorksheetColumnSource, { kind: "builtin" }> {
-  return source.kind === "builtin";
+  return source?.kind === "builtin";
 }
 
 export function isRawShipmentColumnSource(
-  source: ShipmentColumnSource,
+  source: ShipmentColumnSource | null | undefined,
 ): source is Extract<CoupangShipmentWorksheetColumnSource, { kind: "raw" }> {
-  return source.kind === "raw";
+  return source?.kind === "raw";
 }
 
 export function getShipmentColumnSourceStorageKey(source: ShipmentColumnSource) {

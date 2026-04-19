@@ -4,6 +4,7 @@ import {
   createBuiltinShipmentColumnSource,
   createRawShipmentColumnSource,
   formatShipmentColumnSourceOptionLabel,
+  normalizeShipmentColumnConfigs,
   resolveShipmentColumnLabelForSourceChange,
   resolveShipmentColumnSourceLabel,
 } from "./worksheet-config";
@@ -64,5 +65,26 @@ describe("worksheet-config column source helpers", () => {
         nextSource: createBuiltinShipmentColumnSource("invoiceNumber"),
       }),
     ).toBe("출고용 상품명");
+  });
+
+  it("migrates legacy sourceKey configs before render-time consumers use them", () => {
+    const normalized = normalizeShipmentColumnConfigs([
+      {
+        id: "legacy-1",
+        label: "상품명",
+        sourceKey: "productName",
+      },
+    ]);
+
+    expect(normalized).toEqual([
+      {
+        id: "legacy-1",
+        label: "상품명",
+        source: {
+          kind: "builtin",
+          key: "productName",
+        },
+      },
+    ]);
   });
 });

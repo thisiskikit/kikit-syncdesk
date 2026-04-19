@@ -1514,9 +1514,13 @@ export default function CoupangShipmentsPage() {
   const [isExcelSortDialogOpen, setIsExcelSortDialogOpen] = useState(false);
   const [excelExportScope, setExcelExportScope] = useState<ShipmentExcelExportScope>("selected");
   const [draggingConfigId, setDraggingConfigId] = useState<string | null>(null);
-  const [columnConfigs, setColumnConfigs] = usePersistentState<ShipmentColumnConfig[]>(
+  const [persistedColumnConfigs, setColumnConfigs] = usePersistentState<ShipmentColumnConfig[]>(
     "kikit:coupang-shipments:columns",
     createDefaultShipmentColumnConfigs(),
+  );
+  const columnConfigs = useMemo(
+    () => normalizeShipmentColumnConfigs(persistedColumnConfigs),
+    [persistedColumnConfigs],
   );
   const [columnWidths, setColumnWidths] = usePersistentState<Record<string, number>>(
     "kikit:layout:rdg:coupang-shipments",
@@ -1603,11 +1607,12 @@ export default function CoupangShipmentsPage() {
   const stores = storesQuery.data?.items ?? [];
 
   useEffect(() => {
-    setColumnConfigs((current) => {
-      const normalized = normalizeShipmentColumnConfigs(current);
-      return JSON.stringify(normalized) === JSON.stringify(current) ? current : normalized;
-    });
-  }, [setColumnConfigs]);
+    if (JSON.stringify(columnConfigs) === JSON.stringify(persistedColumnConfigs)) {
+      return;
+    }
+
+    setColumnConfigs(columnConfigs);
+  }, [columnConfigs, persistedColumnConfigs, setColumnConfigs]);
 
   useEffect(() => {
     if (!isFiltersLoaded || filters.selectedStoreId || !stores[0]) {
