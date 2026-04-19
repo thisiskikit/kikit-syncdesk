@@ -2,6 +2,26 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 출고 빠른 수집(new_only) 동기 비용 축소
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `docs/change-log.md`
+  - `docs/current-status.md`
+- 변경 내용:
+  - `new_only` 빠른 수집은 이제 마지막 수집 시점 기준 24시간 겹침 구간으로 조회 시작일을 자동 축소합니다.
+  - 빠른 수집 본문에서는 신규 worksheet row 저장만 먼저 수행하고, 클레임 조회와 주문/상품 상세 보강은 동기 경로에서 생략합니다.
+  - 대신 기존처럼 `pending_after_collect` 후속 보강이 이어져, 상세/상품명/CS 상태는 백그라운드 refresh에서 채워집니다.
+- 이유:
+  - 기존 `new_only`는 신규만 저장할 뿐, 원격 조회는 선택 기간 전체를 다시 스캔하고 신규 행마다 상세/상품/클레임 API를 추가 호출해 체감 속도가 크게 느렸습니다.
+- 남은 점:
+  - 오래된 누락 주문을 다시 찾는 용도는 빠른 수집이 아니라 `증분 수집` 또는 `전체 수집`이 더 적합합니다.
+- 검증:
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+
 ## 2026-04-19 / 쿠팡 API 기본 요청 스케줄러 완화
 
 - 변경 유형:

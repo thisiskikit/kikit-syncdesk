@@ -898,10 +898,19 @@ function resolveSyncPlan(
   }
 
   if (requestedMode === "new_only") {
+    const quickCollectReferenceAt =
+      currentSyncState.lastIncrementalCollectedAt ?? currentSheet.collectedAt ?? null;
+    const quickCollectOverlapStart = quickCollectReferenceAt
+      ? normalizeCreatedAtDate(
+          subtractHours(quickCollectReferenceAt, INCREMENTAL_OVERLAP_HOURS),
+          -1,
+        )
+      : selectedCreatedAtFrom;
+
     return {
       mode: "new_only",
       autoExpanded: false,
-      fetchCreatedAtFrom: selectedCreatedAtFrom,
+      fetchCreatedAtFrom: maxRequestedDate(selectedCreatedAtFrom, quickCollectOverlapStart),
       fetchCreatedAtTo: selectedCreatedAtTo,
       statusFilter: null,
     };
@@ -3075,20 +3084,29 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
   );
   const claimGroupsBySourceKey = new Map<string, ShipmentWorksheetClaimGroup>();
-  const [returnsLookup, exchangesLookup] = await Promise.allSettled([
-    listReturns({
-      storeId: input.storeId,
-      cancelType: "ALL",
-      createdAtFrom: syncPlan.fetchCreatedAtFrom,
-      createdAtTo: syncPlan.fetchCreatedAtTo,
-    }),
-    listExchanges({
-      storeId: input.storeId,
-      createdAtFrom: syncPlan.fetchCreatedAtFrom,
-      createdAtTo: syncPlan.fetchCreatedAtTo,
-      maxPerPage: 50,
-    }),
-  ]);
+  const shouldLookupClaimsDuringCollect = !insertOnlyMode;
+  const shouldHydrateOptionsDuringCollect = (
+    currentRow: CoupangShipmentWorksheetRow | undefined,
+  ) => !insertOnlyMode && shouldHydrateWorksheetOptionDuringCollect(currentRow);
+  let returnsLookup: PromiseSettledResult<Awaited<ReturnType<typeof listReturns>>> | null = null;
+  let exchangesLookup: PromiseSettledResult<Awaited<ReturnType<typeof listExchanges>>> | null = null;
+
+  if (shouldLookupClaimsDuringCollect) {
+    [returnsLookup, exchangesLookup] = await Promise.allSettled([
+      listReturns({
+        storeId: input.storeId,
+        cancelType: "ALL",
+        createdAtFrom: syncPlan.fetchCreatedAtFrom,
+        createdAtTo: syncPlan.fetchCreatedAtTo,
+      }),
+      listExchanges({
+        storeId: input.storeId,
+        createdAtFrom: syncPlan.fetchCreatedAtFrom,
+        createdAtTo: syncPlan.fetchCreatedAtTo,
+        maxPerPage: 50,
+      }),
+    ]);
+  }
 
   const appendClaimGroup = (inputGroup: {
     sourceKey: string;
@@ -3132,6 +3150,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     });
   };
 
+  if (shouldLookupClaimsDuringCollect && returnsLookup && exchangesLookup) {
   if (returnsLookup.status === "fulfilled" && returnsLookup.value.source === "live") {
     for (const request of returnsLookup.value.items) {
       const matchedCandidate = matchReturnClaimCandidate(collectionCandidates, request);
@@ -3246,6 +3265,8 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
           ? `교환 클레임 조회에 실패했습니다. ${exchangesLookup.reason.message}`
           : "교환 클레임 조회에 실패했습니다.",
     );
+  }
+
   }
 
   const claimFetchedAt = now;
@@ -3585,7 +3606,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
 
   */
   const optionHydrationCandidates = collectionCandidates.filter((candidate) =>
-    shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow),
+    shouldHydrateOptionsDuringCollect(candidate.currentRow),
   );
   const optionDetailByShipmentBoxId = new Map<string, CoupangOrderDetail | null>();
 
@@ -3648,10 +3669,10 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       row: candidate.row,
       currentRow: candidate.currentRow,
       nowIso: now,
-      detail: shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow)
+      detail: shouldHydrateOptionsDuringCollect(candidate.currentRow)
         ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
         : null,
-      productDetail: shouldHydrateWorksheetOptionDuringCollect(candidate.currentRow)
+      productDetail: shouldHydrateOptionsDuringCollect(candidate.currentRow)
         ? await getCollectProductDetailCached(candidate.row)
         : null,
       selpickOrderNumber:

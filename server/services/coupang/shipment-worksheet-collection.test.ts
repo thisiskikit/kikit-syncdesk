@@ -1306,6 +1306,10 @@ describe("coupang shipment worksheet collection", () => {
       orderStatus: "INSTRUCT",
       productName: "New Product",
     });
+    expect(listReturnsMock).not.toHaveBeenCalled();
+    expect(listExchangesMock).not.toHaveBeenCalled();
+    expect(getOrderDetailMock).not.toHaveBeenCalled();
+    expect(getProductDetailMock).not.toHaveBeenCalled();
     expect(result.syncSummary).toMatchObject({
       mode: "new_only",
       fetchedCount: 1,
@@ -1314,6 +1318,75 @@ describe("coupang shipment worksheet collection", () => {
       updatedCount: 0,
       autoExpanded: false,
       fetchCreatedAtFrom: "2026-03-25",
+      pendingPhases: [
+        "order_detail_hydration",
+        "product_detail_hydration",
+        "customer_service_refresh",
+      ],
+    });
+  });
+
+  it("narrows new-only quick collect to the recent overlap window", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "100",
+          orderId: "O-100",
+          vendorItemId: "V-100",
+          status: "ACCEPT",
+          selpickOrderNumber: "O20260328T0001",
+        }),
+      ],
+      collectedAt: "2026-03-28T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-28T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-28T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-20",
+        coveredCreatedAtTo: "2026-03-28",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-28T10:00:00.000Z",
+    });
+    listOrdersMock.mockResolvedValue({
+      items: [],
+      source: "live" as const,
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-20",
+      createdAtTo: "2026-03-28",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "new_only",
+    });
+
+    expect(listOrdersMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-27",
+        createdAtTo: "2026-03-28",
+        status: "INSTRUCT",
+      }),
+    );
+    expect(listOrdersMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-03-27",
+        createdAtTo: "2026-03-28",
+        status: "ACCEPT",
+      }),
+    );
+    expect(result.syncSummary).toMatchObject({
+      mode: "new_only",
+      fetchCreatedAtFrom: "2026-03-27",
+      fetchCreatedAtTo: "2026-03-28",
     });
   });
 
