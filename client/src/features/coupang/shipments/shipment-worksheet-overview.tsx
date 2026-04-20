@@ -16,6 +16,7 @@ import {
   getShipmentPriorityCardLabel,
 } from "./coupang-status-view";
 import type { FilterState, FulfillmentDecisionFilterValue } from "./types";
+import type { ShipmentWorksheetMirrorSyncRequirement } from "./worksheet-config";
 
 type StatusOption<TValue extends string> = {
   value: TValue;
@@ -40,6 +41,9 @@ type ShipmentWorksheetOverviewProps = {
   visibleRowsCount: number;
   filters: FilterState;
   activeSheet: CoupangShipmentWorksheetViewResponse | null;
+  authoritativeCountsReady: boolean;
+  authoritativeCountsAutoSyncing: boolean;
+  authoritativeCountsSyncRequirement: ShipmentWorksheetMirrorSyncRequirement;
   activeInvoiceStatusCard: InvoiceStatusCardKey;
   activeOrderStatusCard: OrderStatusCardKey;
   activeOutputStatusCard: OutputStatusCardKey;
@@ -150,6 +154,82 @@ function formatQueuePreviewMeta(item: {
   return parts.join(" · ");
 }
 
+function formatOverviewCount(
+  value: number | null | undefined,
+  countsReady: boolean,
+  pendingLabel = "-",
+) {
+  return countsReady ? formatNumber(value ?? 0) : pendingLabel;
+}
+
+function buildMirrorSyncNotice(input: {
+  countsReady: boolean;
+  autoSyncing: boolean;
+  requirement: ShipmentWorksheetMirrorSyncRequirement;
+  partialCount: number;
+}) {
+  if (input.countsReady) {
+    return null;
+  }
+
+  const partialCountLabel = formatNumber(input.partialCount);
+  const syncRangeSuffix = input.requirement.syncRangeLabel
+    ? ` 최근 수집 범위는 ${input.requirement.syncRangeLabel}입니다.`
+    : "";
+  const prefix = input.autoSyncing
+    ? "자동 전체 재동기화를 실행 중입니다."
+    : "자동 전체 재동기화를 준비 중입니다.";
+
+  switch (input.requirement.reason) {
+    case "fallback":
+      return {
+        title: input.autoSyncing
+          ? "쿠팡 배송관리 전체 재동기화 중"
+          : "쿠팡 배송관리 전체 재동기화 필요",
+        message:
+          `${prefix} 현재 응답이 fallback이라 메인 숫자를 확정할 수 없습니다.` +
+          ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
+      };
+    case "missing_summary":
+      return {
+        title: input.autoSyncing
+          ? "쿠팡 배송관리 전체 재동기화 중"
+          : "쿠팡 배송관리 전체 재동기화 필요",
+        message:
+          `${prefix} 현재 선택 기간의 전체 수집 이력이 없어 메인 숫자를 확정할 수 없습니다.` +
+          ` 지금 보이는 ${partialCountLabel}건은 부분 미러입니다.`,
+      };
+    case "degraded_sync":
+      return {
+        title: input.autoSyncing
+          ? "쿠팡 배송관리 전체 재동기화 중"
+          : "쿠팡 배송관리 전체 재동기화 필요",
+        message:
+          `${prefix} 최근 전체 수집이 부분 실패 상태라 메인 숫자를 확정할 수 없습니다.` +
+          ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
+      };
+    case "range_outside_sync":
+      return {
+        title: input.autoSyncing
+          ? "쿠팡 배송관리 전체 재동기화 중"
+          : "쿠팡 배송관리 전체 재동기화 필요",
+        message:
+          `${prefix} 선택 기간이 최근 수집 범위를 벗어나 있습니다.` +
+          ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
+      };
+    case "partial_sync":
+    default:
+      return {
+        title: input.autoSyncing
+          ? "쿠팡 배송관리 전체 재동기화 중"
+          : "쿠팡 배송관리 전체 재동기화 필요",
+        message:
+          `${prefix} 최근 수집이 빠른 수집 또는 증분 수집이라 메인 숫자를 확정할 수 없습니다.` +
+          ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
+      };
+  }
+}
+
 export default function ShipmentWorksheetOverview({
   selectedStoreId,
   quickCollectFocusActive,
@@ -167,6 +247,9 @@ export default function ShipmentWorksheetOverview({
   visibleRowsCount,
   filters,
   activeSheet,
+  authoritativeCountsReady,
+  authoritativeCountsAutoSyncing,
+  authoritativeCountsSyncRequirement,
   activeInvoiceStatusCard,
   activeOrderStatusCard,
   activeOutputStatusCard,
@@ -182,14 +265,13 @@ export default function ShipmentWorksheetOverview({
   const pipelineCounts = activeSheet?.pipelineCounts;
   const issueCounts = activeSheet?.issueCounts;
   const decisionPreviewGroups = activeSheet?.decisionPreviewGroups;
-  const coverageRangeLabel =
-    activeSheet?.coverageCreatedAtFrom && activeSheet?.coverageCreatedAtTo
-      ? `${activeSheet.coverageCreatedAtFrom} ~ ${activeSheet.coverageCreatedAtTo}`
-      : null;
-  const isCoverageOutsideSelectedRange =
-    Boolean(coverageRangeLabel) &&
-    ((filters.createdAtFrom?.trim() ?? "").localeCompare(activeSheet?.coverageCreatedAtFrom ?? "") < 0 ||
-      (filters.createdAtTo?.trim() ?? "").localeCompare(activeSheet?.coverageCreatedAtTo ?? "") > 0);
+  const latestSyncRangeLabel = authoritativeCountsSyncRequirement.syncRangeLabel;
+  const mirrorSyncNotice = buildMirrorSyncNotice({
+    countsReady: authoritativeCountsReady,
+    autoSyncing: authoritativeCountsAutoSyncing,
+    requirement: authoritativeCountsSyncRequirement,
+    partialCount: activeSheet?.filteredRowCount ?? 0,
+  });
 
   return (
     <>
@@ -208,31 +290,33 @@ export default function ShipmentWorksheetOverview({
         </div>
       ) : null}
 
+      {mirrorSyncNotice ? (
+        <div className="feedback warning">
+          <strong>{mirrorSyncNotice.title}</strong>
+          <div className="muted">{mirrorSyncNotice.message}</div>
+        </div>
+      ) : null}
+
       <div className="shipment-hub-board">
         <div className="card shipment-hub-board-intro">
           <div>
             <div className="shipment-filter-summary-label">출고 작업 허브</div>
             <strong>
-              {selectedStoreId
-                ? `현재 필터 전체 ${formatNumber(activeSheet?.filteredRowCount ?? 0)}건을 다음 액션 기준으로 다시 정리했습니다.`
+              {!authoritativeCountsReady ? "현재 메인 숫자는 전체 재동기화가 끝난 뒤 다시 계산합니다." : selectedStoreId
+                ? `현재 필터 전체 ${formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady)}건을 다음 액션 기준으로 다시 정리했습니다.`
                 : "스토어를 선택하면 현재 조건의 작업 큐를 바로 정리해서 보여줍니다."}
             </strong>
             <div className="muted shipment-filter-summary-note">
               상단 카드는 현재 필터 전체 기준이고, 아래 원본 테이블은 같은 기준을 유지한 채 페이지 단위로 보여줍니다.
             </div>
-            {coverageRangeLabel ? (
+            {latestSyncRangeLabel ? (
               <div className="muted shipment-filter-summary-meta">
-                미러 coverage {coverageRangeLabel}
-              </div>
-            ) : null}
-            {isCoverageOutsideSelectedRange ? (
-              <div className="muted shipment-filter-summary-meta">
-                선택 기간이 현재 미러 coverage를 벗어나므로 전체 재동기화가 필요할 수 있습니다.
+                최근 수집 범위 {latestSyncRangeLabel}
               </div>
             ) : null}
             <div className="shipment-hub-quick-stats">
               <span className="shipment-hub-side-panel-chip strong">
-                필터 전체 {formatNumber(activeSheet?.filteredRowCount ?? 0)}건
+                필터 전체 {formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady, "재계산 중")}건
               </span>
               <span className="shipment-hub-side-panel-chip">
                 현재 페이지 {formatNumber(pageRowCount)}건
@@ -279,7 +363,7 @@ export default function ShipmentWorksheetOverview({
                 onClick={() => onPatchFilters({ priorityCard: "all" })}
               >
                 <span>전체</span>
-                <strong>{formatNumber(priorityCounts?.all ?? 0)}</strong>
+                <strong>{formatOverviewCount(priorityCounts?.all ?? 0, authoritativeCountsReady)}</strong>
               </button>
               {PRIORITY_CARD_ORDER.map((card) => {
                 const active = filters.priorityCard === card;
@@ -293,7 +377,9 @@ export default function ShipmentWorksheetOverview({
                     title={PRIORITY_COPY[card]}
                   >
                     <span>{getShipmentPriorityCardLabel(card)}</span>
-                    <strong>{formatNumber(priorityCounts?.[card] ?? 0)}</strong>
+                    <strong>
+                      {formatOverviewCount(priorityCounts?.[card] ?? 0, authoritativeCountsReady)}
+                    </strong>
                   </button>
                 );
               })}
@@ -319,8 +405,8 @@ export default function ShipmentWorksheetOverview({
           {ACTION_QUEUE_ORDER.map((status) => {
             const group = decisionPreviewGroups?.[status];
             const active = activeDecisionStatus === status;
-            const previewItems = group?.previewItems.slice(0, 3) ?? [];
-            const reasonLabels = group?.topReasonLabels ?? [];
+            const previewItems = authoritativeCountsReady ? group?.previewItems.slice(0, 3) ?? [] : [];
+            const reasonLabels = authoritativeCountsReady ? group?.topReasonLabels ?? [] : [];
 
             return (
               <section
@@ -337,7 +423,9 @@ export default function ShipmentWorksheetOverview({
                 </div>
 
                 <div className="shipment-action-queue-count-row">
-                  <div className="shipment-action-queue-count">{formatNumber(group?.count ?? 0)}</div>
+                  <div className="shipment-action-queue-count">
+                    {formatOverviewCount(group?.count ?? 0, authoritativeCountsReady, "재동기화 중")}
+                  </div>
                   <div className="muted shipment-action-queue-count-note">현재 필터 전체 기준</div>
                 </div>
 
@@ -357,7 +445,11 @@ export default function ShipmentWorksheetOverview({
 
                 <div className="shipment-action-queue-preview">
                   <div className="shipment-action-queue-preview-title">대표 주문</div>
-                  {previewItems.length ? (
+                  {!authoritativeCountsReady ? (
+                    <div className="muted shipment-action-queue-empty-note">
+                      전체 재동기화 후 대표 주문을 다시 계산합니다.
+                    </div>
+                  ) : previewItems.length ? (
                     <ol className="shipment-action-queue-preview-list">
                       {previewItems.map((item) => (
                         <li key={`${status}:${item.rowId}`} className="shipment-action-queue-preview-item">
@@ -410,7 +502,7 @@ export default function ShipmentWorksheetOverview({
                 onClick={() => onPatchFilters({ pipelineCard: "all" })}
               >
                 <span>전체</span>
-                <strong>{formatNumber(pipelineCounts?.all ?? 0)}</strong>
+                <strong>{formatOverviewCount(pipelineCounts?.all ?? 0, authoritativeCountsReady)}</strong>
               </button>
               {PIPELINE_CARD_ORDER.map((card) => {
                 const active = filters.pipelineCard === card;
@@ -423,7 +515,9 @@ export default function ShipmentWorksheetOverview({
                     onClick={() => onPatchFilters({ pipelineCard: active ? "all" : card })}
                   >
                     <span>{getShipmentPipelineCardLabel(card)}</span>
-                    <strong>{formatNumber(pipelineCounts?.[card] ?? 0)}</strong>
+                    <strong>
+                      {formatOverviewCount(pipelineCounts?.[card] ?? 0, authoritativeCountsReady)}
+                    </strong>
                   </button>
                 );
               })}
@@ -449,7 +543,7 @@ export default function ShipmentWorksheetOverview({
                 onClick={() => onPatchFilters({ issueFilter: "all" })}
               >
                 <span>전체</span>
-                <strong>{formatNumber(issueCounts?.all ?? 0)}</strong>
+                <strong>{formatOverviewCount(issueCounts?.all ?? 0, authoritativeCountsReady)}</strong>
               </button>
               {ISSUE_FILTER_ORDER.map((filter) => {
                 const active = filters.issueFilter === filter;
@@ -467,7 +561,7 @@ export default function ShipmentWorksheetOverview({
                     onClick={() => onPatchFilters({ issueFilter: active ? "all" : filter })}
                   >
                     <span>{getShipmentIssueFilterLabel(filter)}</span>
-                    <strong>{formatNumber(count)}</strong>
+                    <strong>{formatOverviewCount(count, authoritativeCountsReady)}</strong>
                   </button>
                 );
               })}
@@ -529,7 +623,9 @@ export default function ShipmentWorksheetOverview({
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
                 다음 액션
-                <span className="muted">{formatNumber(decisionCounts.all)}건</span>
+                <span className="muted">
+                  {formatOverviewCount(decisionCounts.all, authoritativeCountsReady)}건
+                </span>
               </div>
               <div className="shipment-status-pill-list">
                 {DECISION_FILTER_OPTIONS.map((option) => {
@@ -547,7 +643,9 @@ export default function ShipmentWorksheetOverview({
                       }
                     >
                       <span>{option.label}</span>
-                      <strong>{formatNumber(decisionCounts[option.value])}</strong>
+                      <strong>
+                        {formatOverviewCount(decisionCounts[option.value], authoritativeCountsReady)}
+                      </strong>
                     </button>
                   );
                 })}
@@ -557,7 +655,9 @@ export default function ShipmentWorksheetOverview({
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
                 송장 상태
-                <span className="muted">{formatNumber(activeSheet?.invoiceCounts.all ?? 0)}건</span>
+                <span className="muted">
+                  {formatOverviewCount(activeSheet?.invoiceCounts.all ?? 0, authoritativeCountsReady)}건
+                </span>
               </div>
               <div className="shipment-status-pill-list">
                 {invoiceStatusOptions.map((option) => {
@@ -575,7 +675,12 @@ export default function ShipmentWorksheetOverview({
                       }
                     >
                       <span>{option.label}</span>
-                      <strong>{formatNumber(activeSheet?.invoiceCounts[option.value] ?? 0)}</strong>
+                      <strong>
+                        {formatOverviewCount(
+                          activeSheet?.invoiceCounts[option.value] ?? 0,
+                          authoritativeCountsReady,
+                        )}
+                      </strong>
                     </button>
                   );
                 })}
@@ -585,7 +690,9 @@ export default function ShipmentWorksheetOverview({
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
                 출력 상태
-                <span className="muted">{formatNumber(activeSheet?.outputCounts.all ?? 0)}건</span>
+                <span className="muted">
+                  {formatOverviewCount(activeSheet?.outputCounts.all ?? 0, authoritativeCountsReady)}건
+                </span>
               </div>
               <div className="shipment-status-pill-list">
                 {outputStatusOptions.map((option) => {
@@ -603,7 +710,12 @@ export default function ShipmentWorksheetOverview({
                       }
                     >
                       <span>{option.label}</span>
-                      <strong>{formatNumber(activeSheet?.outputCounts[option.value] ?? 0)}</strong>
+                      <strong>
+                        {formatOverviewCount(
+                          activeSheet?.outputCounts[option.value] ?? 0,
+                          authoritativeCountsReady,
+                        )}
+                      </strong>
                     </button>
                   );
                 })}
@@ -613,7 +725,9 @@ export default function ShipmentWorksheetOverview({
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
                 레거시 주문 상태
-                <span className="muted">{formatNumber(activeSheet?.orderCounts.all ?? 0)}건</span>
+                <span className="muted">
+                  {formatOverviewCount(activeSheet?.orderCounts.all ?? 0, authoritativeCountsReady)}건
+                </span>
               </div>
               <div className="shipment-status-pill-list">
                 {orderStatusOptions.map((option) => {
@@ -631,7 +745,12 @@ export default function ShipmentWorksheetOverview({
                       }
                     >
                       <span>{option.label}</span>
-                      <strong>{formatNumber(activeSheet?.orderCounts[option.value] ?? 0)}</strong>
+                      <strong>
+                        {formatOverviewCount(
+                          activeSheet?.orderCounts[option.value] ?? 0,
+                          authoritativeCountsReady,
+                        )}
+                      </strong>
                     </button>
                   );
                 })}

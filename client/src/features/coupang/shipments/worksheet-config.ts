@@ -1,9 +1,11 @@
 import type {
+  CoupangDataSource,
   CoupangShipmentWorksheetColumnSource,
   CoupangShipmentWorksheetRawFieldCatalogItem,
   CoupangShipmentWorksheetResponse,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetSortField,
+  CoupangShipmentWorksheetSyncSummary,
 } from "@shared/coupang";
 import type {
   InvoiceStatusCardKey,
@@ -188,6 +190,26 @@ export const OUTPUT_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OutputSt
 ] as const;
 
 export const SELPICK_ORDER_NUMBER_PATTERN = /^O\d{8}[A-Z0-9]\d{4,}$/i;
+
+export const shipmentWorksheetMirrorSyncRequirementReasons = [
+  "idle",
+  "trusted",
+  "fallback",
+  "missing_summary",
+  "partial_sync",
+  "degraded_sync",
+  "range_outside_sync",
+] as const;
+
+export type ShipmentWorksheetMirrorSyncRequirementReason =
+  (typeof shipmentWorksheetMirrorSyncRequirementReasons)[number];
+
+export type ShipmentWorksheetMirrorSyncRequirement = {
+  isTrusted: boolean;
+  requiresFullSync: boolean;
+  reason: ShipmentWorksheetMirrorSyncRequirementReason;
+  syncRangeLabel: string | null;
+};
 
 export function createBuiltinShipmentColumnSource(
   key: ShipmentColumnSourceKey,
@@ -630,6 +652,101 @@ export function serializeShipmentWorksheetSortField(
   }
 
   return source.key ? (`raw:${source.key}` as CoupangShipmentWorksheetSortField) : null;
+}
+
+function normalizeWorksheetDateValue(value: string | null | undefined) {
+  const normalized = value?.trim() ?? "";
+  return normalized ? normalized : null;
+}
+
+function buildShipmentWorksheetSyncRangeLabel(
+  syncSummary: CoupangShipmentWorksheetSyncSummary | null | undefined,
+) {
+  const from = normalizeWorksheetDateValue(syncSummary?.fetchCreatedAtFrom);
+  const to = normalizeWorksheetDateValue(syncSummary?.fetchCreatedAtTo);
+
+  return from && to ? `${from} ~ ${to}` : null;
+}
+
+export function resolveShipmentWorksheetMirrorSyncRequirement(input: {
+  selectedStoreId: string | null | undefined;
+  requestedCreatedAtFrom: string | null | undefined;
+  requestedCreatedAtTo: string | null | undefined;
+  source: CoupangDataSource | null | undefined;
+  syncSummary: CoupangShipmentWorksheetSyncSummary | null | undefined;
+}): ShipmentWorksheetMirrorSyncRequirement {
+  const selectedStoreId = input.selectedStoreId?.trim() ?? "";
+  const requestedCreatedAtFrom = normalizeWorksheetDateValue(input.requestedCreatedAtFrom);
+  const requestedCreatedAtTo = normalizeWorksheetDateValue(input.requestedCreatedAtTo);
+  const syncRangeLabel = buildShipmentWorksheetSyncRangeLabel(input.syncSummary);
+
+  if (!selectedStoreId || !requestedCreatedAtFrom || !requestedCreatedAtTo) {
+    return {
+      isTrusted: false,
+      requiresFullSync: false,
+      reason: "idle",
+      syncRangeLabel,
+    };
+  }
+
+  if (input.source === "fallback") {
+    return {
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "fallback",
+      syncRangeLabel,
+    };
+  }
+
+  if (!input.syncSummary) {
+    return {
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "missing_summary",
+      syncRangeLabel,
+    };
+  }
+
+  if (input.syncSummary.mode !== "full") {
+    return {
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "partial_sync",
+      syncRangeLabel,
+    };
+  }
+
+  if (input.syncSummary.degraded || (input.syncSummary.failedStatuses?.length ?? 0) > 0) {
+    return {
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "degraded_sync",
+      syncRangeLabel,
+    };
+  }
+
+  const fetchCreatedAtFrom = normalizeWorksheetDateValue(input.syncSummary.fetchCreatedAtFrom);
+  const fetchCreatedAtTo = normalizeWorksheetDateValue(input.syncSummary.fetchCreatedAtTo);
+  const isRangeCovered =
+    Boolean(fetchCreatedAtFrom && fetchCreatedAtTo) &&
+    requestedCreatedAtFrom.localeCompare(fetchCreatedAtFrom ?? "") >= 0 &&
+    requestedCreatedAtTo.localeCompare(fetchCreatedAtTo ?? "") <= 0;
+
+  if (!isRangeCovered) {
+    return {
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "range_outside_sync",
+      syncRangeLabel,
+    };
+  }
+
+  return {
+    isTrusted: true,
+    requiresFullSync: false,
+    reason: "trusted",
+    syncRangeLabel,
+  };
 }
 
 export function summarizeWorksheetMessage(sheet: CoupangShipmentWorksheetResponse | null | undefined) {

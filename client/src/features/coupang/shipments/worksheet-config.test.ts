@@ -5,6 +5,7 @@ import {
   createRawShipmentColumnSource,
   formatShipmentColumnSourceOptionLabel,
   normalizeShipmentColumnConfigs,
+  resolveShipmentWorksheetMirrorSyncRequirement,
   resolveShipmentColumnLabelForSourceChange,
   resolveShipmentColumnSourceLabel,
 } from "./worksheet-config";
@@ -86,5 +87,145 @@ describe("worksheet-config column source helpers", () => {
         },
       },
     ]);
+  });
+
+  it("trusts main mirror counts only when the latest full sync covers the selected range", () => {
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "live",
+        syncSummary: {
+          mode: "full",
+          fetchedCount: 2432,
+          insertedCount: 0,
+          insertedSourceKeys: [],
+          updatedCount: 2432,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-03-22",
+          fetchCreatedAtTo: "2026-04-20",
+          statusFilter: null,
+          completedPhases: ["list"],
+          pendingPhases: [],
+          warningPhases: [],
+        },
+      }),
+    ).toEqual({
+      isTrusted: true,
+      requiresFullSync: false,
+      reason: "trusted",
+      syncRangeLabel: "2026-03-22 ~ 2026-04-20",
+    });
+  });
+
+  it("requires a full sync again when the latest sync was quick collect only", () => {
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "live",
+        syncSummary: {
+          mode: "new_only",
+          fetchedCount: 278,
+          insertedCount: 278,
+          insertedSourceKeys: ["source-1"],
+          updatedCount: 0,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-04-19",
+          fetchCreatedAtTo: "2026-04-20",
+          statusFilter: null,
+          completedPhases: ["list"],
+          pendingPhases: [],
+          warningPhases: [],
+        },
+      }),
+    ).toEqual({
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "partial_sync",
+      syncRangeLabel: "2026-04-19 ~ 2026-04-20",
+    });
+  });
+
+  it("requires a full sync when the latest full sync range does not cover the selected range", () => {
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "live",
+        syncSummary: {
+          mode: "full",
+          fetchedCount: 178,
+          insertedCount: 178,
+          insertedSourceKeys: [],
+          updatedCount: 0,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-04-18",
+          fetchCreatedAtTo: "2026-04-20",
+          statusFilter: null,
+          completedPhases: ["list"],
+          pendingPhases: [],
+          warningPhases: [],
+        },
+      }),
+    ).toEqual({
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "range_outside_sync",
+      syncRangeLabel: "2026-04-18 ~ 2026-04-20",
+    });
+  });
+
+  it("does not trust fallback or degraded worksheet summaries", () => {
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "fallback",
+        syncSummary: null,
+      }),
+    ).toEqual({
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "fallback",
+      syncRangeLabel: null,
+    });
+
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "live",
+        syncSummary: {
+          mode: "full",
+          fetchedCount: 2000,
+          insertedCount: 0,
+          insertedSourceKeys: [],
+          updatedCount: 2000,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-03-22",
+          fetchCreatedAtTo: "2026-04-20",
+          statusFilter: null,
+          completedPhases: ["list"],
+          pendingPhases: [],
+          warningPhases: ["customer_service_refresh"],
+          degraded: true,
+        },
+      }),
+    ).toEqual({
+      isTrusted: false,
+      requiresFullSync: true,
+      reason: "degraded_sync",
+      syncRangeLabel: "2026-03-22 ~ 2026-04-20",
+    });
   });
 });

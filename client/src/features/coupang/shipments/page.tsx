@@ -1,6 +1,7 @@
 import {
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useMemo,
   useState,
   type ReactNode,
@@ -112,6 +113,7 @@ import {
   moveColumnConfigs,
   normalizeFiltersToSeoulToday,
   normalizeShipmentColumnConfigs,
+  resolveShipmentWorksheetMirrorSyncRequirement,
   resolveShipmentColumnDefaultWidth,
   serializeShipmentWorksheetSortField,
   SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
@@ -1626,6 +1628,7 @@ export default function CoupangShipmentsPage() {
     useState<CoupangShipmentWorksheetAuditMissingResponse | null>(null);
   const [isAuditDialogOpen, setIsAuditDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [lastAutoFullSyncSignature, setLastAutoFullSyncSignature] = useState<string | null>(null);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
@@ -2129,6 +2132,25 @@ export default function CoupangShipmentsPage() {
   const isQuickCollectFocusActive = quickCollectFocusViewState.isActive;
   const quickCollectFocusResult = quickCollectFocusViewState.result;
   const activeSheet = quickCollectFocusViewState.activeSheet;
+  const activeSheetForSelectedStore =
+    activeSheet?.store.id === filters.selectedStoreId ? activeSheet : null;
+  const worksheetMirrorSyncRequirement = useMemo(
+    () =>
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: filters.selectedStoreId,
+        requestedCreatedAtFrom: filters.createdAtFrom,
+        requestedCreatedAtTo: filters.createdAtTo,
+        source: activeSheetForSelectedStore?.source ?? null,
+        syncSummary: activeSheetForSelectedStore?.syncSummary ?? null,
+      }),
+    [
+      activeSheetForSelectedStore?.source,
+      activeSheetForSelectedStore?.syncSummary,
+      filters.createdAtFrom,
+      filters.createdAtTo,
+      filters.selectedStoreId,
+    ],
+  );
   const effectiveDraftRows = quickCollectFocusViewState.effectiveDraftRows;
   const shipmentColumnSourceOptions = useMemo(
     () =>
@@ -2317,6 +2339,18 @@ export default function CoupangShipmentsPage() {
       filters.pipelineCard !== "all" ||
       filters.issueFilter !== "all"
     : hasCustomWorksheetFilters;
+  const isAuthoritativeWorksheetMirrorView =
+    activeTab === "worksheet" &&
+    !isQuickCollectFocusActive &&
+    !effectiveHasCustomWorksheetFilters;
+  const shouldHoldAuthoritativeWorksheetCounts =
+    isAuthoritativeWorksheetMirrorView && worksheetMirrorSyncRequirement.requiresFullSync;
+  const authoritativeWorksheetSyncSignature =
+    shouldHoldAuthoritativeWorksheetCounts && filters.selectedStoreId
+      ? `${filters.selectedStoreId}:${filters.createdAtFrom}:${filters.createdAtTo}`
+      : null;
+  const isAuthoritativeWorksheetFullSyncBusy =
+    shouldHoldAuthoritativeWorksheetCounts && busyAction === "collect-full";
   const filterSummarySupportText = [
     isQuickCollectFocusActive && quickCollectFocusResult
       ? `빠른 수집 신규 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건 우선 표시 중`
@@ -4226,6 +4260,49 @@ export default function CoupangShipmentsPage() {
     }
   }
 
+  const triggerAutomaticFullSync = useEffectEvent(() => {
+    void collectWorksheet("full", { silent: true });
+  });
+
+  useEffect(() => {
+    if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
+      setLastAutoFullSyncSignature(null);
+      return;
+    }
+
+    if (worksheetMirrorSyncRequirement.isTrusted) {
+      setLastAutoFullSyncSignature(null);
+    }
+  }, [
+    authoritativeWorksheetSyncSignature,
+    shouldHoldAuthoritativeWorksheetCounts,
+    worksheetMirrorSyncRequirement.isTrusted,
+  ]);
+
+  useEffect(() => {
+    if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
+      return;
+    }
+
+    if (worksheetQuery.isFetching || busyAction !== null) {
+      return;
+    }
+
+    if (lastAutoFullSyncSignature === authoritativeWorksheetSyncSignature) {
+      return;
+    }
+
+    setLastAutoFullSyncSignature(authoritativeWorksheetSyncSignature);
+    triggerAutomaticFullSync();
+  }, [
+    authoritativeWorksheetSyncSignature,
+    busyAction,
+    lastAutoFullSyncSignature,
+    shouldHoldAuthoritativeWorksheetCounts,
+    triggerAutomaticFullSync,
+    worksheetQuery.isFetching,
+  ]);
+
   async function saveWorksheetChanges() {
     if (!filters.selectedStoreId || !dirtyCount) {
       return true;
@@ -5267,6 +5344,9 @@ export default function CoupangShipmentsPage() {
         visibleRowsCount: visibleRows.length,
         filters,
         activeSheet,
+        authoritativeCountsReady: !shouldHoldAuthoritativeWorksheetCounts,
+        authoritativeCountsAutoSyncing: isAuthoritativeWorksheetFullSyncBusy,
+        authoritativeCountsSyncRequirement: worksheetMirrorSyncRequirement,
         activeInvoiceStatusCard,
         activeOrderStatusCard,
         activeOutputStatusCard,

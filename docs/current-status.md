@@ -37,7 +37,8 @@
 - 상단 카드/필터 집계도 `priorityCounts`, `pipelineCounts`, `issueCounts`, `directDeliveryCount`, `staleSyncCount`를 별도로 받아 쿠팡 의미 체계 기준으로 계산합니다.
 - 메인 화면의 기본 기간은 이제 `최근 30일`이고, 상단 필터에는 `오늘 / 지난 7일 / 지난 30일` 프리셋과 직접 날짜 입력이 함께 있습니다.
 - `worksheet/view` 조회는 `createdAtFrom`, `createdAtTo`를 실제 서버 projection에 반영하므로, 카드·필터·목록·scope 집계가 모두 같은 기간 분모를 공유합니다.
-- view 응답에는 `coverageCreatedAtFrom`, `coverageCreatedAtTo`가 함께 내려오고, 선택한 기간이 현재 미러 coverage를 벗어나면 화면에서 전체 재동기화 필요성을 경고합니다.
+- view 응답의 `coverageCreatedAtFrom`, `coverageCreatedAtTo`는 누적 coverage 정보로만 남아 있고, 메인 숫자 신뢰 여부는 `syncSummary.mode === "full"` + 최신 `fetchCreatedAtFrom`, `fetchCreatedAtTo`가 현재 선택 기간을 덮는지로 판정합니다.
+- 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 최신 sync가 `빠른 수집(new_only)` 또는 `증분 수집(incremental)`이면, 화면이 부분 집계를 확정값처럼 쓰지 않고 자동으로 `full` 재동기화를 다시 시작합니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `우선 처리 카드 / 배송 처리 / 이슈 필터`
   - 보조 축: `전체 배송관리 / 내부 작업 대상 / 배송 이후 / 구매확정 / 이슈·클레임`
