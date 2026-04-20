@@ -35,22 +35,28 @@ describe("fulfillment filter summary helpers", () => {
   it("builds readable filter tokens in operator reading order", () => {
     expect(
       buildShipmentFilterSummaryTokens({
-        storeName: "쿠팡_올웨이팜",
+        storeName: "쿠팡_테스트",
         filters: {
           createdAtFrom: "2026-04-08",
           createdAtTo: "2026-04-13",
           query: "홍길동",
           scope: "dispatch_active",
           decisionStatus: "recheck",
+          priorityCard: "same_day_dispatch",
+          pipelineCard: "preparing_product",
+          issueFilter: "shipment_stop_resolved",
           invoiceStatusCard: "failed",
           outputStatusCard: "notExported",
           orderStatusCard: "INSTRUCT",
         },
       }),
     ).toEqual([
-      "쿠팡_올웨이팜",
+      "쿠팡_테스트",
       "2026-04-08 ~ 2026-04-13",
       "작업 대상",
+      "우선 당일출고필요",
+      "배송 상품준비중",
+      "이슈 출고중지처리완료",
       "재확인 필요",
       "송장 전송 실패",
       "출력 미출력",

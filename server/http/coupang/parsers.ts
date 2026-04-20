@@ -315,6 +315,9 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
   const item = value && typeof value === "object" ? (value as JsonRecord) : {};
   const scope = asOptionalString(item.scope);
   const decisionStatus = asOptionalString(item.decisionStatus);
+  const priorityCard = asOptionalString(item.priorityCard);
+  const pipelineCard = asOptionalString(item.pipelineCard);
+  const issueFilter = asOptionalString(item.issueFilter);
   const invoiceStatusCard = asOptionalString(item.invoiceStatusCard);
   const orderStatusCard = asOptionalString(item.orderStatusCard);
   const outputStatusCard = asOptionalString(item.outputStatusCard);
@@ -341,6 +344,46 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
       decisionStatus === "recheck"
         ? decisionStatus
         : undefined,
+    priorityCard:
+      priorityCard === "all" ||
+      priorityCard === "shipment_stop_requested" ||
+      priorityCard === "same_day_dispatch" ||
+      priorityCard === "dispatch_delayed" ||
+      priorityCard === "long_in_transit"
+        ? priorityCard
+        : undefined,
+    pipelineCard:
+      pipelineCard === "all" ||
+      pipelineCard === "payment_completed" ||
+      pipelineCard === "preparing_product" ||
+      pipelineCard === "shipping_instruction" ||
+      pipelineCard === "in_delivery" ||
+      pipelineCard === "delivered"
+        ? pipelineCard
+        : pipelineCard === "ACCEPT"
+          ? "payment_completed"
+          : pipelineCard === "INSTRUCT"
+            ? "preparing_product"
+            : pipelineCard === "DEPARTURE"
+              ? "shipping_instruction"
+              : pipelineCard === "DELIVERING"
+                ? "in_delivery"
+                : pipelineCard === "FINAL_DELIVERY"
+                  ? "delivered"
+                  : undefined,
+    issueFilter:
+      issueFilter === "all" ||
+      issueFilter === "shipment_stop_requested" ||
+      issueFilter === "shipment_stop_resolved" ||
+      issueFilter === "cancel" ||
+      issueFilter === "return" ||
+      issueFilter === "exchange" ||
+      issueFilter === "cs_open" ||
+      issueFilter === "direct_delivery"
+        ? issueFilter
+        : issueFilter === "shipment_stop_handled"
+          ? "shipment_stop_resolved"
+          : undefined,
     page: parsePositiveInteger(item.page, 1),
     pageSize: parsePositiveInteger(item.pageSize, 50),
     query: asOptionalString(item.query) ?? undefined,

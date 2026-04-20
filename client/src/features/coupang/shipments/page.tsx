@@ -327,14 +327,14 @@ const INVOICE_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<InvoiceStatusC
 ] as const;
 const ORDER_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OrderStatusCardKey>[] = [
   { value: "all", label: "전체", toneClassName: "neutral" },
-  { value: "ACCEPT", label: "주문접수", toneClassName: "progress" },
+  { value: "ACCEPT", label: "결제완료", toneClassName: "progress" },
   { value: "INSTRUCT", label: "상품준비중", toneClassName: "progress" },
-  { value: "DEPARTURE", label: "출고완료", toneClassName: "progress" },
+  { value: "DEPARTURE", label: "배송지시", toneClassName: "progress" },
   { value: "DELIVERING", label: "배송중", toneClassName: "progress" },
   { value: "FINAL_DELIVERY", label: "배송완료", toneClassName: "success" },
-  { value: "NONE_TRACKING", label: "추적없음", toneClassName: "attention" },
-  { value: "SHIPMENT_STOP_REQUESTED", label: "출고중지 요청", toneClassName: "danger" },
-  { value: "SHIPMENT_STOP_HANDLED", label: "출고중지완료", toneClassName: "attention" },
+  { value: "NONE_TRACKING", label: "업체 직접 배송", toneClassName: "attention" },
+  { value: "SHIPMENT_STOP_REQUESTED", label: "출고중지요청", toneClassName: "danger" },
+  { value: "SHIPMENT_STOP_HANDLED", label: "출고중지처리완료", toneClassName: "attention" },
   { value: "CANCEL", label: "취소", toneClassName: "danger" },
   { value: "RETURN", label: "반품", toneClassName: "danger" },
   { value: "EXCHANGE", label: "교환", toneClassName: "attention" },
@@ -344,7 +344,6 @@ const OUTPUT_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OutputStatusCar
   { value: "notExported", label: "미출력", toneClassName: "ready" },
   { value: "exported", label: "출력 완료", toneClassName: "success" },
 ] as const;
-const SELPICK_ORDER_NUMBER_PATTERN = /^O\d{8}[A-Z0-9]\d{4}$/i;
 const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Seoul",
   year: "numeric",
@@ -390,6 +389,9 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
     left.maxPerPage === right.maxPerPage &&
     left.scope === right.scope &&
     left.decisionStatus === right.decisionStatus &&
+    left.priorityCard === right.priorityCard &&
+    left.pipelineCard === right.pipelineCard &&
+    left.issueFilter === right.issueFilter &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard
@@ -400,6 +402,9 @@ function buildWorksheetViewUrl(input: {
   storeId: string;
   scope: CoupangShipmentWorksheetViewScope;
   decisionStatus: FilterState["decisionStatus"];
+  priorityCard: FilterState["priorityCard"];
+  pipelineCard: FilterState["pipelineCard"];
+  issueFilter: FilterState["issueFilter"];
   page: number;
   pageSize: number;
   query: string;
@@ -422,6 +427,15 @@ function buildWorksheetViewUrl(input: {
 
   if (input.decisionStatus !== "all") {
     params.set("decisionStatus", input.decisionStatus);
+  }
+  if (input.priorityCard !== "all") {
+    params.set("priorityCard", input.priorityCard);
+  }
+  if (input.pipelineCard !== "all") {
+    params.set("pipelineCard", input.pipelineCard);
+  }
+  if (input.issueFilter !== "all") {
+    params.set("issueFilter", input.issueFilter);
   }
 
   if (input.sortField) {
@@ -481,6 +495,36 @@ function buildShipmentDetailUrl(
 
 function makeColumnId() {
   return `shipment-column-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function dedupeShipmentRowsBySourceKey<
+  Row extends Pick<CoupangShipmentWorksheetRow, "sourceKey" | "selpickOrderNumber">,
+>(rows: readonly Row[]) {
+  const rowBySourceKey = new Map<string, Row>();
+  for (const row of rows) {
+    rowBySourceKey.set(row.sourceKey, row);
+  }
+
+  return Array.from(rowBySourceKey.values());
+}
+
+function findDuplicateShipmentSelpickOrderNumbers<
+  Row extends Pick<CoupangShipmentWorksheetRow, "sourceKey" | "selpickOrderNumber">,
+>(rows: readonly Row[]) {
+  const counts = new Map<string, number>();
+  for (const row of dedupeShipmentRowsBySourceKey(rows)) {
+    const selpickOrderNumber = row.selpickOrderNumber?.trim().toUpperCase();
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    counts.set(selpickOrderNumber, (counts.get(selpickOrderNumber) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([selpickOrderNumber]) => selpickOrderNumber)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function createBuiltinShipmentColumnSource(
@@ -1787,6 +1831,9 @@ export default function CoupangShipmentsPage() {
       worksheetPageSize,
       deferredQuery,
       filters.decisionStatus,
+      filters.priorityCard,
+      filters.pipelineCard,
+      filters.issueFilter,
       filters.invoiceStatusCard,
       filters.orderStatusCard,
       filters.outputStatusCard,
@@ -1799,6 +1846,9 @@ export default function CoupangShipmentsPage() {
           storeId: filters.selectedStoreId,
           scope: effectiveWorksheetScope,
           decisionStatus: filters.decisionStatus,
+          priorityCard: filters.priorityCard,
+          pipelineCard: filters.pipelineCard,
+          issueFilter: filters.issueFilter,
           page: worksheetPage,
           pageSize: worksheetPageSize,
           query: deferredQuery,
@@ -1909,6 +1959,9 @@ export default function CoupangShipmentsPage() {
     filters.selectedStoreId,
     filters.scope,
     filters.decisionStatus,
+    filters.priorityCard,
+    filters.pipelineCard,
+    filters.issueFilter,
     deferredQuery,
     filters.invoiceStatusCard,
     filters.orderStatusCard,
@@ -1938,6 +1991,9 @@ export default function CoupangShipmentsPage() {
     filters.createdAtFrom,
     filters.createdAtTo,
     filters.scope,
+    filters.priorityCard,
+    filters.pipelineCard,
+    filters.issueFilter,
     deferredQuery,
     filters.invoiceStatusCard,
     filters.orderStatusCard,
@@ -1951,6 +2007,9 @@ export default function CoupangShipmentsPage() {
     filters.selectedStoreId,
     filters.scope,
     filters.decisionStatus,
+    filters.priorityCard,
+    filters.pipelineCard,
+    filters.issueFilter,
     deferredQuery,
     filters.invoiceStatusCard,
     filters.orderStatusCard,
@@ -1974,6 +2033,9 @@ export default function CoupangShipmentsPage() {
         query: filters.query,
         scope: filters.scope,
         decisionStatus: activeDecisionStatus,
+        priorityCard: filters.priorityCard,
+        pipelineCard: filters.pipelineCard,
+        issueFilter: filters.issueFilter,
         invoiceStatusCard: activeInvoiceStatusCard,
         orderStatusCard: activeOrderStatusCard,
         outputStatusCard: activeOutputStatusCard,
@@ -1985,6 +2047,9 @@ export default function CoupangShipmentsPage() {
       activeOutputStatusCard,
       filters.createdAtFrom,
       filters.createdAtTo,
+      filters.issueFilter,
+      filters.pipelineCard,
+      filters.priorityCard,
       filters.query,
       filters.scope,
       filters.selectedStoreId,
@@ -2056,7 +2121,6 @@ export default function CoupangShipmentsPage() {
     [activeSheet?.rawFieldCatalog, archiveSheet?.rawFieldCatalog, worksheetQuery.data?.rawFieldCatalog],
   );
   const decisionCounts = quickCollectFocusViewState.decisionCounts;
-  const decisionPreviewGroups = quickCollectFocusViewState.decisionPreviewGroups;
   const visibleRows = quickCollectFocusViewState.visibleRows;
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
   const archiveRows = archiveSheet?.items ?? [];
@@ -2065,11 +2129,12 @@ export default function CoupangShipmentsPage() {
   const activeDetailFilterCount = useMemo(
     () =>
       countActiveShipmentDetailFilters({
+        decisionStatus: activeDecisionStatus,
         invoiceStatusCard: activeInvoiceStatusCard,
         orderStatusCard: activeOrderStatusCard,
         outputStatusCard: activeOutputStatusCard,
       }),
-    [activeInvoiceStatusCard, activeOrderStatusCard, activeOutputStatusCard],
+    [activeDecisionStatus, activeInvoiceStatusCard, activeOrderStatusCard, activeOutputStatusCard],
   );
   const activeFilterSummaryTokens = useMemo(() => {
     if (isQuickCollectFocusActive && quickCollectFocusResult) {
@@ -2093,27 +2158,36 @@ export default function CoupangShipmentsPage() {
         query: deferredQuery,
         scope: effectiveWorksheetScope,
         decisionStatus: activeDecisionStatus,
+        priorityCard: filters.priorityCard,
+        pipelineCard: filters.pipelineCard,
+        issueFilter: filters.issueFilter,
         invoiceStatusCard: activeInvoiceStatusCard,
         orderStatusCard: activeOrderStatusCard,
         outputStatusCard: activeOutputStatusCard,
       },
     });
   }, [
-    activeDecisionStatus,
-    activeInvoiceStatusCard,
-    activeOrderStatusCard,
-    activeOutputStatusCard,
-    deferredQuery,
-    filters.createdAtFrom,
-    filters.createdAtTo,
-    effectiveWorksheetScope,
-    isQuickCollectFocusActive,
-    quickCollectFocusResult,
+      activeDecisionStatus,
+      activeInvoiceStatusCard,
+      activeOrderStatusCard,
+      activeOutputStatusCard,
+      deferredQuery,
+      filters.createdAtFrom,
+      filters.createdAtTo,
+      filters.issueFilter,
+      filters.pipelineCard,
+      filters.priorityCard,
+      effectiveWorksheetScope,
+      isQuickCollectFocusActive,
+      quickCollectFocusResult,
     selectedStoreName,
   ]);
   const hasCustomWorksheetFilters =
     Boolean(deferredQuery) ||
     effectiveWorksheetScope !== "dispatch_active" ||
+    filters.priorityCard !== "all" ||
+    filters.pipelineCard !== "all" ||
+    filters.issueFilter !== "all" ||
     activeDecisionStatus !== "all" ||
     activeDetailFilterCount > 0;
   const pageRowIdSet = useMemo(() => new Set(visibleRows.map((row) => row.id)), [visibleRows]);
@@ -2218,7 +2292,10 @@ export default function CoupangShipmentsPage() {
     ? "세부 필터"
     : detailFilterToggleLabel;
   const effectiveHasCustomWorksheetFilters = isQuickCollectFocusActive
-    ? activeDecisionStatus !== "all"
+    ? activeDecisionStatus !== "all" ||
+      filters.priorityCard !== "all" ||
+      filters.pipelineCard !== "all" ||
+      filters.issueFilter !== "all"
     : hasCustomWorksheetFilters;
   const filterSummarySupportText = [
     isQuickCollectFocusActive && quickCollectFocusResult
@@ -2695,9 +2772,9 @@ export default function CoupangShipmentsPage() {
   ) : (
     <span className="status-pill draft">없음</span>
   );
-  const detailOriginalStatusLabel =
-    detailRow?.secondaryStatus?.orderStatusLabel ??
-    (detailResolvedOrderStatus ? formatOrderStatusLabel(detailResolvedOrderStatus) : "-");
+  const detailOriginalStatusLabel = detailRow
+    ? formatOrderStatusLabel(detailRow.rawOrderStatus ?? detailRow.orderStatus)
+    : "-";
   const detailCustomerServiceSignalLabels =
     detailRow?.secondaryStatus?.customerServiceSignalLabels?.length
       ? detailRow.secondaryStatus.customerServiceSignalLabels
@@ -3099,6 +3176,9 @@ export default function CoupangShipmentsPage() {
     return {
       scope: effectiveWorksheetScope,
       decisionStatus: activeDecisionStatus,
+      priorityCard: filters.priorityCard,
+      pipelineCard: filters.pipelineCard,
+      issueFilter: filters.issueFilter,
       page: worksheetPage,
       pageSize: worksheetPageSize,
       query: deferredQuery,
@@ -3115,6 +3195,9 @@ export default function CoupangShipmentsPage() {
     return {
       scope: viewQuery.scope,
       decisionStatus: viewQuery.decisionStatus,
+      priorityCard: viewQuery.priorityCard,
+      pipelineCard: viewQuery.pipelineCard,
+      issueFilter: viewQuery.issueFilter,
       query: viewQuery.query,
       invoiceStatusCard: viewQuery.invoiceStatusCard,
       orderStatusCard: viewQuery.orderStatusCard,
@@ -3141,6 +3224,9 @@ export default function CoupangShipmentsPage() {
         createdAtTo: requestFilters.createdAtTo,
         scope: requestFilters.scope,
         query: deferredQuery,
+        priorityCard: requestFilters.priorityCard,
+        pipelineCard: requestFilters.pipelineCard,
+        issueFilter: requestFilters.issueFilter,
         invoiceStatusCard: requestFilters.invoiceStatusCard,
         orderStatusCard: requestFilters.orderStatusCard,
         outputStatusCard: requestFilters.outputStatusCard,
@@ -3771,6 +3857,26 @@ export default function CoupangShipmentsPage() {
       return null;
     }
 
+    const currentLookupRows = dedupeShipmentRowsBySourceKey([
+      ...Object.values(dirtyRowsBySourceKey),
+      ...Object.values(selectedRowsById),
+      ...(activeSheet?.items ?? []),
+      ...effectiveDraftRows,
+    ]);
+    const duplicateSelpickOrderNumbers = findDuplicateShipmentSelpickOrderNumbers(currentLookupRows);
+    if (duplicateSelpickOrderNumbers.length) {
+      setFeedback({
+        type: "error",
+        title: options.title,
+        message:
+          "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 송장 반영을 진행할 수 없습니다.",
+        details: [
+          `중복 셀픽주문번호: ${duplicateSelpickOrderNumbers.slice(0, 5).join(", ")}${duplicateSelpickOrderNumbers.length > 5 ? " 외" : ""}`,
+        ],
+      });
+      return null;
+    }
+
     const dedupedRows = dedupeInvoiceInputApplyRows(rows);
     if (!dedupedRows.length) {
       setFeedback({
@@ -3990,6 +4096,9 @@ export default function CoupangShipmentsPage() {
               query: requestFilters.query,
               scope: requestFilters.scope,
               decisionStatus: requestFilters.decisionStatus,
+              priorityCard: requestFilters.priorityCard,
+              pipelineCard: requestFilters.pipelineCard,
+              issueFilter: requestFilters.issueFilter,
               invoiceStatusCard: requestFilters.invoiceStatusCard,
               orderStatusCard: requestFilters.orderStatusCard,
               outputStatusCard: requestFilters.outputStatusCard,
@@ -4913,13 +5022,29 @@ export default function CoupangShipmentsPage() {
 
     if (looksLikeInvoiceClipboard(clipboardText)) {
       event.preventDefault();
+      const currentLookupRows = dedupeShipmentRowsBySourceKey([
+        ...Object.values(dirtyRowsBySourceKey),
+        ...Object.values(selectedRowsById),
+        ...(activeSheet?.items ?? []),
+        ...effectiveDraftRows,
+      ]);
+      const duplicateSelpickOrderNumbers =
+        findDuplicateShipmentSelpickOrderNumbers(currentLookupRows);
+      if (duplicateSelpickOrderNumbers.length) {
+        setFeedback({
+          type: "error",
+          title: "송장 붙여넣기",
+          message:
+            "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 송장 붙여넣기를 진행할 수 없습니다.",
+          details: [
+            `중복 셀픽주문번호: ${duplicateSelpickOrderNumbers.slice(0, 5).join(", ")}${duplicateSelpickOrderNumbers.length > 5 ? " 외" : ""}`,
+          ],
+        });
+        return;
+      }
+
       const currentRowsBySelpickOrderNumber = new Map(
-        [
-          ...Object.values(dirtyRowsBySourceKey),
-          ...Object.values(selectedRowsById),
-          ...(activeSheet?.items ?? []),
-          ...effectiveDraftRows,
-        ].map((row) => [row.selpickOrderNumber, row] as const),
+        currentLookupRows.map((row) => [row.selpickOrderNumber, row] as const),
       );
       const { updates, issues } = parseInvoiceClipboardRows(
         clipboardText,
@@ -5112,7 +5237,6 @@ export default function CoupangShipmentsPage() {
             : null,
         activeDecisionStatus,
         decisionCounts,
-        decisionPreviewGroups,
         detailFilterToggleLabel: effectiveDetailFilterToggleLabel,
         detailFiltersOpen,
         activeDetailFilterCount: effectiveDetailFilterCount,
@@ -5144,6 +5268,9 @@ export default function CoupangShipmentsPage() {
             query: "",
             scope: "dispatch_active",
             decisionStatus: "all",
+            priorityCard: "all",
+            pipelineCard: "all",
+            issueFilter: "all",
             invoiceStatusCard: "all",
             orderStatusCard: "all",
             outputStatusCard: "all",

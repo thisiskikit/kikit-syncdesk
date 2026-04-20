@@ -137,6 +137,19 @@ const createTableStatements = [
     ON coupang_shipment_archive_rows (source_key)
   `,
   `
+    CREATE TABLE IF NOT EXISTS coupang_shipment_selpick_counters (
+      platform_key text PRIMARY KEY,
+      last_sequence integer NOT NULL DEFAULT 0,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS coupang_shipment_selpick_registry (
+      selpick_order_number text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS ui_state_entries (
       key text PRIMARY KEY,
       value_json jsonb NOT NULL DEFAULT '{}'::jsonb,

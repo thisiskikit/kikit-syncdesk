@@ -344,6 +344,17 @@ export const coupangShipmentArchiveRows = pgTable(
   }),
 );
 
+export const coupangShipmentSelpickCounters = pgTable("coupang_shipment_selpick_counters", {
+  platformKey: text("platform_key").primaryKey(),
+  lastSequence: integer("last_sequence").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const coupangShipmentSelpickRegistry = pgTable("coupang_shipment_selpick_registry", {
+  selpickOrderNumber: text("selpick_order_number").primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const uiStateEntries = pgTable("ui_state_entries", {
   key: text("key").primaryKey(),
   valueJson: jsonb("value_json").notNull().default({}),

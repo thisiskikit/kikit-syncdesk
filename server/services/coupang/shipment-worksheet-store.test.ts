@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, rm, writeFile } from "fs/promises";
 import path from "path";
 import { tmpdir } from "os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -298,5 +298,190 @@ describe("CoupangShipmentWorksheetStore", () => {
       invoiceTransmissionAt: "2026-03-26T10:00:00.000Z",
       invoiceAppliedAt: null,
     });
+  });
+
+  it("keeps increasing selpick order numbers after archiving and reloading", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "coupang-shipment-worksheet-store-"));
+    const filePath = path.join(tempDir, "coupang-shipment-worksheet.json");
+    const store = new CoupangShipmentWorksheetStore(filePath);
+
+    await store.setStoreSheet({
+      storeId: "store-1",
+      items: [
+        buildRow({
+          id: "row-archived",
+          sourceKey: "key-archived",
+          orderDateKey: "20260326",
+          orderDateText: "03/26",
+          selpickOrderNumber: "O20260326K0009",
+          updatedAt: "2026-03-26T10:00:00.000Z",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T10:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-26",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+    });
+
+    const currentSheet = await store.getStoreSheet("store-1");
+    await store.archiveRows({
+      storeId: "store-1",
+      items: currentSheet.items,
+      archivedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    const reloadedStore = new CoupangShipmentWorksheetStore(filePath);
+    const [nextRow] = await reloadedStore.materializeSelpickOrderNumbers({
+      storeId: "store-1",
+      platformKey: "K",
+      items: [
+        buildRow({
+          id: "row-new",
+          sourceKey: "key-new",
+          orderDateKey: "20260327",
+          orderDateText: "03/27",
+          selpickOrderNumber: "",
+          updatedAt: "2026-03-27T10:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(nextRow?.selpickOrderNumber).toBe("O20260327K0010");
+  });
+
+  it("auto-repairs safe duplicate selpick order numbers", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "coupang-shipment-worksheet-store-"));
+    const filePath = path.join(tempDir, "coupang-shipment-worksheet.json");
+    await writeFile(
+      filePath,
+      JSON.stringify(
+        {
+          version: 2,
+          stores: {
+            "store-1": {
+              items: [
+                buildRow({
+                  id: "row-1",
+                  sourceKey: "key-1",
+                  orderDateKey: "20260326",
+                  orderDateText: "03/26",
+                  selpickOrderNumber: "O20260326K0001",
+                  updatedAt: "2026-03-26T10:00:00.000Z",
+                }),
+                buildRow({
+                  id: "row-2",
+                  sourceKey: "key-2",
+                  orderDateKey: "20260326",
+                  orderDateText: "03/26",
+                  selpickOrderNumber: "O20260326K0001",
+                  updatedAt: "2026-03-26T10:05:00.000Z",
+                }),
+              ],
+              collectedAt: "2026-03-26T10:05:00.000Z",
+              source: "live",
+              message: null,
+              syncState: {
+                lastIncrementalCollectedAt: "2026-03-26T10:05:00.000Z",
+                lastFullCollectedAt: "2026-03-26T10:05:00.000Z",
+                coveredCreatedAtFrom: "2026-03-26",
+                coveredCreatedAtTo: "2026-03-26",
+                lastStatusFilter: null,
+              },
+              syncSummary: null,
+              updatedAt: "2026-03-26T10:05:00.000Z",
+            },
+          },
+          archives: {},
+          selpickRegistry: [],
+          selpickCounters: {},
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const store = new CoupangShipmentWorksheetStore(filePath);
+
+    await store.ensureSelpickIntegrity({
+      storeId: "store-1",
+      platformKey: "K",
+    });
+
+    const repairedSheet = await store.getStoreSheet("store-1");
+    expect(repairedSheet.items.map((row) => row.selpickOrderNumber).sort()).toEqual([
+      "O20260326K0001",
+      "O20260326K0002",
+    ]);
+  });
+
+  it("blocks duplicate selpick order numbers that already have operational usage history", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "coupang-shipment-worksheet-store-"));
+    const filePath = path.join(tempDir, "coupang-shipment-worksheet.json");
+    await writeFile(
+      filePath,
+      JSON.stringify(
+        {
+          version: 2,
+          stores: {
+            "store-1": {
+              items: [
+                buildRow({
+                  id: "row-1",
+                  sourceKey: "key-1",
+                  orderDateKey: "20260326",
+                  orderDateText: "03/26",
+                  selpickOrderNumber: "O20260326K0001",
+                  updatedAt: "2026-03-26T10:00:00.000Z",
+                }),
+                {
+                  ...buildRow({
+                    id: "row-2",
+                    sourceKey: "key-2",
+                    orderDateKey: "20260326",
+                    orderDateText: "03/26",
+                    selpickOrderNumber: "O20260326K0001",
+                    updatedAt: "2026-03-26T10:05:00.000Z",
+                  }),
+                  invoiceAppliedAt: "2026-03-26T10:10:00.000Z",
+                },
+              ],
+              collectedAt: "2026-03-26T10:10:00.000Z",
+              source: "live",
+              message: null,
+              syncState: {
+                lastIncrementalCollectedAt: "2026-03-26T10:10:00.000Z",
+                lastFullCollectedAt: "2026-03-26T10:10:00.000Z",
+                coveredCreatedAtFrom: "2026-03-26",
+                coveredCreatedAtTo: "2026-03-26",
+                lastStatusFilter: null,
+              },
+              syncSummary: null,
+              updatedAt: "2026-03-26T10:10:00.000Z",
+            },
+          },
+          archives: {},
+          selpickRegistry: [],
+          selpickCounters: {},
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const store = new CoupangShipmentWorksheetStore(filePath);
+
+    await expect(
+      store.ensureSelpickIntegrity({
+        storeId: "store-1",
+        platformKey: "K",
+      }),
+    ).rejects.toThrow("운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구하지 못했습니다.");
   });
 });

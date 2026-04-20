@@ -19,6 +19,8 @@ const {
   getProductDetailMock,
   getStoreSheetMock,
   getArchivedSourceKeysMock,
+  ensureSelpickIntegrityMock,
+  materializeSelpickOrderNumbersMock,
   setStoreSheetMock,
   upsertStoreRowsMock,
   archiveRowsMock,
@@ -35,6 +37,8 @@ const {
   getProductDetailMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
   getArchivedSourceKeysMock: vi.fn(),
+  ensureSelpickIntegrityMock: vi.fn(),
+  materializeSelpickOrderNumbersMock: vi.fn(),
   setStoreSheetMock: vi.fn(),
   upsertStoreRowsMock: vi.fn(),
   archiveRowsMock: vi.fn(),
@@ -66,6 +70,8 @@ vi.mock("./shipment-worksheet-store", () => ({
   coupangShipmentWorksheetStore: {
     getStoreSheet: getStoreSheetMock,
     getArchivedSourceKeys: getArchivedSourceKeysMock,
+    ensureSelpickIntegrity: ensureSelpickIntegrityMock,
+    materializeSelpickOrderNumbers: materializeSelpickOrderNumbersMock,
     setStoreSheet: setStoreSheetMock,
     upsertStoreRows: upsertStoreRowsMock,
     archiveRows: archiveRowsMock,
@@ -471,6 +477,7 @@ describe("coupang shipment worksheet collection", () => {
     getStoreMock.mockResolvedValue(buildStore());
     getStoreSheetMock.mockResolvedValue(buildEmptySheet());
     getArchivedSourceKeysMock.mockResolvedValue([]);
+    ensureSelpickIntegrityMock.mockResolvedValue(undefined);
     listReturnsMock.mockResolvedValue({
       items: [],
       source: "live",
@@ -500,6 +507,85 @@ describe("coupang shipment worksheet collection", () => {
       hitSafeCap: false,
     });
     getProductDetailMock.mockResolvedValue(null);
+    let materializeInitialized = false;
+    const materializedRegistry = new Set<string>();
+    const materializedCounters = new Map<string, number>();
+    const parseSelpickOrderNumber = (value: string) => {
+      const matched = value.trim().toUpperCase().match(/^O\d{8}([A-Z0-9])(\d{4,})$/);
+      if (!matched) {
+        return null;
+      }
+
+      const sequence = Number(matched[2]);
+      return Number.isFinite(sequence)
+        ? {
+            platformKey: matched[1],
+            sequence,
+          }
+        : null;
+    };
+    materializeSelpickOrderNumbersMock.mockImplementation(
+      async (input: { items: CoupangShipmentWorksheetRow[]; platformKey: string }) => {
+        if (!materializeInitialized) {
+          const latestSheetPromise = getStoreSheetMock.mock.results.at(-1)?.value;
+          const latestSheet =
+            latestSheetPromise && typeof latestSheetPromise.then === "function"
+              ? await latestSheetPromise
+              : buildEmptySheet();
+          for (const row of latestSheet.items ?? []) {
+            const normalized = row.selpickOrderNumber?.trim().toUpperCase();
+            if (!normalized) {
+              continue;
+            }
+
+            materializedRegistry.add(normalized);
+            const parsed = parseSelpickOrderNumber(normalized);
+            if (!parsed) {
+              continue;
+            }
+
+            materializedCounters.set(
+              parsed.platformKey,
+              Math.max(materializedCounters.get(parsed.platformKey) ?? 0, parsed.sequence),
+            );
+          }
+          materializeInitialized = true;
+        }
+
+        const platformKey = input.platformKey.trim().toUpperCase();
+        return input.items.map((row) => {
+          const existingSelpickOrderNumber = row.selpickOrderNumber?.trim().toUpperCase();
+          if (existingSelpickOrderNumber) {
+            materializedRegistry.add(existingSelpickOrderNumber);
+            const parsed = parseSelpickOrderNumber(existingSelpickOrderNumber);
+            if (parsed) {
+              materializedCounters.set(
+                parsed.platformKey,
+                Math.max(materializedCounters.get(parsed.platformKey) ?? 0, parsed.sequence),
+              );
+            }
+            return {
+              ...row,
+              selpickOrderNumber: existingSelpickOrderNumber,
+            };
+          }
+
+          let nextSequence = (materializedCounters.get(platformKey) ?? 0) + 1;
+          let nextSelpickOrderNumber = `O${row.orderDateKey}${platformKey}${String(nextSequence).padStart(4, "0")}`;
+          while (materializedRegistry.has(nextSelpickOrderNumber)) {
+            nextSequence += 1;
+            nextSelpickOrderNumber = `O${row.orderDateKey}${platformKey}${String(nextSequence).padStart(4, "0")}`;
+          }
+
+          materializedRegistry.add(nextSelpickOrderNumber);
+          materializedCounters.set(platformKey, nextSequence);
+          return {
+            ...row,
+            selpickOrderNumber: nextSelpickOrderNumber,
+          };
+        });
+      },
+    );
     archiveRowsMock.mockImplementation(async (input: { items: Array<{ sourceKey: string }>; dryRun?: boolean }) => ({
       archivedCount: input.dryRun ? 0 : input.items.length,
       skippedCount: 0,
@@ -1709,6 +1795,44 @@ describe("coupang shipment worksheet collection", () => {
       orderDateKey: "20260327",
       selpickOrderNumber: "O20260327T0010",
     });
+  });
+
+  it("checks selpick integrity first and materializes new selpick numbers through the store helper", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "210:V-210",
+          shipmentBoxId: "210",
+          orderId: "O-210",
+          vendorItemId: "V-210",
+          status: "INSTRUCT",
+          productName: "Integrity Product",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live" as const,
+      message: null,
+    });
+
+    await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "new_only",
+    });
+
+    expect(ensureSelpickIntegrityMock).toHaveBeenCalledWith({
+      storeId: "store-1",
+      platformKey: "T",
+    });
+    expect(materializeSelpickOrderNumbersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        platformKey: "T",
+      }),
+    );
   });
 
   it("keeps successful INSTRUCT results when the ACCEPT quick-collect lookup fails", async () => {

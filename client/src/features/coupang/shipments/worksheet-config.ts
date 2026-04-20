@@ -178,7 +178,7 @@ export const ORDER_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OrderStat
   { value: "DEPARTURE", label: "배송지시", toneClassName: "progress" },
   { value: "DELIVERING", label: "배송중", toneClassName: "progress" },
   { value: "FINAL_DELIVERY", label: "배송완료", toneClassName: "success" },
-  { value: "NONE_TRACKING", label: "추적없음", toneClassName: "attention" },
+  { value: "NONE_TRACKING", label: "업체 직접 배송", toneClassName: "attention" },
 ] as const;
 
 export const OUTPUT_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OutputStatusCardKey>[] = [
@@ -187,7 +187,7 @@ export const OUTPUT_STATUS_CARD_OPTIONS: readonly QuickFilterCardOption<OutputSt
   { value: "exported", label: "출력 완료", toneClassName: "success" },
 ] as const;
 
-export const SELPICK_ORDER_NUMBER_PATTERN = /^O\d{8}[A-Z0-9]\d{4}$/i;
+export const SELPICK_ORDER_NUMBER_PATTERN = /^O\d{8}[A-Z0-9]\d{4,}$/i;
 
 export function createBuiltinShipmentColumnSource(
   key: ShipmentColumnSourceKey,
@@ -376,6 +376,61 @@ function defaultSeoulDate(offsetDays: number) {
   return `${nextYear}-${nextMonth}-${nextDay}`;
 }
 
+function normalizePriorityCardFilter(
+  value: FilterState["priorityCard"] | string | null | undefined,
+): FilterState["priorityCard"] {
+  return value === "shipment_stop_requested" ||
+    value === "same_day_dispatch" ||
+    value === "dispatch_delayed" ||
+    value === "long_in_transit"
+    ? value
+    : "all";
+}
+
+function normalizePipelineCardFilter(
+  value: FilterState["pipelineCard"] | string | null | undefined,
+): FilterState["pipelineCard"] {
+  switch (value) {
+    case "payment_completed":
+    case "preparing_product":
+    case "shipping_instruction":
+    case "in_delivery":
+    case "delivered":
+      return value;
+    case "ACCEPT":
+      return "payment_completed";
+    case "INSTRUCT":
+      return "preparing_product";
+    case "DEPARTURE":
+      return "shipping_instruction";
+    case "DELIVERING":
+    case "NONE_TRACKING":
+      return "in_delivery";
+    case "FINAL_DELIVERY":
+      return "delivered";
+    default:
+      return "all";
+  }
+}
+
+function normalizeIssueFilter(
+  value: FilterState["issueFilter"] | string | null | undefined,
+): FilterState["issueFilter"] {
+  if (value === "shipment_stop_handled") {
+    return "shipment_stop_resolved";
+  }
+
+  return value === "shipment_stop_requested" ||
+    value === "shipment_stop_resolved" ||
+    value === "cancel" ||
+    value === "return" ||
+    value === "exchange" ||
+    value === "cs_open" ||
+    value === "direct_delivery"
+    ? value
+    : "all";
+}
+
 export function createDefaultFilters(): FilterState {
   return {
     selectedStoreId: "",
@@ -385,6 +440,9 @@ export function createDefaultFilters(): FilterState {
     maxPerPage: 20,
     scope: "dispatch_active",
     decisionStatus: "all",
+    priorityCard: "all",
+    pipelineCard: "all",
+    issueFilter: "all",
     invoiceStatusCard: "all",
     orderStatusCard: "all",
     outputStatusCard: "all",
@@ -402,6 +460,9 @@ export function normalizeFiltersToSeoulToday(current: FilterState): FilterState 
     createdAtTo: today,
     scope: current.scope ?? "dispatch_active",
     decisionStatus: current.decisionStatus ?? "all",
+    priorityCard: normalizePriorityCardFilter(current.priorityCard),
+    pipelineCard: normalizePipelineCardFilter(current.pipelineCard),
+    issueFilter: normalizeIssueFilter(current.issueFilter),
     invoiceStatusCard: normalizeInvoiceStatusCardKey(current.invoiceStatusCard),
     orderStatusCard: normalizeOrderStatusCardKey(current.orderStatusCard),
     outputStatusCard: normalizeOutputStatusCardKey(current.outputStatusCard),
@@ -417,6 +478,9 @@ export function areFiltersEqual(left: FilterState, right: FilterState) {
     left.maxPerPage === right.maxPerPage &&
     left.scope === right.scope &&
     left.decisionStatus === right.decisionStatus &&
+    left.priorityCard === right.priorityCard &&
+    left.pipelineCard === right.pipelineCard &&
+    left.issueFilter === right.issueFilter &&
     left.invoiceStatusCard === right.invoiceStatusCard &&
     left.orderStatusCard === right.orderStatusCard &&
     left.outputStatusCard === right.outputStatusCard

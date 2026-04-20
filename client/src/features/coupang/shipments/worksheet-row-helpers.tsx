@@ -11,7 +11,6 @@ import { StatusBadge } from "@/components/status-badge";
 import { getInvoiceStatusCardKey } from "@/lib/coupang-shipment-quick-filters";
 import {
   formatShipmentWorksheetCustomerServiceLabel,
-  getCoupangCustomerServiceToneClass,
   getCoupangCustomerServiceStateText,
   getShipmentWorksheetCustomerServiceSearchText,
   hasCoupangCustomerServiceIssue,
@@ -26,6 +25,7 @@ import {
   getFulfillmentDecision,
   getFulfillmentDecisionReasonLabel,
 } from "./fulfillment-decision";
+import { getShipmentNormalizedStatusPresentation } from "./coupang-status-view";
 import {
   isBuiltinShipmentColumnSource,
   resolveShipmentColumnDefaultWidth,
@@ -547,42 +547,35 @@ function resolveWorksheetOrderStatus(
 }
 
 export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow) {
-  const resolvedOrderStatus = resolveWorksheetOrderStatus(row);
-  const orderLabel = formatOrderStatusLabel(resolvedOrderStatus);
-  const hasCustomerServiceIssue = hasCoupangCustomerServiceIssue({
-    summary: row.customerServiceIssueSummary,
-    count: row.customerServiceIssueCount,
-    breakdown: row.customerServiceIssueBreakdown,
-  });
-  const customerServiceLabel = formatShipmentWorksheetCustomerServiceLabel({
-    summary: row.customerServiceIssueSummary,
-    count: row.customerServiceIssueCount,
-    state: row.customerServiceState,
-    breakdown: row.customerServiceIssueBreakdown,
-  });
-  const customerServiceToneClass = getCoupangCustomerServiceToneClass({
-    summary: row.customerServiceIssueSummary,
-    breakdown: row.customerServiceIssueBreakdown,
-  });
-  const customerServiceIssueSummary = hasCustomerServiceIssue
-    ? formatExportText(row.customerServiceIssueSummary) || null
-    : null;
+  const statusPresentation = getShipmentNormalizedStatusPresentation(row);
+  const customerServiceLabel =
+    statusPresentation.snapshot.issueStage !== "none" || statusPresentation.snapshot.isDirectDelivery
+      ? statusPresentation.issueLabel
+      : null;
+  const customerServiceIssueSummary = formatExportText(row.customerServiceIssueSummary) || null;
   const customerServiceStateText =
-    hasCustomerServiceIssue && row.customerServiceState === "stale"
+    row.customerServiceState !== "ready"
       ? getCoupangCustomerServiceStateText(row.customerServiceState)
       : null;
-  const title = [orderLabel, customerServiceStateText, customerServiceLabel, customerServiceIssueSummary]
+  const title = [
+    statusPresentation.shippingLabel,
+    customerServiceLabel,
+    customerServiceStateText,
+    statusPresentation.lastSyncText,
+    customerServiceIssueSummary,
+  ]
     .filter(Boolean)
     .join(" · ");
 
   return {
-    orderLabel,
-    orderToneClassName: getOrderStatusToneClass(resolvedOrderStatus),
+    orderLabel: statusPresentation.shippingLabel,
+    orderToneClassName: statusPresentation.shippingTone,
     customerServiceLabel,
-    customerServiceToneClass,
+    customerServiceToneClass: statusPresentation.issueTone,
     customerServiceIssueSummary,
     customerServiceStateText,
-    title: title || orderLabel,
+    lastSyncText: statusPresentation.lastSyncText,
+    title: title || statusPresentation.shippingLabel,
   };
 }
 
@@ -620,18 +613,14 @@ function getRowSecondaryStatusSummary(row: CoupangShipmentWorksheetRow) {
 export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
   const presentation = getWorksheetStatusPresentation(row);
   const decision = getRowDecisionPresentation(row);
-  const secondaryStatus = getRowSecondaryStatusSummary(row);
-  const customerServiceSignalLabels =
-    secondaryStatus.customerServiceSignalLabels.length > 0
-      ? secondaryStatus.customerServiceSignalLabels
-      : presentation.customerServiceLabel
-        ? [presentation.customerServiceLabel]
-        : [];
+  const statusPresentation = getShipmentNormalizedStatusPresentation(row);
   const title = [
+    statusPresentation.rawOrderLabel,
+    statusPresentation.shippingLabel,
+    presentation.customerServiceLabel,
     decision.statusLabel,
     decision.reasonLabel,
-    secondaryStatus.orderStatusLabel,
-    ...customerServiceSignalLabels,
+    presentation.lastSyncText,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -640,24 +629,31 @@ export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
     <div className="shipment-cell shipment-status-cell" title={title || presentation.title}>
       <div className="shipment-status-stack">
         <div className="shipment-status-summary">
+          <span className={`status-pill ${presentation.orderToneClassName}`}>
+            {statusPresentation.shippingLabel}
+          </span>
+          {statusPresentation.snapshot.priorityBucket ? (
+            <span className={`status-pill ${statusPresentation.priorityTone}`}>
+              {statusPresentation.priorityLabel}
+            </span>
+          ) : null}
+        </div>
+        <div className="shipment-status-subrow">
+          <span className="shipment-status-chip">원본 {statusPresentation.rawOrderLabel}</span>
+          {presentation.customerServiceLabel ? (
+            <span className={`shipment-status-chip ${presentation.customerServiceToneClass}`}>
+              {presentation.customerServiceLabel}
+            </span>
+          ) : (
+            <span className="shipment-status-muted">이슈 없음</span>
+          )}
+        </div>
+        <div className="shipment-status-subrow">
           <span className={decision.toneClassName}>{decision.statusLabel}</span>
           <span className="shipment-decision-reason-pill">{decision.reasonLabel}</span>
         </div>
         <div className="shipment-status-subrow">
-          <span className={`status-pill ${presentation.orderToneClassName}`}>
-            {secondaryStatus.orderStatusLabel}
-          </span>
-        </div>
-        <div className="shipment-status-subrow">
-          {customerServiceSignalLabels.length ? (
-            customerServiceSignalLabels.slice(0, 2).map((label) => (
-              <span key={label} className="shipment-status-chip">
-                {label}
-              </span>
-            ))
-          ) : (
-            <span className="shipment-status-muted">CS 신호 없음</span>
-          )}
+          <span className="shipment-status-muted">{presentation.lastSyncText}</span>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import {
   formatCoupangOrderStatusLabel,
   resolveCoupangDisplayOrderStatus,
@@ -22,6 +23,6 @@ describe("resolveCoupangDisplayOrderStatus", () => {
         customerServiceIssueSummary: "출고중지 처리됨 1건",
       }),
     ).toBe("SHIPMENT_STOP_HANDLED");
-    expect(formatCoupangOrderStatusLabel("SHIPMENT_STOP_HANDLED")).toBe("출고중지완료");
+    expect(formatCoupangOrderStatusLabel("SHIPMENT_STOP_HANDLED")).toBe("출고중지처리완료");
   });
 });

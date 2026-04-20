@@ -2,6 +2,85 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-20 / 쿠팡 기준 정합성 재설계
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `shared/coupang-status.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `client/src/lib/coupang-order-status.ts`
+  - `client/src/lib/coupang-order-status.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/types.ts`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
+  - `client/src/features/coupang/shipments/shipment-hub-side-panel.tsx`
+  - `client/src/features/coupang/shipments/coupang-status-view.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 쿠팡 출고 worksheet row와 view 응답에 `rawOrderStatus`, `shippingStage`, `issueStage`, `priorityBucket`, `pipelineBucket`, `isDirectDelivery`, `syncSource`, `statusDerivedAt`, `statusMismatchReason` 정규화 상태 필드를 추가했습니다.
+  - `priorityCard`, `pipelineCard`는 호환용 alias로만 남기고, 실제 집계와 상태 계산은 `priorityBucket`, `pipelineBucket`을 기준으로 고정했습니다.
+  - 서버 view 계층은 더 이상 CS/클레임 이슈로 배송 단계를 덮어쓰지 않고, `배송 축`과 `이슈 축`을 분리해서 계산합니다.
+  - 배송 축은 `payment_completed / preparing_product / shipping_instruction / in_delivery / delivered`, 이슈 축은 `shipment_stop_requested / shipment_stop_resolved / cancel / return / exchange / cs_open / none` 어휘로 고정했습니다.
+  - 상단 집계는 `decisionCounts` 중심이 아니라 `priorityCounts`, `pipelineCounts`, `issueCounts`, `directDeliveryCount`, `staleSyncCount` 중심으로 확장했습니다.
+  - `우선 처리 카드 / 배송 처리 / 이슈 필터`는 현재 필터 전체 기준으로 계산하고, 클릭 시 하단 원본 테이블이 같은 쿠팡 기준 상태 축으로 연동됩니다.
+  - `NONE_TRACKING`은 `배송중`으로 보이되 `업체 직접 배송` 이슈 필터와 보조 배지로 따로 드러나도록 정리했습니다.
+  - 우측 판단 패널과 상태 셀은 `쿠팡 원본 상태 -> 현재 배송 단계 -> 현재 이슈 단계`를 먼저 보여주고, 내부 `다음 액션` 정보는 보조 안내로만 남겼습니다.
+  - 패널에는 `원본값`, `현재 표시값`, `불일치 사유`, `마지막 동기화 시각`을 같이 보여줘 live/worksheet 차이를 설명할 수 있게 했습니다.
+  - 레거시 CS summary만 남은 row도 handled 계열 예전 표현을 fallback으로 흡수해 `shipment_stop_resolved`로 정규화되게 맞췄습니다.
+- 이유:
+  - 주 화면의 기준을 내부 작업 상태가 아니라 쿠팡 원본 의미 체계로 다시 고정하고, 카드/필터/목록이 서로 다른 기준으로 말하는 문제를 줄이기 위해서입니다.
+  - 배송 상태와 반품/취소/CS 이슈를 같은 한 줄 상태로 섞으면 원본 의미가 깨져 운영 판단이 흔들리기 때문입니다.
+- 남은 점:
+  - 라이브 쿠팡 값과 저장 스냅샷의 차이를 행별 실시간으로 모두 검증한 것은 아니며, 현재 `syncSource`와 `statusMismatchReason`은 기존 저장 필드 조합을 기준으로 계산합니다.
+  - 브라우저에서 새 상단 카드와 우측 패널의 실제 체감까지 직접 검증한 것은 아직 아닙니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts`
+  - `npx vitest run client/src/features/coupang/shipments/quick-collect-focus.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts client/src/lib/coupang-order-status.test.ts`
+
+## 2026-04-20 / 쿠팡 셀픽주문번호 절대 중복 방지
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/schema.ts`
+  - `server/services/shared/work-data-db.ts`
+  - `server/interfaces/coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-store.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-store.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 셀픽주문번호 발급 기준을 현재 worksheet 스냅샷 계산에서 DB 영구 예약 방식으로 바꿨습니다.
+  - 새 `coupang_shipment_selpick_counters`, `coupang_shipment_selpick_registry` 구조를 추가해 번호 문자열의 전역 이력과 플랫폼별 마지막 시퀀스를 따로 저장합니다.
+  - collect 경로는 더 이상 메모리 allocator로 번호를 만들지 않고, store 계층의 공통 `materializeSelpickOrderNumbers()`를 통해서만 새 번호를 예약합니다.
+  - legacy/file 저장소와 DB 저장소 모두 active + archive 전체를 기준으로 셀픽 무결성을 점검하고, 안전한 중복만 자동 재번호하도록 맞췄습니다.
+  - 이미 송장 반영·출력 등 운영 사용 이력이 있는 중복은 자동으로 바꾸지 않고, patch / collect / refresh / invoice input 같은 write 경로를 명시적으로 차단합니다.
+  - 클라이언트는 `4자리 이상` suffix를 허용하도록 패턴을 넓히고, 붙여넣기/송장 반영 전에 중복 셀픽이 남아 있으면 조용히 `Map`으로 덮어쓰지 않도록 막았습니다.
+- 이유:
+  - 보관함 이동 후 재수집, 날짜 변경, 앱 재시작, 동시 수집처럼 worksheet 스냅샷만으로는 막기 어려운 경우까지 포함해 셀픽주문번호 재사용과 충돌을 구조적으로 차단해야 했습니다.
+- 남은 점:
+  - 이미 운영에 쓰인 중복은 자동 복구하지 않으므로, 해당 데이터가 남아 있으면 차단 메시지에 따라 수동 정리가 필요합니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-store.test.ts`
+
 ## 2026-04-19 / 쿠팡 출고 허브 UI 재구성
 
 - 변경 유형:

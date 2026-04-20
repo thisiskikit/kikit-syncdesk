@@ -69,8 +69,25 @@ export type ArchiveCoupangShipmentWorksheetRowsResult = {
   dryRun: boolean;
 };
 
+export type EnsureCoupangShipmentWorksheetSelpickIntegrityInput = {
+  storeId: string;
+  platformKey: string;
+};
+
+export type MaterializeCoupangShipmentWorksheetSelpickNumbersInput = {
+  storeId: string;
+  platformKey: string;
+  items: CoupangShipmentWorksheetRow[];
+};
+
 export interface CoupangShipmentWorksheetStorePort {
   getStoreSheet(storeId: string): Promise<CoupangShipmentWorksheetStoreSheet>;
+  ensureSelpickIntegrity(
+    input: EnsureCoupangShipmentWorksheetSelpickIntegrityInput,
+  ): Promise<void>;
+  materializeSelpickOrderNumbers(
+    input: MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
+  ): Promise<CoupangShipmentWorksheetRow[]>;
   setStoreSheet(
     input: SetCoupangShipmentWorksheetStoreSheetInput,
   ): Promise<CoupangShipmentWorksheetStoreSheet>;

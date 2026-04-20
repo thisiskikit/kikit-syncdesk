@@ -12,6 +12,8 @@ export type {
   CoupangShipmentWorksheetStorePort,
   CoupangShipmentWorksheetStoreSheet,
   CoupangShipmentWorksheetSyncState,
+  EnsureCoupangShipmentWorksheetSelpickIntegrityInput,
+  MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
   PatchCoupangShipmentWorksheetRowsInput,
   PatchCoupangShipmentWorksheetRowsResult,
   SetCoupangShipmentWorksheetStoreSheetInput,

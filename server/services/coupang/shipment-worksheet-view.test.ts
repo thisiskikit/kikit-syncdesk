@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import {
@@ -10,16 +10,25 @@ import {
 function buildRow(input: {
   id: string;
   status: string;
+  storeName?: string;
   exportedAt?: string | null;
   invoiceNumber?: string;
   deliveryCompanyCode?: string;
   invoiceTransmissionStatus?: "pending" | "succeeded" | "failed" | null;
   invoiceAppliedAt?: string | null;
+  coupangInvoiceUploadedAt?: string | null;
   customerServiceIssueSummary?: string | null;
   customerServiceIssueCount?: number;
   customerServiceIssueBreakdown?: CoupangShipmentWorksheetRow["customerServiceIssueBreakdown"];
+  customerServiceState?: CoupangShipmentWorksheetRow["customerServiceState"];
+  customerServiceFetchedAt?: string | null;
   availableActions?: CoupangShipmentWorksheetRow["availableActions"];
   purchaseConfirmedAt?: string | null;
+  estimatedShippingDate?: string | null;
+  shippingStage?: CoupangShipmentWorksheetRow["shippingStage"];
+  issueStage?: CoupangShipmentWorksheetRow["issueStage"];
+  priorityBucket?: CoupangShipmentWorksheetRow["priorityBucket"];
+  pipelineBucket?: CoupangShipmentWorksheetRow["pipelineBucket"];
 }) {
   const invoiceNumber = input.invoiceNumber ?? "";
   const deliveryCompanyCode = input.deliveryCompanyCode ?? "";
@@ -28,7 +37,7 @@ function buildRow(input: {
     id: input.id,
     sourceKey: `store-1:${input.id}`,
     storeId: "store-1",
-    storeName: "Test Store",
+    storeName: input.storeName ?? "Test Store",
     orderDateText: "04/09",
     orderDateKey: "20260409",
     quantity: 1,
@@ -47,7 +56,7 @@ function buildRow(input: {
     invoiceNumber,
     coupangDeliveryCompanyCode: null,
     coupangInvoiceNumber: null,
-    coupangInvoiceUploadedAt: null,
+    coupangInvoiceUploadedAt: input.coupangInvoiceUploadedAt ?? null,
     salePrice: 10000,
     shippingFee: 0,
     receiverAddress: "Seoul",
@@ -64,15 +73,19 @@ function buildRow(input: {
     vendorItemId: `VI-${input.id}`,
     availableActions: input.availableActions ?? ["uploadInvoice"],
     orderStatus: input.status,
+    shippingStage: input.shippingStage ?? null,
+    issueStage: input.issueStage ?? null,
+    priorityBucket: input.priorityBucket ?? null,
+    pipelineBucket: input.pipelineBucket ?? null,
     customerServiceIssueCount: input.customerServiceIssueCount ?? 0,
     customerServiceIssueSummary: input.customerServiceIssueSummary ?? null,
     customerServiceIssueBreakdown: input.customerServiceIssueBreakdown ?? [],
-    customerServiceState: "ready",
-    customerServiceFetchedAt: "2026-04-09T09:00:00.000Z",
+    customerServiceState: input.customerServiceState ?? "ready",
+    customerServiceFetchedAt: input.customerServiceFetchedAt ?? "2026-04-09T09:00:00.000Z",
     orderedAtRaw: "2026-04-09T09:00:00+09:00",
     lastOrderHydratedAt: null,
     lastProductHydratedAt: null,
-    estimatedShippingDate: null,
+    estimatedShippingDate: input.estimatedShippingDate ?? null,
     splitShipping: false,
     invoiceTransmissionStatus: input.invoiceTransmissionStatus ?? null,
     invoiceTransmissionMessage: null,
@@ -87,6 +100,10 @@ function buildRow(input: {
     updatedAt: "2026-04-09T09:00:00.000Z",
   } satisfies CoupangShipmentWorksheetRow;
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("shipment worksheet view", () => {
   it("returns only non-claim ACCEPT/INSTRUCT rows for dispatch_active scope", () => {
@@ -207,6 +224,124 @@ describe("shipment worksheet view", () => {
     expect(claimsView.items.map((row) => row.id)).toEqual(["confirmed-claim"]);
     expect(postDispatchView.items.map((row) => row.id)).toEqual(["post-dispatch"]);
     expect(dispatchActiveView.items.map((row) => row.id)).toEqual(["dispatch-active"]);
+  });
+
+  it("keeps raw shipping and issue axes separate while exposing Coupang-first counts and filters", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-20T12:00:00+09:00"));
+
+    const rows = [
+      buildRow({
+        id: "stop",
+        status: "ACCEPT",
+        estimatedShippingDate: "2026-04-20T00:00:00+09:00",
+        customerServiceIssueCount: 1,
+        customerServiceIssueBreakdown: [
+          { type: "shipment_stop_requested", count: 1, label: "Shipment stop requested" },
+        ],
+      }),
+      buildRow({
+        id: "same-day",
+        status: "ACCEPT",
+        estimatedShippingDate: "2026-04-20T00:00:00+09:00",
+        availableActions: ["markPreparing"],
+      }),
+      buildRow({
+        id: "direct",
+        status: "NONE_TRACKING",
+        exportedAt: "2026-04-10T12:00:00.000Z",
+        invoiceAppliedAt: "2026-04-10T12:00:00.000Z",
+        customerServiceState: "stale",
+        customerServiceFetchedAt: null,
+      }),
+      buildRow({
+        id: "delivered",
+        status: "FINAL_DELIVERY",
+        exportedAt: "2026-04-18T11:00:00.000Z",
+      }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(view.priorityCounts).toMatchObject({
+      all: 4,
+      shipment_stop_requested: 1,
+      same_day_dispatch: 1,
+      dispatch_delayed: 0,
+      long_in_transit: 0,
+    });
+    expect(view.pipelineCounts).toMatchObject({
+      all: 4,
+      payment_completed: 2,
+      in_delivery: 1,
+      delivered: 1,
+    });
+    expect(view.issueCounts).toMatchObject({
+      all: 4,
+      shipment_stop_requested: 1,
+      direct_delivery: 1,
+    });
+    expect(view.directDeliveryCount).toBe(1);
+    expect(view.staleSyncCount).toBe(1);
+    expect(view.items.find((row) => row.id === "stop")).toMatchObject({
+      rawOrderStatus: "ACCEPT",
+      shippingStage: "payment_completed",
+      issueStage: "shipment_stop_requested",
+      priorityBucket: "shipment_stop_requested",
+      pipelineBucket: "payment_completed",
+    });
+    expect(view.items.find((row) => row.id === "direct")).toMatchObject({
+      rawOrderStatus: "NONE_TRACKING",
+      shippingStage: "in_delivery",
+      isDirectDelivery: true,
+      syncSource: "worksheet_cache",
+    });
+
+    const directDeliveryView = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      issueFilter: "direct_delivery",
+      page: 1,
+      pageSize: 50,
+    });
+    const priorityView = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      priorityCard: "same_day_dispatch",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(directDeliveryView.items.map((row) => row.id)).toEqual(["direct"]);
+    expect(priorityView.items.map((row) => row.id)).toEqual(["same-day"]);
+  });
+
+  it("fills mismatch reason when stored normalized fields differ from the current mapping", () => {
+    const rows = [
+      buildRow({
+        id: "mismatch",
+        status: "ACCEPT",
+        shippingStage: "delivered",
+        issueStage: "shipment_stop_resolved",
+        priorityBucket: "long_in_transit",
+        pipelineBucket: "delivered",
+      }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(view.items[0]).toMatchObject({
+      shippingStage: "payment_completed",
+      issueStage: "none",
+      pipelineBucket: "payment_completed",
+    });
+    expect(view.items[0]?.statusMismatchReason).toContain("저장된 워크시트 배송 상태");
   });
 
   it("resolves not-exported download rows without claims", () => {

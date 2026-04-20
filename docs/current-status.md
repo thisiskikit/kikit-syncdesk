@@ -1,6 +1,6 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-19
+- 스냅샷 날짜: 2026-04-20
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
@@ -25,31 +25,42 @@
 ### 출고
 - `출고`는 쿠팡 배송/송장 워크시트를 운영 화면으로 재배치한 top-level 화면입니다.
 - `client/src/features/coupang/shipments/page.tsx`는 상태, 조회, 실행 action coordinator를 맡고, 렌더 구조는 별도 controller/component로 분리됐습니다.
-- `tab / storeId / scope / decisionStatus / query` 기반 deep-link를 읽고, 현재 상태에 맞춰 `/fulfillment` URL을 다시 정규화합니다.
+- `tab / storeId / scope / priorityCard / pipelineCard / issueFilter / decisionStatus / query` 기반 deep-link를 읽고, 현재 상태에 맞춰 `/fulfillment` URL을 다시 정규화합니다.
 - 상단 탭은 `작업 화면`, `구매확정`, `보관함`, `화면 설정`으로 나뉘며, `구매확정`은 최근 구매확정건만 따로 보는 운영 탭입니다.
 - `구매확정 sync`는 자동이 아니라 수동 액션이고, 현재 선택 스토어와 현재 조회 기간을 기준으로만 실행합니다.
 - 구매확정 판정의 진실 원천은 주문 상태값이 아니라 쿠팡 `revenue-history` 계열 정산 인식 데이터입니다.
 - 주문 상태가 `FINAL_DELIVERY / NONE_TRACKING`까지만 내려오더라도, 구매확정 여부는 별도 sync 결과로 `purchaseConfirmedAt` 등 worksheet row 확장 필드에 저장합니다.
+- worksheet row와 `worksheet/view` 응답은 이제 `rawOrderStatus`, `shippingStage`, `issueStage`, `priorityBucket`, `pipelineBucket`, `isDirectDelivery`, `syncSource`, `statusDerivedAt`, `statusMismatchReason` 정규화 필드를 함께 돌려줍니다.
+- `priorityCard`, `pipelineCard`는 아직 query/state 호환을 위해 남아 있지만, 실제 계산 기준값은 `priorityBucket`, `pipelineBucket`입니다.
+- 상태 계산은 `라이브 쿠팡 주문 존재 여부 확인 -> rawOrderStatus 정규화 -> issueStage 정규화 -> shippingStage 계산 -> priority/pipeline bucket 계산 -> 내부 decision 보조 연결` 순서로 고정했습니다.
+- 배송 축 값은 `payment_completed / preparing_product / shipping_instruction / in_delivery / delivered`이고, 이슈 축 값은 `shipment_stop_requested / shipment_stop_resolved / cancel / return / exchange / cs_open / none`입니다.
+- 상단 카드/필터 집계도 `priorityCounts`, `pipelineCounts`, `issueCounts`, `directDeliveryCount`, `staleSyncCount`를 별도로 받아 쿠팡 의미 체계 기준으로 계산합니다.
 - 필터 위계는 아래와 같습니다.
-  - 메인 축: `출고 판단`
-  - 보조 축: `작업 대상 / 배송 이후 / 예외·클레임 / 전체`
-  - 세부 축: `송장 상태 / 출력 상태 / 주문 상태`
-- 상단은 `행동 큐 허브`, `현재 적용 조건`, `세부 필터`, `선택 일괄 작업 바` 순서로 읽히도록 정리돼 있습니다.
-- 행동 큐 허브는 `즉시 출고 / 송장 입력 / 재확인 / 보류 / 차단` 5개 카드로 나뉘고, 건수와 대표 주문 미리보기를 현재 필터 전체 기준으로 계산합니다.
-- 큐 카드를 누르면 하단 원본 테이블이 같은 판단 기준으로 바로 연동됩니다. 즉 큐 숫자는 페이지 기준이 아니라 현재 필터 전체 기준입니다.
-- 메인 테이블의 상태 셀과 우측 판단 패널은 모두 `업무 판단 상태 -> 쿠팡 원본 상태 -> CS·클레임 신호` 순서로 같은 3층 구조를 사용합니다.
+  - 메인 축: `우선 처리 카드 / 배송 처리 / 이슈 필터`
+  - 보조 축: `작업 대상 / 배송 이후 / 구매확정 / 예외·클레임 / 전체`
+  - 세부 축: `다음 액션 / 송장 상태 / 출력 상태 / 주문 상태`
+- 상단은 `쿠팡 기준 정합 허브`, `현재 적용 조건`, `세부 필터`, `선택 일괄 작업 바` 순서로 읽히도록 정리돼 있습니다.
+- 상단 허브는 `먼저 확인`, `배송 처리`, `이슈 필터` 3개 층으로 나뉘며, 모든 숫자는 현재 페이지가 아니라 현재 필터 전체 기준으로 계산합니다.
+- `먼저 확인` 카드는 `출고중지요청 / 당일출고필요 / 출고지연 / 장기미배송` 우선순위로 계산합니다.
+- `배송 처리`는 `결제완료 / 상품준비중 / 배송지시 / 배송중 / 배송완료`를 따로 보여주고, `NONE_TRACKING`은 `배송중 + 업체 직접 배송`으로 분리 표시합니다.
+- `이슈 필터`는 `취소 / 반품 / 교환 / CS 진행중 / 업체 직접 배송`과 별도 `stale sync` 경고 건수를 함께 보여줍니다.
+- 카드, 필터, 목록, 우측 판단 패널은 각각 따로 상태를 다시 계산하지 않고 같은 정규화 projection을 공유합니다.
+- 내부 작업 편의용 `decisionCounts`, `primaryDecision`, `secondaryStatus`는 그대로 남아 있지만, 상단 카드와 기본 상태 해석의 기준값으로는 더 이상 쓰지 않습니다.
+- 메인 테이블의 상태 셀과 우측 판단 패널은 모두 `쿠팡 원본 상태 -> 현재 배송 단계 -> 현재 이슈 단계`를 먼저 보여주고, `다음 액션`은 보조 정보로만 내려서 안내합니다.
+- 우측 판단 패널은 `원본값`, `현재 표시값`, `불일치 사유`, `마지막 동기화`를 한 자리에서 비교해 보여줍니다.
 - 상세는 오버레이 Drawer가 아니라 우측 판단 패널에서 먼저 확인합니다. Drawer는 보관함 중심 상세 확인 경로로만 남아 있습니다.
-- `보류 / 차단 / 재확인` 상태에서는 큐 카드와 우측 판단 패널에서 다음 이동 경로를 `CS 허브` 또는 `작업센터` 기준으로 함께 안내합니다.
+- `보류 / 차단 / 재확인` 상태의 다음 이동 경로는 상단 주 구조가 아니라 행 단위 보조 안내와 우측 판단 패널에서 `CS 허브` 또는 `작업센터` 기준으로 함께 안내합니다.
 
 ### 출고 coordinator 분해 상태
 - 렌더 shell은 `fulfillment-shell.tsx`로 이동했습니다.
 - 헤더, 1차 액션, 기본 필터는 `fulfillment-toolbar.tsx`로 이동했습니다.
-- 행동 큐 허브와 보관함 메트릭은 `fulfillment-summary-bar.tsx` / `shipment-worksheet-overview.tsx`로 이동했습니다.
+- 쿠팡 기준 정합 허브와 보관함 메트릭은 `fulfillment-summary-bar.tsx` / `shipment-worksheet-overview.tsx`로 이동했습니다.
 - 선택 일괄 작업 bar는 `fulfillment-selection-controller.tsx`로 이동했습니다.
 - 작업 화면/보관함/화면 설정 전환과 grid wiring은 `fulfillment-grid-controller.tsx`로 이동했습니다.
 - 우측 판단 패널은 `shipment-hub-side-panel.tsx`로 분리됐고, 작업 화면/구매확정 탭에서 메인 grid 옆에 고정 배치됩니다.
 - Drawer/상세/dialog lazy mounting은 `fulfillment-drawer-controller.tsx`로 이동했습니다.
 - 빠른 수집 집중 보기의 시트 재구성 로직은 `quick-collect-focus-controller.ts`로 이동했습니다.
+- 쿠팡형 상태 계산 공용 로직은 `shared/coupang-status.ts`, 화면 라벨/배지 규칙은 `client/src/features/coupang/shipments/coupang-status-view.ts`로 분리됐습니다.
 - 따라서 `page.tsx`는 여전히 큰 coordinator이지만, 화면 조립과 빠른 수집 view state 계산이 한 파일에 섞여 있지는 않습니다.
 
 ### 출고 컬럼 보기 프리셋
@@ -81,7 +92,7 @@
   - 기간 변경
   - 검색어 변경
   - 보기 범위 변경
-  - 출고 판단 탭 변경
+  - 우선 처리/배송/이슈 필터 변경
   - 세부 필터 변경
   - 수동 새로고침
   - `작업 화면` 외 탭 이동
@@ -100,12 +111,16 @@
 - 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 후속 단계로 분리됐고, collect 성공 직후 클라이언트가 non-blocking으로 이어서 호출합니다.
 - collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 `지금 끝난 단계`와 `이어질 보강 단계`를 함께 기록합니다.
 - `빠른 수집(new_only)`에서 일부 주문 상태 조회만 실패해도 전체 수집을 즉시 실패로 돌리지 않고, `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 부분 실패를 남긴 뒤 화면 경고와 누락 audit로 이어집니다.
-- 새로 추가된 주문의 `셀픽주문번호`는 기존 워크시트의 마지막 번호 다음 값으로 계속 증가하며, 추가 수집 시 날짜가 바뀌어도 다시 `0001`부터 시작하지 않습니다.
+- `셀픽주문번호`는 이제 현재 워크시트 스냅샷이 아니라 DB의 영구 `counter + registry`에서 예약합니다.
+- 유일성 기준은 active worksheet만이 아니라 `쿠팡 출고 row + archive 전체 이력`이고, 보관함으로 이동한 뒤 다시 수집해도 과거 번호를 재사용하지 않습니다.
+- suffix는 `0001`처럼 4자리부터 시작하지만, 이제 `10000` 이상도 그대로 허용합니다.
+- 기존 중복이 발견되면 `미전송/미출력` 건만 자동 재번호하고, 이미 송장 반영·출력 등 운영 사용 이력이 있는 중복은 자동 변경하지 않고 write 계열 작업을 차단합니다.
 - `옵션명` 컬럼은 collect 직후부터 `실제 옵션값` 기준으로 맞추고, 주문 목록의 노출 옵션 문자열은 `옵션명`에 다시 쓰지 않습니다.
 - 실제 옵션값을 collect 시점에 못 가져오면 기존 정상 `optionName`은 유지하고, 기존 값도 없으면 빈값으로 둡니다.
 - `노출상품명(exposedProductName)`은 계속 표시용 문자열이며, `옵션명`을 대신하지 않습니다.
 - 같은 규칙은 이제 `rawFields` 기반 파생으로 고정돼, `productItem.itemName -> detailItem.optionName -> 기존 stored optionName -> null` 우선순위로 `optionName`을 만듭니다.
 - `productName`, `coupangDisplayProductName`, `deliveryCompanyCode`, `invoiceNumber`, `isOverseas`도 같은 raw precedence를 따라 정규화 row로 다시 파생됩니다.
+- 구형 CS summary 문자열만 남아 있는 row도 `shipment_stop_requested`, `shipment_stop_resolved` 같은 이슈 축으로 다시 정규화되며, handled 계열 legacy 표현은 fallback summary 파서로 흡수합니다.
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
 - 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
@@ -241,6 +256,7 @@
 - `client/src/features/coupang/shipments/fulfillment-drawer-controller.tsx`
 - `client/src/features/coupang/shipments/fulfillment-decision.ts`
 - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+- `client/src/features/coupang/shipments/coupang-status-view.ts`
 - `client/src/features/coupang/shipments/quick-collect-focus.ts`
 - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
 - `client/src/features/coupang/shipments/shipment-column-presets.ts`
@@ -252,7 +268,11 @@
 - `client/src/features/coupang/shipments/shipment-decision-drawer.tsx`
 - `client/src/features/coupang/shipments/quick-collect-focus.test.ts`
 - `client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts`
+- `client/src/lib/coupang-order-status.ts`
+- `client/src/lib/coupang-order-status.test.ts`
 - `server/services/coupang/shipment-worksheet-service.ts`
+- `server/services/coupang/shipment-worksheet-view.ts`
+- `server/services/coupang/shipment-worksheet-view.test.ts`
 - `client/src/features/coupang/shipments/shipment-prepare-flow.ts`
 - `client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
 - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
@@ -263,6 +283,7 @@
 - `server/routes/coupang/shipments.ts`
 - `server/services/coupang/shipment-worksheet-collection.test.ts`
 - `shared/coupang.ts`
+- `shared/coupang-status.ts`
 - `shared/operations.ts`
 - `docs/qa/manual-fulfillment-regression.md`
 - `docs/qa/work-center-recovery-scenarios.md`

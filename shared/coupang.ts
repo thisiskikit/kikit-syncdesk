@@ -1075,6 +1075,17 @@ export interface CoupangShipmentWorksheetRow {
   vendorItemId: string | null;
   availableActions: CoupangActionKey[];
   orderStatus: string | null;
+  rawOrderStatus?: string | null;
+  shippingStage?: CoupangShipmentShippingStage | null;
+  issueStage?: CoupangShipmentIssueStage | null;
+  priorityBucket?: CoupangShipmentPriorityBucket | null;
+  pipelineBucket?: CoupangShipmentPipelineBucket | null;
+  priorityCard?: CoupangShipmentPriorityCard | null;
+  pipelineCard?: CoupangShipmentPipelineCard | null;
+  isDirectDelivery?: boolean;
+  syncSource?: CoupangShipmentStatusSyncSource | null;
+  statusDerivedAt?: string | null;
+  statusMismatchReason?: string | null;
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
   customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
@@ -1231,6 +1242,72 @@ export type CoupangShipmentWorksheetViewScope =
   | "claims"
   | "all";
 
+export const coupangShipmentShippingStages = [
+  "payment_completed",
+  "preparing_product",
+  "shipping_instruction",
+  "in_delivery",
+  "delivered",
+] as const;
+export type CoupangShipmentShippingStage = (typeof coupangShipmentShippingStages)[number];
+
+export const coupangShipmentIssueStages = [
+  "shipment_stop_requested",
+  "shipment_stop_resolved",
+  "cancel",
+  "return",
+  "exchange",
+  "cs_open",
+  "none",
+] as const;
+export type CoupangShipmentIssueStage = (typeof coupangShipmentIssueStages)[number];
+
+export const coupangShipmentPriorityBuckets = [
+  "shipment_stop_requested",
+  "same_day_dispatch",
+  "dispatch_delayed",
+  "long_in_transit",
+] as const;
+export type CoupangShipmentPriorityBucket =
+  (typeof coupangShipmentPriorityBuckets)[number];
+
+export const coupangShipmentPipelineBuckets = [
+  "payment_completed",
+  "preparing_product",
+  "shipping_instruction",
+  "in_delivery",
+  "delivered",
+] as const;
+export type CoupangShipmentPipelineBucket =
+  (typeof coupangShipmentPipelineBuckets)[number];
+
+export const coupangShipmentPriorityCards = coupangShipmentPriorityBuckets;
+export type CoupangShipmentPriorityCard = CoupangShipmentPriorityBucket;
+
+export const coupangShipmentPipelineCards = coupangShipmentPipelineBuckets;
+export type CoupangShipmentPipelineCard = CoupangShipmentPipelineBucket;
+
+export const coupangShipmentIssueFilters = [
+  "all",
+  "shipment_stop_requested",
+  "shipment_stop_resolved",
+  "cancel",
+  "return",
+  "exchange",
+  "cs_open",
+  "direct_delivery",
+] as const;
+export type CoupangShipmentIssueFilter = (typeof coupangShipmentIssueFilters)[number];
+
+export type CoupangShipmentStatusSyncSource = "live" | "worksheet_cache";
+
+export type CoupangShipmentWorksheetPriorityCardFilter =
+  | "all"
+  | CoupangShipmentPriorityBucket;
+export type CoupangShipmentWorksheetPipelineCardFilter =
+  | "all"
+  | CoupangShipmentPipelineBucket;
+
 export type CoupangShipmentWorksheetInvoiceStatusCard =
   | "all"
   | "idle"
@@ -1306,6 +1383,9 @@ export interface CoupangShipmentWorksheetViewQuery {
   storeId: string;
   scope?: CoupangShipmentWorksheetViewScope;
   decisionStatus?: CoupangFulfillmentDecisionFilterValue;
+  priorityCard?: CoupangShipmentWorksheetPriorityCardFilter;
+  pipelineCard?: CoupangShipmentWorksheetPipelineCardFilter;
+  issueFilter?: CoupangShipmentIssueFilter;
   page?: number;
   pageSize?: number;
   query?: string;
@@ -1338,6 +1418,11 @@ export interface CoupangShipmentWorksheetViewResponse {
     Exclude<CoupangFulfillmentDecisionFilterValue, "all">,
     CoupangShipmentDecisionPreviewGroup
   >;
+  priorityCounts: Record<CoupangShipmentWorksheetPriorityCardFilter, number>;
+  pipelineCounts: Record<CoupangShipmentWorksheetPipelineCardFilter, number>;
+  issueCounts: Record<CoupangShipmentIssueFilter, number>;
+  directDeliveryCount: number;
+  staleSyncCount: number;
   scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
   invoiceCounts: Record<CoupangShipmentWorksheetInvoiceStatusCard, number>;
   orderCounts: Record<CoupangShipmentWorksheetOrderStatusCard, number>;

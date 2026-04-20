@@ -90,6 +90,39 @@ function normalizeWhitespace(value: string | null | undefined) {
   return trimmed || null;
 }
 
+function findDuplicateWorksheetSelpickOrderNumbers(
+  rows: readonly Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber">[],
+) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const selpickOrderNumber = normalizeWhitespace(row.selpickOrderNumber)?.toUpperCase();
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    counts.set(selpickOrderNumber, (counts.get(selpickOrderNumber) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([selpickOrderNumber]) => selpickOrderNumber)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function assertUniqueWorksheetSelpickOrderNumbers(
+  rows: readonly Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber">[],
+  message: string,
+) {
+  const duplicates = findDuplicateWorksheetSelpickOrderNumbers(rows);
+  if (!duplicates.length) {
+    return;
+  }
+
+  throw new Error(
+    `${message} 중복 셀픽주문번호: ${duplicates.slice(0, 5).join(", ")}${duplicates.length > 5 ? " 외" : ""}`,
+  );
+}
+
 function normalizeDeliveryCode(value: string | null | undefined) {
   return (value ?? "").trim();
 }
@@ -302,35 +335,6 @@ function resolvePlatformKey(store: StoredCoupangStore) {
   return {
     key: derivedKey,
     warning: `배송 KEY가 비어 있어 임시 KEY ${derivedKey}를 사용했습니다. 연결 관리에서 설정해 주세요.`,
-  };
-}
-
-function extractSequence(value: string) {
-  const matched = value.match(/(\d{4})$/);
-  if (!matched) {
-    return 0;
-  }
-
-  const parsed = Number(matched[1]);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function createSelpickAllocator(rows: CoupangShipmentWorksheetRow[]) {
-  const counters = new Map<string, number>();
-
-  for (const row of rows) {
-    const counterKey = row.collectedAccountName;
-    const current = counters.get(counterKey) ?? 0;
-    counters.set(counterKey, Math.max(current, extractSequence(row.selpickOrderNumber)));
-  }
-
-  return {
-    next(collectedAccountName: string, orderDateKey: string, platformKey: string) {
-      const counterKey = collectedAccountName;
-      const nextSequence = (counters.get(counterKey) ?? 0) + 1;
-      counters.set(counterKey, nextSequence);
-      return `O${orderDateKey}${platformKey}${String(nextSequence).padStart(4, "0")}`;
-    },
   };
 }
 
@@ -574,6 +578,11 @@ function buildWorksheetViewResponse(
     invoiceReadyCount: view.invoiceReadyCount,
     decisionCounts: view.decisionCounts,
     decisionPreviewGroups: view.decisionPreviewGroups,
+    priorityCounts: view.priorityCounts,
+    pipelineCounts: view.pipelineCounts,
+    issueCounts: view.issueCounts,
+    directDeliveryCount: view.directDeliveryCount,
+    staleSyncCount: view.staleSyncCount,
     scopeCounts: view.scopeCounts,
     invoiceCounts: view.invoiceCounts,
     orderCounts: view.orderCounts,
@@ -1723,6 +1732,11 @@ async function refreshShipmentWorksheetRows(
   },
 ) {
   const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+  });
   const currentSheet =
     input.currentSheet ?? (await coupangShipmentWorksheetStore.getStoreSheet(input.storeId));
   const now = new Date().toISOString();
@@ -2035,6 +2049,11 @@ export async function reconcileShipmentWorksheetLive(
   input: ReconcileCoupangShipmentWorksheetInput,
 ): Promise<ReconcileCoupangShipmentWorksheetResponse> {
   const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+  });
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
   const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
   const createdAtTo = normalizeWhitespace(input.createdAtTo);
@@ -2863,8 +2882,6 @@ async function buildCollectedWorksheetRows(input: {
   store: StoredCoupangStore;
   collectionCandidates: ShipmentWorksheetCollectionCandidate[];
   nowIso: string;
-  selpickAllocator: ReturnType<typeof createSelpickAllocator>;
-  platformKey: ReturnType<typeof resolvePlatformKey>;
   shouldHydrateOptionsDuringCollect: (
     currentRow: CoupangShipmentWorksheetRow | undefined,
   ) => boolean;
@@ -2939,19 +2956,7 @@ async function buildCollectedWorksheetRows(input: {
       productDetail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
         ? await getCollectProductDetailCached(candidate.row)
         : null,
-      selpickOrderNumber:
-        candidate.currentRow?.selpickOrderNumber ??
-        input.selpickAllocator.next(
-          input.store.storeName,
-          resolveWorksheetOrderDateParts({
-            orderedAt: candidate.row.orderedAt,
-            paidAt: candidate.row.paidAt,
-            currentOrderedAtRaw: candidate.currentRow?.orderedAtRaw,
-            currentCreatedAt: candidate.currentRow?.createdAt,
-            nowIso: input.nowIso,
-          }).key,
-          input.platformKey.key,
-        ),
+      selpickOrderNumber: candidate.currentRow?.selpickOrderNumber ?? "",
     }),
   );
 }
@@ -3202,7 +3207,6 @@ async function collectShipmentWorksheetNewOnly(input: {
   store: StoredCoupangStore;
   currentSheet: WorksheetStoreSheet;
   archivedSourceKeys: Set<string>;
-  selpickAllocator: ReturnType<typeof createSelpickAllocator>;
   platformKey: ReturnType<typeof resolvePlatformKey>;
   nowIso: string;
   syncPlan: ShipmentWorksheetSyncPlan & { mode: "new_only" };
@@ -3351,12 +3355,15 @@ async function collectShipmentWorksheetNewOnly(input: {
       store: input.store,
       collectionCandidates: batchCandidates,
       nowIso: input.nowIso,
-      selpickAllocator: input.selpickAllocator,
-      platformKey: input.platformKey,
       shouldHydrateOptionsDuringCollect: () => false,
     });
+    const materializedBatchRows = await coupangShipmentWorksheetStore.materializeSelpickOrderNumbers({
+      storeId: input.request.storeId,
+      platformKey: input.platformKey.key,
+      items: batchRows,
+    });
 
-    for (const row of batchRows) {
+    for (const row of materializedBatchRows) {
       insertedCount += 1;
       insertedSourceKeys.push(row.sourceKey);
       mergedBySourceKey.set(row.sourceKey, row);
@@ -4247,13 +4254,16 @@ export async function getShipmentWorksheetDetail(input: {
 
 export async function collectShipmentWorksheet(input: CollectCoupangShipmentInput) {
   const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+  });
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
   const currentBySourceKey = new Map(currentSheet.items.map((row) => [row.sourceKey, row] as const));
   const archivedSourceKeys = new Set(
     await coupangShipmentWorksheetStore.getArchivedSourceKeys(input.storeId),
   );
-  const selpickAllocator = createSelpickAllocator(currentSheet.items);
-  const platformKey = resolvePlatformKey(store);
   const now = new Date().toISOString();
   const syncPlan = resolveSyncPlan(input, currentSheet, now);
   const insertOnlyMode = syncPlan.mode === "new_only";
@@ -4323,7 +4333,6 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       store,
       currentSheet,
       archivedSourceKeys,
-      selpickAllocator,
       platformKey,
       nowIso: now,
       syncPlan: {
@@ -4878,10 +4887,13 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     store,
     collectionCandidates,
     nowIso: now,
-    selpickAllocator,
-    platformKey,
     shouldHydrateOptionsDuringCollect: (currentRow) =>
       shouldHydrateWorksheetOptionDuringCollect(currentRow),
+  });
+  const materializedFetchedRows = await coupangShipmentWorksheetStore.materializeSelpickOrderNumbers({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+    items: fetchedRows,
   });
 
   let insertedCount = 0;
@@ -4889,7 +4901,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   let updatedCount = 0;
   const mergedBySourceKey = new Map(currentSheet.items.map((row) => [row.sourceKey, row] as const));
 
-  for (const nextRow of fetchedRows) {
+  for (const nextRow of materializedFetchedRows) {
     const existingRow = mergedBySourceKey.get(nextRow.sourceKey);
     if (!existingRow) {
       insertedCount += 1;
@@ -5034,7 +5046,16 @@ export async function patchShipmentWorksheet(input: PatchCoupangShipmentWorkshee
   }
 
   const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+  });
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  assertUniqueWorksheetSelpickOrderNumbers(
+    currentSheet.items,
+    "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 워크시트 수정을 진행할 수 없습니다.",
+  );
   const rowBySourceKey = new Map(currentSheet.items.map((row) => [row.sourceKey, row] as const));
   const rowBySelpickOrderNumber = new Map(
     currentSheet.items.map((row) => [row.selpickOrderNumber, row] as const),
@@ -5088,8 +5109,17 @@ export async function applyShipmentWorksheetInvoiceInput(
     throw new Error("\uBC18\uC601\uD560 \uC1A1\uC7A5 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
   }
 
-  await getStoreOrThrow(input.storeId);
+  const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
+    storeId: input.storeId,
+    platformKey: platformKey.key,
+  });
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  assertUniqueWorksheetSelpickOrderNumbers(
+    currentSheet.items,
+    "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 송장 반영을 진행할 수 없습니다.",
+  );
   const rowBySelpickOrderNumber = new Map(
     currentSheet.items.map((row) => [row.selpickOrderNumber, row] as const),
   );

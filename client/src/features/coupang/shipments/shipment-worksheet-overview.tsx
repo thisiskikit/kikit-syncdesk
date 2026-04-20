@@ -1,13 +1,20 @@
-import type { CoupangShipmentWorksheetViewResponse } from "@shared/coupang";
-import type { CoupangShipmentDecisionPreviewItem } from "@shared/coupang-fulfillment";
-import { WorkspaceEntryLink } from "@/components/workspace-tabs";
+import type {
+  CoupangShipmentIssueFilter,
+  CoupangShipmentWorksheetPipelineCardFilter,
+  CoupangShipmentWorksheetPriorityCardFilter,
+  CoupangShipmentWorksheetViewResponse,
+} from "@shared/coupang";
 import type {
   InvoiceStatusCardKey,
   OrderStatusCardKey,
   OutputStatusCardKey,
 } from "@/lib/coupang-shipment-quick-filters";
 import { formatNumber } from "@/lib/utils";
-import { resolveShipmentHandoffLinks } from "./fulfillment-handoff";
+import {
+  getShipmentIssueFilterLabel,
+  getShipmentPipelineCardLabel,
+  getShipmentPriorityCardLabel,
+} from "./coupang-status-view";
 import type { FilterState, FulfillmentDecisionFilterValue } from "./types";
 
 type StatusOption<TValue extends string> = {
@@ -23,7 +30,6 @@ type ShipmentWorksheetOverviewProps = {
   quickCollectFocusMessage: string | null;
   activeDecisionStatus: FulfillmentDecisionFilterValue;
   decisionCounts: CoupangShipmentWorksheetViewResponse["decisionCounts"];
-  decisionPreviewGroups: CoupangShipmentWorksheetViewResponse["decisionPreviewGroups"];
   detailFilterToggleLabel: string;
   detailFiltersOpen: boolean;
   activeDetailFilterCount: number;
@@ -46,70 +52,60 @@ type ShipmentWorksheetOverviewProps = {
   onToggleDetailFilters: () => void;
 };
 
-const ACTION_QUEUE_ORDER = [
-  "ready",
-  "invoice_waiting",
-  "recheck",
-  "hold",
-  "blocked",
-] as const satisfies readonly Exclude<FulfillmentDecisionFilterValue, "all">[];
+const PRIORITY_CARD_ORDER = [
+  "shipment_stop_requested",
+  "same_day_dispatch",
+  "dispatch_delayed",
+  "long_in_transit",
+] as const satisfies readonly Exclude<CoupangShipmentWorksheetPriorityCardFilter, "all">[];
 
-const ACTION_QUEUE_HEADLINES: Record<
-  (typeof ACTION_QUEUE_ORDER)[number],
-  { title: string; description: string; emptyMessage: string; ctaLabel: string }
+const PIPELINE_CARD_ORDER = [
+  "payment_completed",
+  "preparing_product",
+  "shipping_instruction",
+  "in_delivery",
+  "delivered",
+] as const satisfies readonly Exclude<CoupangShipmentWorksheetPipelineCardFilter, "all">[];
+
+const ISSUE_FILTER_ORDER = [
+  "cancel",
+  "return",
+  "exchange",
+  "cs_open",
+  "direct_delivery",
+] as const satisfies readonly Exclude<
+  CoupangShipmentIssueFilter,
+  "all" | "shipment_stop_requested" | "shipment_stop_resolved"
+>[];
+
+const DECISION_FILTER_OPTIONS: Array<{
+  value: FulfillmentDecisionFilterValue;
+  label: string;
+}> = [
+  { value: "all", label: "전체 액션" },
+  { value: "ready", label: "즉시 출고" },
+  { value: "invoice_waiting", label: "송장 입력" },
+  { value: "hold", label: "보류" },
+  { value: "blocked", label: "차단" },
+  { value: "recheck", label: "재확인" },
+];
+
+const PRIORITY_COPY: Record<
+  Exclude<CoupangShipmentWorksheetPriorityCardFilter, "all">,
+  string
 > = {
-  ready: {
-    title: "즉시 출고",
-    description: "지금 바로 출고 판단과 후속 액션을 이어서 실행할 수 있는 주문입니다.",
-    emptyMessage: "현재 필터에서는 즉시 출고 후보가 없습니다.",
-    ctaLabel: "즉시 출고 큐 보기",
-  },
-  invoice_waiting: {
-    title: "송장 입력",
-    description: "송장 입력 또는 송장 전송이 먼저 필요한 주문입니다.",
-    emptyMessage: "현재 필터에서는 송장 입력 대기 주문이 없습니다.",
-    ctaLabel: "송장 입력 큐 보기",
-  },
-  recheck: {
-    title: "재확인",
-    description: "CS stale, 송장 실패, 데이터 누락처럼 다시 확인해야 하는 주문입니다.",
-    emptyMessage: "현재 필터에서는 재확인 주문이 없습니다.",
-    ctaLabel: "재확인 큐 보기",
-  },
-  hold: {
-    title: "보류",
-    description: "CS 영향이나 문의 대응 때문에 출고보다 확인이 먼저 필요한 주문입니다.",
-    emptyMessage: "현재 필터에서는 보류 주문이 없습니다.",
-    ctaLabel: "보류 큐 보기",
-  },
-  blocked: {
-    title: "차단",
-    description: "취소, 반품, 교환, 출고중지처럼 출고를 막는 신호가 확인된 주문입니다.",
-    emptyMessage: "현재 필터에서는 차단 주문이 없습니다.",
-    ctaLabel: "차단 큐 보기",
-  },
+  shipment_stop_requested: "가장 먼저 멈춰야 하는 주문입니다.",
+  same_day_dispatch: "오늘 출고 예정인데 아직 출고 전 단계입니다.",
+  dispatch_delayed: "예정일이 지났는데 아직 출고 전 단계입니다.",
+  long_in_transit: "배송지시 이후 30일을 넘긴 장기 미배송 후보입니다.",
 };
 
-function buildPreviewMeta(item: CoupangShipmentDecisionPreviewItem) {
-  return [
-    item.optionName,
-    item.receiverName,
-    item.secondaryStatus.orderStatusLabel,
-    ...item.secondaryStatus.customerServiceSignalLabels,
-  ]
-    .filter(Boolean)
-    .slice(0, 3)
-    .join(" · ");
-}
-
 export default function ShipmentWorksheetOverview({
-  selectedStoreId,
   quickCollectFocusActive,
   quickCollectFocusCount,
   quickCollectFocusMessage,
   activeDecisionStatus,
   decisionCounts,
-  decisionPreviewGroups,
   detailFilterToggleLabel,
   detailFiltersOpen,
   activeDetailFilterCount,
@@ -131,12 +127,16 @@ export default function ShipmentWorksheetOverview({
   onResetFilters,
   onToggleDetailFilters,
 }: ShipmentWorksheetOverviewProps) {
+  const priorityCounts = activeSheet?.priorityCounts;
+  const pipelineCounts = activeSheet?.pipelineCounts;
+  const issueCounts = activeSheet?.issueCounts;
+
   return (
     <>
       {quickCollectFocusActive ? (
         <div className="card shipment-focus-banner">
           <div>
-            <div className="shipment-focus-banner-label">방금 수집한 주문만 먼저 보는 중</div>
+            <div className="shipment-focus-banner-label">방금 수집한 주문 중심 보기</div>
             <div className="muted shipment-focus-banner-note">
               {quickCollectFocusMessage ??
                 `빠른 수집으로 추가된 ${formatNumber(quickCollectFocusCount)}건을 먼저 보여줍니다.`}
@@ -151,121 +151,155 @@ export default function ShipmentWorksheetOverview({
       <div className="shipment-hub-board">
         <div className="card shipment-hub-board-intro">
           <div>
-            <div className="shipment-filter-summary-label">행동 큐 허브</div>
+            <div className="shipment-filter-summary-label">쿠팡 기준 정합 허브</div>
             <strong>
-              현재 필터 전체 {formatNumber(decisionCounts.all)}건을 다음 액션 기준으로 다시 묶었습니다.
+              상단 카드는 현재 필터 전체 {formatNumber(activeSheet?.filteredRowCount ?? 0)}건을
+              쿠팡 기준 배송 단계와 이슈 축으로 다시 묶어 보여줍니다.
             </strong>
             <div className="muted shipment-filter-summary-note">
-              상단 큐 카드를 누르면 하단 원본 테이블이 같은 판단 기준으로 연동됩니다.
+              우선 처리 카드, 배송 단계 카드, 이슈 필터를 같은 기준으로 계산하고 하단 원본
+              테이블도 같은 필터로 맞춥니다.
             </div>
             <div className="muted shipment-filter-summary-meta">
-              현재 페이지 {formatNumber(pageRowCount)}건 · 화면 노출 {formatNumber(visibleRowsCount)}건
+              현재 페이지 {formatNumber(pageRowCount)}건 쨌 화면 표시 {formatNumber(visibleRowsCount)}건
             </div>
           </div>
           <div className="shipment-filter-summary-actions">
-            {activeDecisionStatus !== "all" ? (
-              <button
-                type="button"
-                className="button ghost"
-                onClick={() => onPatchFilters({ decisionStatus: "all" })}
-              >
-                전체 큐 보기
-              </button>
-            ) : null}
             <button
               type="button"
               className={`button${detailFiltersOpen ? "" : " ghost"}`}
               onClick={onToggleDetailFilters}
             >
-              {detailFiltersOpen ? "세부 필터 접기" : detailFilterToggleLabel}
+              {detailFiltersOpen ? "상세 필터 닫기" : detailFilterToggleLabel}
             </button>
           </div>
         </div>
 
         <div className="shipment-action-queue-grid">
-          {ACTION_QUEUE_ORDER.map((status) => {
-            const group = decisionPreviewGroups[status];
-            const headline = ACTION_QUEUE_HEADLINES[status];
-            const active = activeDecisionStatus === status;
-            const handoffLinks = resolveShipmentHandoffLinks({
-              links: group.nextHandoffLinks,
-              storeId: selectedStoreId,
-              query: filters.query,
-            });
+          {PRIORITY_CARD_ORDER.map((card) => {
+            const active = filters.priorityCard === card;
+            const count = priorityCounts?.[card] ?? 0;
 
             return (
               <section
-                key={status}
+                key={card}
                 className={`card shipment-action-queue-card${active ? " active" : ""}`}
               >
                 <div className="shipment-action-queue-header">
                   <div className="shipment-action-queue-copy">
-                    <div className="shipment-action-queue-label">{headline.title}</div>
-                    <strong>{headline.description}</strong>
+                    <div className="shipment-action-queue-label">
+                      {getShipmentPriorityCardLabel(card)}
+                    </div>
+                    <strong>{PRIORITY_COPY[card]}</strong>
                   </div>
-                  {active ? <span className="shipment-action-queue-active">현재 큐</span> : null}
                 </div>
-
                 <div className="shipment-action-queue-count-row">
-                  <div className="shipment-action-queue-count">{formatNumber(group.count)}</div>
-                  <div className="muted shipment-action-queue-count-note">필터 전체 기준</div>
+                  <div className="shipment-action-queue-count">{formatNumber(count)}</div>
+                  <div className="muted shipment-action-queue-count-note">현재 필터 기준</div>
                 </div>
-
-                <div className="shipment-action-queue-reasons">
-                  {group.topReasonLabels.length ? (
-                    group.topReasonLabels.map((reasonLabel) => (
-                      <span
-                        key={`${status}:${reasonLabel}`}
-                        className="shipment-action-queue-reason-pill"
-                      >
-                        {reasonLabel}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="shipment-action-queue-empty-note">{headline.emptyMessage}</span>
-                  )}
-                </div>
-
-                <div className="shipment-action-queue-preview">
-                  <div className="shipment-action-queue-preview-title">대표 주문 미리보기</div>
-                  {group.previewItems.length ? (
-                    <ul className="shipment-action-queue-preview-list">
-                      {group.previewItems.map((item) => (
-                        <li key={`${status}:${item.rowId}`} className="shipment-action-queue-preview-item">
-                          <strong>{item.productName}</strong>
-                          <div className="muted shipment-action-queue-preview-meta">
-                            {buildPreviewMeta(item) || item.primaryDecision.reasonLabel}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="shipment-action-queue-empty-note">{headline.emptyMessage}</div>
-                  )}
-                </div>
-
                 <div className="shipment-action-queue-actions">
                   <button
                     type="button"
                     className={`button${active ? "" : " secondary"}`}
-                    onClick={() => onPatchFilters({ decisionStatus: status })}
+                    onClick={() =>
+                      onPatchFilters({
+                        priorityCard: active ? "all" : card,
+                      })
+                    }
                   >
-                    {active ? "이 큐 보는 중" : headline.ctaLabel}
+                    {active ? "선택 해제" : "이 카드로 보기"}
                   </button>
-                  {handoffLinks.slice(0, 2).map((link) => (
-                    <WorkspaceEntryLink
-                      key={`${status}:${link.href}:${link.label}`}
-                      href={link.href}
-                      className={`button${link.variant === "ghost" ? " ghost" : " secondary"}`}
-                      workspaceBehavior="tab"
-                    >
-                      {link.label}
-                    </WorkspaceEntryLink>
-                  ))}
                 </div>
               </section>
             );
           })}
+        </div>
+      </div>
+
+      <div className="card shipment-filter-summary-card">
+        <div className="shipment-filter-summary-header">
+          <div>
+            <div className="shipment-filter-summary-label">배송 단계</div>
+            <div className="shipment-status-pill-list">
+              <button
+                type="button"
+                className={`shipment-filter-pill neutral${
+                  filters.pipelineCard === "all" ? " active" : ""
+                }`}
+                aria-pressed={filters.pipelineCard === "all"}
+                onClick={() => onPatchFilters({ pipelineCard: "all" })}
+              >
+                <span>전체</span>
+                <strong>{formatNumber(pipelineCounts?.all ?? 0)}</strong>
+              </button>
+              {PIPELINE_CARD_ORDER.map((card) => {
+                const active = filters.pipelineCard === card;
+                return (
+                  <button
+                    key={card}
+                    type="button"
+                    className={`shipment-filter-pill progress${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    onClick={() => onPatchFilters({ pipelineCard: active ? "all" : card })}
+                  >
+                    <span>{getShipmentPipelineCardLabel(card)}</span>
+                    <strong>{formatNumber(pipelineCounts?.[card] ?? 0)}</strong>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="muted shipment-filter-summary-note">
+              NONE_TRACKING은 업체 직접 배송으로 표시하되 배송 단계는 배송중으로 정규화합니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card shipment-filter-summary-card">
+        <div className="shipment-filter-summary-header">
+          <div>
+            <div className="shipment-filter-summary-label">이슈 필터</div>
+            <div className="shipment-status-pill-list">
+              <button
+                type="button"
+                className={`shipment-filter-pill neutral${
+                  filters.issueFilter === "all" ? " active" : ""
+                }`}
+                aria-pressed={filters.issueFilter === "all"}
+                onClick={() => onPatchFilters({ issueFilter: "all" })}
+              >
+                <span>전체</span>
+                <strong>{formatNumber(issueCounts?.all ?? 0)}</strong>
+              </button>
+              {ISSUE_FILTER_ORDER.map((filter) => {
+                const active = filters.issueFilter === filter;
+                const count =
+                  filter === "direct_delivery"
+                    ? activeSheet?.directDeliveryCount ?? 0
+                    : issueCounts?.[filter] ?? 0;
+
+                return (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={`shipment-filter-pill attention${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    onClick={() => onPatchFilters({ issueFilter: active ? "all" : filter })}
+                  >
+                    <span>{getShipmentIssueFilterLabel(filter)}</span>
+                    <strong>{formatNumber(count)}</strong>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="muted shipment-filter-summary-note">
+              출고중지요청은 우선 처리 카드에서 따로 끌어올리고, 취소/반품/교환/일반 CS는
+              이슈 축으로 유지합니다.
+            </div>
+            <div className="muted shipment-filter-summary-meta">
+              동기화 경고 {formatNumber(activeSheet?.staleSyncCount ?? 0)}건
+            </div>
+          </div>
         </div>
       </div>
 
@@ -280,9 +314,6 @@ export default function ShipmentWorksheetOverview({
                 </span>
               ))}
             </div>
-            <div className="muted shipment-filter-summary-note">
-              메인 판단 축을 먼저 고른 뒤, 필요할 때만 송장 상태, 출력 상태, 주문 상태를 세부로 좁혀 보세요.
-            </div>
             {filterSummarySupportText ? (
               <div className="muted shipment-filter-summary-meta">{filterSummarySupportText}</div>
             ) : null}
@@ -293,7 +324,7 @@ export default function ShipmentWorksheetOverview({
               className={`button${detailFiltersOpen ? "" : " ghost"}`}
               onClick={onToggleDetailFilters}
             >
-              {detailFiltersOpen ? "세부 필터 접기" : detailFilterToggleLabel}
+              {detailFiltersOpen ? "상세 필터 닫기" : detailFilterToggleLabel}
             </button>
             <button
               type="button"
@@ -311,9 +342,10 @@ export default function ShipmentWorksheetOverview({
         <div className="card shipment-detail-filter-card">
           <div className="shipment-detail-filter-header">
             <div>
-              <strong>세부 필터</strong>
+              <strong>보조 운영 필터</strong>
               <div className="muted shipment-grid-note">
-                액션 큐를 먼저 정한 뒤, 필요한 경우에만 송장 상태, 출력 상태, 주문 상태를 추가로 좁혀 보세요.
+                쿠팡 기준 카드 아래에서 내부 액션, 송장, 출력, 기존 주문 상태 필터를 추가로
+                좁힐 수 있습니다.
               </div>
             </div>
             <div className="muted">
@@ -326,13 +358,40 @@ export default function ShipmentWorksheetOverview({
           <div className="shipment-status-toolbar">
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
+                다음 액션
+                <span className="muted">{formatNumber(decisionCounts.all)}건</span>
+              </div>
+              <div className="shipment-status-pill-list">
+                {DECISION_FILTER_OPTIONS.map((option) => {
+                  const active = activeDecisionStatus === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`shipment-filter-pill neutral${active ? " active" : ""}`}
+                      aria-pressed={active}
+                      onClick={() =>
+                        onPatchFilters({
+                          decisionStatus: option.value,
+                        })
+                      }
+                    >
+                      <span>{option.label}</span>
+                      <strong>{formatNumber(decisionCounts[option.value])}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="shipment-status-group">
+              <div className="shipment-status-group-label">
                 송장 상태
                 <span className="muted">{formatNumber(activeSheet?.invoiceCounts.all ?? 0)}건</span>
               </div>
               <div className="shipment-status-pill-list">
                 {invoiceStatusOptions.map((option) => {
                   const active = activeInvoiceStatusCard === option.value;
-
                   return (
                     <button
                       key={option.value}
@@ -361,7 +420,6 @@ export default function ShipmentWorksheetOverview({
               <div className="shipment-status-pill-list">
                 {outputStatusOptions.map((option) => {
                   const active = activeOutputStatusCard === option.value;
-
                   return (
                     <button
                       key={option.value}
@@ -384,13 +442,12 @@ export default function ShipmentWorksheetOverview({
 
             <div className="shipment-status-group">
               <div className="shipment-status-group-label">
-                주문 상태
+                기존 주문 상태
                 <span className="muted">{formatNumber(activeSheet?.orderCounts.all ?? 0)}건</span>
               </div>
               <div className="shipment-status-pill-list">
                 {orderStatusOptions.map((option) => {
                   const active = activeOrderStatusCard === option.value;
-
                   return (
                     <button
                       key={option.value}

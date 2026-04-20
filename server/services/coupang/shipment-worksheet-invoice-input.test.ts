@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 import type { CoupangShipmentWorksheetStoreSheet } from "./shipment-worksheet-store";
 
-const { getStoreMock, getStoreSheetMock, patchRowsMock } = vi.hoisted(() => ({
+const { getStoreMock, getStoreSheetMock, ensureSelpickIntegrityMock, patchRowsMock } = vi.hoisted(() => ({
   getStoreMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
+  ensureSelpickIntegrityMock: vi.fn(),
   patchRowsMock: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("./settings-store", () => ({
 
 vi.mock("./shipment-worksheet-store", () => ({
   coupangShipmentWorksheetStore: {
+    ensureSelpickIntegrity: ensureSelpickIntegrityMock,
     getStoreSheet: getStoreSheetMock,
     patchRows: patchRowsMock,
   },
@@ -135,6 +137,7 @@ describe("applyShipmentWorksheetInvoiceInput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
+    ensureSelpickIntegrityMock.mockResolvedValue(undefined);
   });
 
   it("dedupes by selpick order number and applies the latest value", async () => {

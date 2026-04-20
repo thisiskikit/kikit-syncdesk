@@ -1,14 +1,14 @@
 import type { CoupangCustomerServiceIssueBreakdownItem } from "@shared/coupang";
 
 const COUPANG_ORDER_STATUS_LABELS: Record<string, string> = {
-  ACCEPT: "주문접수",
+  ACCEPT: "결제완료",
   INSTRUCT: "상품준비중",
-  DEPARTURE: "출고완료",
+  DEPARTURE: "배송지시",
   DELIVERING: "배송중",
   FINAL_DELIVERY: "배송완료",
-  NONE_TRACKING: "추적없음",
-  SHIPMENT_STOP_REQUESTED: "출고중지 요청",
-  SHIPMENT_STOP_HANDLED: "출고중지완료",
+  NONE_TRACKING: "배송중",
+  SHIPMENT_STOP_REQUESTED: "출고중지요청",
+  SHIPMENT_STOP_HANDLED: "출고중지처리완료",
   CANCEL: "취소",
   RETURN: "반품",
   EXCHANGE: "교환",
@@ -31,7 +31,13 @@ const CUSTOMER_SERVICE_STATUS_CODE_BY_TYPE = {
 } as const;
 
 function normalizeLegacySummary(summary: string | null | undefined) {
-  return (summary ?? "").trim().replaceAll("출고중지 처리됨", "출고중지완료");
+  return (summary ?? "")
+    .trim()
+    .replaceAll("출고중지 처리완료", "출고중지처리완료")
+    .replaceAll("출고중지 처리 완료", "출고중지처리완료")
+    .replaceAll("출고중지 처리됨", "출고중지처리완료")
+    .replaceAll("shipment stop handled", "shipment_stop_handled")
+    .replaceAll("shipment stop resolved", "shipment_stop_handled");
 }
 
 export function normalizeCoupangOrderStatus(value: string | null | undefined) {
@@ -62,6 +68,7 @@ function resolveCustomerServiceStatusFromSummary(summary: string | null | undefi
   }
 
   if (
+    normalizedSummary.includes("출고중지요청") ||
     normalizedSummary.includes("출고중지 요청") ||
     normalizedSummary.includes("shipment_stop_requested")
   ) {
@@ -69,7 +76,10 @@ function resolveCustomerServiceStatusFromSummary(summary: string | null | undefi
   }
 
   if (
-    normalizedSummary.includes("출고중지완료") ||
+    normalizedSummary.includes("출고중지처리완료") ||
+    normalizedSummary.includes("출고중지 처리완료") ||
+    normalizedSummary.includes("출고중지 처리 완료") ||
+    normalizedSummary.includes("출고중지 처리됨") ||
     normalizedSummary.includes("shipment_stop_handled")
   ) {
     return "SHIPMENT_STOP_HANDLED";
@@ -121,7 +131,11 @@ export function getCoupangOrderStatusToneClass(value: string | null | undefined)
     return "pending";
   }
 
-  if (normalized === "DEPARTURE" || normalized === "DELIVERING") {
+  if (
+    normalized === "DEPARTURE" ||
+    normalized === "DELIVERING" ||
+    normalized === "NONE_TRACKING"
+  ) {
     return "running";
   }
 
@@ -129,11 +143,7 @@ export function getCoupangOrderStatusToneClass(value: string | null | undefined)
     return "success";
   }
 
-  if (
-    normalized === "NONE_TRACKING" ||
-    normalized === "EXCHANGE" ||
-    normalized === "SHIPMENT_STOP_HANDLED"
-  ) {
+  if (normalized === "EXCHANGE" || normalized === "SHIPMENT_STOP_HANDLED") {
     return "attention";
   }
 

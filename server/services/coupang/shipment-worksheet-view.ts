@@ -2,17 +2,29 @@ import {
   type CoupangShipmentWorksheetAuditHiddenReason,
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangCustomerServiceIssueBreakdownItem,
+  type CoupangShipmentIssueFilter,
   type CoupangShipmentWorksheetBulkResolveMode,
   type CoupangShipmentWorksheetBulkResolveResponse,
   type CoupangShipmentWorksheetInvoiceStatusCard,
   type CoupangShipmentWorksheetOrderStatusCard,
   type CoupangShipmentWorksheetOutputStatusCard,
+  type CoupangShipmentWorksheetPipelineCardFilter,
+  type CoupangShipmentWorksheetPriorityCardFilter,
   type CoupangShipmentWorksheetRow,
   type CoupangShipmentWorksheetSortField,
   type CoupangShipmentWorksheetViewQuery,
   type CoupangShipmentWorksheetViewResponse,
   type CoupangShipmentWorksheetViewScope,
 } from "@shared/coupang";
+import {
+  buildCoupangShipmentStatusSnapshot,
+  isCoupangShipmentDirectDelivery,
+  isCoupangShipmentStaleSync,
+  matchesCoupangShipmentIssueFilter,
+  matchesCoupangShipmentPipelineCard,
+  matchesCoupangShipmentPriorityCard,
+  resolveCoupangShipmentIssueStage,
+} from "@shared/coupang-status";
 import {
   buildCoupangFulfillmentDecisionCounts,
   buildCoupangShipmentDecisionPreviewGroups,
@@ -30,6 +42,11 @@ type WorksheetViewCounts = Pick<
   | "invoiceReadyCount"
   | "decisionCounts"
   | "decisionPreviewGroups"
+  | "priorityCounts"
+  | "pipelineCounts"
+  | "issueCounts"
+  | "directDeliveryCount"
+  | "staleSyncCount"
   | "scopeRowCount"
   | "filteredRowCount"
   | "page"
@@ -58,6 +75,9 @@ const DEFAULT_SCOPE: CoupangShipmentWorksheetViewScope = "dispatch_active";
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_DECISION_STATUS = "all";
+const DEFAULT_PRIORITY_CARD: CoupangShipmentWorksheetPriorityCardFilter = "all";
+const DEFAULT_PIPELINE_CARD: CoupangShipmentWorksheetPipelineCardFilter = "all";
+const DEFAULT_ISSUE_FILTER: CoupangShipmentIssueFilter = "all";
 const DEFAULT_INVOICE_STATUS_CARD: CoupangShipmentWorksheetInvoiceStatusCard = "all";
 const DEFAULT_ORDER_STATUS_CARD: CoupangShipmentWorksheetOrderStatusCard = "all";
 const DEFAULT_OUTPUT_STATUS_CARD: CoupangShipmentWorksheetOutputStatusCard = "all";
@@ -78,6 +98,34 @@ const INVOICE_STATUS_KEYS = [
   "failed",
   "applied",
 ] as const satisfies readonly CoupangShipmentWorksheetInvoiceStatusCard[];
+
+const PRIORITY_CARD_KEYS = [
+  "all",
+  "shipment_stop_requested",
+  "same_day_dispatch",
+  "dispatch_delayed",
+  "long_in_transit",
+] as const satisfies readonly CoupangShipmentWorksheetPriorityCardFilter[];
+
+const PIPELINE_CARD_KEYS = [
+  "all",
+  "payment_completed",
+  "preparing_product",
+  "shipping_instruction",
+  "in_delivery",
+  "delivered",
+] as const satisfies readonly CoupangShipmentWorksheetPipelineCardFilter[];
+
+const ISSUE_FILTER_KEYS = [
+  "all",
+  "shipment_stop_requested",
+  "shipment_stop_resolved",
+  "cancel",
+  "return",
+  "exchange",
+  "cs_open",
+  "direct_delivery",
+] as const satisfies readonly CoupangShipmentIssueFilter[];
 
 const ORDER_STATUS_KEYS = [
   "all",
@@ -291,6 +339,27 @@ function matchesInvoiceStatusCard(
   return card === "all" || getInvoiceStatusCardKey(row) === card;
 }
 
+function matchesPriorityCard(
+  row: CoupangShipmentWorksheetRow,
+  card: CoupangShipmentWorksheetPriorityCardFilter,
+) {
+  return matchesCoupangShipmentPriorityCard(row, card);
+}
+
+function matchesPipelineCard(
+  row: CoupangShipmentWorksheetRow,
+  card: CoupangShipmentWorksheetPipelineCardFilter,
+) {
+  return matchesCoupangShipmentPipelineCard(row, card);
+}
+
+function matchesIssueFilter(
+  row: CoupangShipmentWorksheetRow,
+  filter: CoupangShipmentIssueFilter,
+) {
+  return matchesCoupangShipmentIssueFilter(row, filter);
+}
+
 function matchesOrderStatusCard(
   row: Pick<
     CoupangShipmentWorksheetRow,
@@ -356,8 +425,12 @@ function getSortValue(
       return row.exportedAt ? 1 : 0;
     case "__invoiceTransmissionStatus":
       return getInvoiceStatusCardKey(row);
-    case "__orderStatus":
-      return `${resolveDisplayOrderStatus(row) ?? ""}:${normalizeSummary(row.customerServiceIssueSummary)}`;
+    case "__orderStatus": {
+      const statusSnapshot = buildCoupangShipmentStatusSnapshot(row);
+      return `${statusSnapshot.shippingStage ?? ""}:${statusSnapshot.issueStage ?? ""}:${
+        statusSnapshot.statusDerivedAt ?? ""
+      }`;
+    }
     case "quantity":
       return row.quantity;
     case "salePrice":
@@ -382,6 +455,13 @@ export function matchesShipmentWorksheetQuery(row: CoupangShipmentWorksheetRow, 
   return [
     row.orderDateText,
     row.orderStatus,
+    buildCoupangShipmentStatusSnapshot(row).rawOrderStatus,
+    buildCoupangShipmentStatusSnapshot(row).shippingStage,
+    buildCoupangShipmentStatusSnapshot(row).issueStage,
+    buildCoupangShipmentStatusSnapshot(row).priorityBucket,
+    buildCoupangShipmentStatusSnapshot(row).pipelineBucket,
+    buildCoupangShipmentStatusSnapshot(row).syncSource,
+    buildCoupangShipmentStatusSnapshot(row).statusMismatchReason,
     resolveDisplayOrderStatus(row),
     normalizeSummary(row.customerServiceIssueSummary),
     row.productName,
@@ -444,6 +524,50 @@ function normalizeScope(value: string | null | undefined): CoupangShipmentWorksh
     : DEFAULT_SCOPE;
 }
 
+function normalizePriorityCard(
+  value: string | null | undefined,
+): CoupangShipmentWorksheetPriorityCardFilter {
+  return PRIORITY_CARD_KEYS.includes(value as CoupangShipmentWorksheetPriorityCardFilter)
+    ? (value as CoupangShipmentWorksheetPriorityCardFilter)
+    : DEFAULT_PRIORITY_CARD;
+}
+
+function normalizePipelineCard(
+  value: string | null | undefined,
+): CoupangShipmentWorksheetPipelineCardFilter {
+  if (value === "ACCEPT") {
+    return "payment_completed";
+  }
+  if (value === "INSTRUCT") {
+    return "preparing_product";
+  }
+  if (value === "DEPARTURE") {
+    return "shipping_instruction";
+  }
+  if (value === "DELIVERING" || value === "NONE_TRACKING") {
+    return "in_delivery";
+  }
+  if (value === "FINAL_DELIVERY") {
+    return "delivered";
+  }
+
+  return PIPELINE_CARD_KEYS.includes(value as CoupangShipmentWorksheetPipelineCardFilter)
+    ? (value as CoupangShipmentWorksheetPipelineCardFilter)
+    : DEFAULT_PIPELINE_CARD;
+}
+
+function normalizeIssueFilter(
+  value: string | null | undefined,
+): CoupangShipmentIssueFilter {
+  if (value === "shipment_stop_handled") {
+    return "shipment_stop_resolved";
+  }
+
+  return ISSUE_FILTER_KEYS.includes(value as CoupangShipmentIssueFilter)
+    ? (value as CoupangShipmentIssueFilter)
+    : DEFAULT_ISSUE_FILTER;
+}
+
 function normalizeInvoiceStatusCard(
   value: string | null | undefined,
 ): CoupangShipmentWorksheetInvoiceStatusCard {
@@ -482,6 +606,9 @@ export function normalizeShipmentWorksheetViewQuery(
       query?.decisionStatus === "recheck"
         ? query.decisionStatus
         : DEFAULT_DECISION_STATUS,
+    priorityCard: normalizePriorityCard(query?.priorityCard),
+    pipelineCard: normalizePipelineCard(query?.pipelineCard),
+    issueFilter: normalizeIssueFilter(query?.issueFilter),
     page: Number.isFinite(query?.page) && (query?.page ?? 0) > 0 ? Math.floor(query!.page!) : DEFAULT_PAGE,
     pageSize:
       Number.isFinite(query?.pageSize) && (query?.pageSize ?? 0) > 0
@@ -512,8 +639,38 @@ function resolveFilteredRows(
 ) {
   const scopedRows = rows.filter((row) => matchesScope(row, query.scope));
   const searchedRows = scopedRows.filter((row) => matchesShipmentWorksheetQuery(row, query.query));
+  const priorityFacetRows = searchedRows.filter(
+    (row) =>
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
+      matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
+      matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
+      matchesOrderStatusCard(row, query.orderStatusCard) &&
+      matchesOutputStatusCard(row, query.outputStatusCard),
+  );
+  const pipelineFacetRows = searchedRows.filter(
+    (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
+      matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
+      matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
+      matchesOrderStatusCard(row, query.orderStatusCard) &&
+      matchesOutputStatusCard(row, query.outputStatusCard),
+  );
+  const issueFacetRows = searchedRows.filter(
+    (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
+      matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
+      matchesOrderStatusCard(row, query.orderStatusCard) &&
+      matchesOutputStatusCard(row, query.outputStatusCard),
+  );
   const queueFilteredRows = searchedRows.filter(
     (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
       matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
       matchesOrderStatusCard(row, query.orderStatusCard) &&
       matchesOutputStatusCard(row, query.outputStatusCard),
@@ -525,6 +682,9 @@ function resolveFilteredRows(
   return {
     scopedRows,
     searchedRows,
+    priorityFacetRows,
+    pipelineFacetRows,
+    issueFacetRows,
     queueFilteredRows,
     filteredRows,
   };
@@ -553,6 +713,9 @@ export function getShipmentWorksheetRowHiddenReason(
 
   if (
     !matchesShipmentWorksheetQuery(row, query.query) ||
+    !matchesPriorityCard(row, query.priorityCard) ||
+    !matchesPipelineCard(row, query.pipelineCard) ||
+    !matchesIssueFilter(row, query.issueFilter) ||
     !matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) ||
     !matchesInvoiceStatusCard(row, query.invoiceStatusCard) ||
     !matchesOrderStatusCard(row, query.orderStatusCard) ||
@@ -570,22 +733,39 @@ export function buildShipmentWorksheetViewData(
 ): WorksheetViewCounts {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
   const scopeCounts = countScopeRows(rows);
-  const { scopedRows, searchedRows, queueFilteredRows, filteredRows } = resolveFilteredRows(rows, query);
+  const {
+    scopedRows,
+    searchedRows,
+    priorityFacetRows,
+    pipelineFacetRows,
+    issueFacetRows,
+    queueFilteredRows,
+    filteredRows,
+  } = resolveFilteredRows(rows, query);
 
   const invoiceFacetRows = searchedRows.filter(
     (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
       matchesOrderStatusCard(row, query.orderStatusCard) &&
       matchesOutputStatusCard(row, query.outputStatusCard),
   );
   const orderFacetRows = searchedRows.filter(
     (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
       matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
       matchesOutputStatusCard(row, query.outputStatusCard),
   );
   const outputFacetRows = searchedRows.filter(
     (row) =>
+      matchesPriorityCard(row, query.priorityCard) &&
+      matchesPipelineCard(row, query.pipelineCard) &&
+      matchesIssueFilter(row, query.issueFilter) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
       matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
       matchesOrderStatusCard(row, query.orderStatusCard),
@@ -609,8 +789,38 @@ export function buildShipmentWorksheetViewData(
   const startIndex = (page - 1) * query.pageSize;
   const pagedRows = sortedRows.slice(startIndex, startIndex + query.pageSize);
   const invoiceCounts = createCountRecord(INVOICE_STATUS_KEYS);
+  const priorityCounts = createCountRecord(PRIORITY_CARD_KEYS);
+  const pipelineCounts = createCountRecord(PIPELINE_CARD_KEYS);
+  const issueCounts = createCountRecord(ISSUE_FILTER_KEYS);
   const orderCounts = createCountRecord(ORDER_STATUS_KEYS);
   const outputCounts = createCountRecord(OUTPUT_STATUS_KEYS);
+
+  priorityCounts.all = priorityFacetRows.length;
+  for (const row of priorityFacetRows) {
+    const cardKey = buildCoupangShipmentStatusSnapshot(row).priorityBucket;
+    if (cardKey) {
+      priorityCounts[cardKey] += 1;
+    }
+  }
+
+  pipelineCounts.all = pipelineFacetRows.length;
+  for (const row of pipelineFacetRows) {
+    const cardKey = buildCoupangShipmentStatusSnapshot(row).pipelineBucket;
+    if (cardKey) {
+      pipelineCounts[cardKey] += 1;
+    }
+  }
+
+  issueCounts.all = issueFacetRows.length;
+  for (const row of issueFacetRows) {
+    const issueStage = resolveCoupangShipmentIssueStage(row);
+    if (issueStage !== "none") {
+      issueCounts[issueStage] += 1;
+    }
+    if (isCoupangShipmentDirectDelivery(row)) {
+      issueCounts.direct_delivery += 1;
+    }
+  }
 
   invoiceCounts.all = invoiceFacetRows.length;
   for (const row of invoiceFacetRows) {
@@ -634,10 +844,17 @@ export function buildShipmentWorksheetViewData(
   const decisionPreviewGroups = buildCoupangShipmentDecisionPreviewGroups(queueFilteredRows);
 
   return {
-    items: pagedRows.map((row) => ({
-      ...row,
-      ...buildCoupangShipmentRowSummary(row),
-    })),
+    items: pagedRows.map((row) => {
+      const statusSnapshot = buildCoupangShipmentStatusSnapshot(row);
+      return {
+        ...row,
+        ...statusSnapshot,
+        ...buildCoupangShipmentRowSummary({
+          ...row,
+          ...statusSnapshot,
+        }),
+      };
+    }),
     scope: query.scope,
     page,
     pageSize: query.pageSize,
@@ -648,6 +865,11 @@ export function buildShipmentWorksheetViewData(
     invoiceReadyCount: filteredRows.filter((row) => canSendInvoiceRow(row)).length,
     decisionCounts,
     decisionPreviewGroups,
+    priorityCounts,
+    pipelineCounts,
+    issueCounts,
+    directDeliveryCount: issueFacetRows.filter((row) => isCoupangShipmentDirectDelivery(row)).length,
+    staleSyncCount: issueFacetRows.filter((row) => isCoupangShipmentStaleSync(row)).length,
     scopeCounts,
     invoiceCounts,
     orderCounts,

@@ -1,10 +1,13 @@
 import type {
   AuditCoupangShipmentWorksheetMissingInput,
+  CoupangShipmentIssueFilter,
   CoupangShipmentWorksheetAuditHiddenReason,
   CoupangShipmentWorksheetAuditMissingResponse,
   CoupangShipmentWorksheetInvoiceStatusCard,
   CoupangShipmentWorksheetOrderStatusCard,
   CoupangShipmentWorksheetOutputStatusCard,
+  CoupangShipmentWorksheetPipelineCardFilter,
+  CoupangShipmentWorksheetPriorityCardFilter,
   CoupangShipmentWorksheetViewScope,
 } from "@shared/coupang";
 
@@ -14,6 +17,9 @@ export function buildShipmentWorksheetAuditRequest(input: {
   createdAtTo: string;
   scope: CoupangShipmentWorksheetViewScope;
   query: string;
+  priorityCard: CoupangShipmentWorksheetPriorityCardFilter;
+  pipelineCard: CoupangShipmentWorksheetPipelineCardFilter;
+  issueFilter: CoupangShipmentIssueFilter;
   invoiceStatusCard: CoupangShipmentWorksheetInvoiceStatusCard;
   orderStatusCard: CoupangShipmentWorksheetOrderStatusCard;
   outputStatusCard: CoupangShipmentWorksheetOutputStatusCard;
@@ -25,6 +31,9 @@ export function buildShipmentWorksheetAuditRequest(input: {
     viewQuery: {
       scope: input.scope,
       query: input.query,
+      priorityCard: input.priorityCard,
+      pipelineCard: input.pipelineCard,
+      issueFilter: input.issueFilter,
       invoiceStatusCard: input.invoiceStatusCard,
       orderStatusCard: input.orderStatusCard,
       outputStatusCard: input.outputStatusCard,

@@ -14,6 +14,8 @@ import {
 import {
   coupangShipmentArchiveRows,
   coupangShipmentRows,
+  coupangShipmentSelpickCounters,
+  coupangShipmentSelpickRegistry,
   coupangShipmentSheets,
   type CoupangShipmentArchiveRowRow,
   type CoupangShipmentRowRow,
@@ -32,6 +34,8 @@ import type {
   ArchiveCoupangShipmentWorksheetRowsResult,
   CoupangShipmentWorksheetStorePort,
   CoupangShipmentWorksheetSyncState,
+  EnsureCoupangShipmentWorksheetSelpickIntegrityInput,
+  MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
 } from "../interfaces/coupang-shipment-worksheet-store";
 
 export type { CoupangShipmentWorksheetSyncState } from "../interfaces/coupang-shipment-worksheet-store";
@@ -50,21 +54,41 @@ type PersistedWorksheetStore = {
   version: 2;
   stores: Record<string, PersistedWorksheetStoreEntry>;
   archives: Record<string, CoupangShipmentArchiveRow[]>;
+  selpickRegistry: string[];
+  selpickCounters: Record<string, number>;
 };
 
 const defaultData: PersistedWorksheetStore = {
   version: 2,
   stores: {},
   archives: {},
+  selpickRegistry: [],
+  selpickCounters: {},
 };
 
 const STALE_INVOICE_PENDING_THRESHOLD_MS = 5 * 60_000;
 const STALE_INVOICE_PENDING_MESSAGE =
   "\uC804\uC1A1 \uACB0\uACFC \uD655\uC778\uC774 \uC9C0\uC5F0\uB418\uC5B4 \uC2E4\uD328\uB85C \uC804\uD658\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC804\uC1A1\uD574 \uC8FC\uC138\uC694.";
 export const WORKSHEET_ROW_WRITE_CHUNK_SIZE = 200;
+const SELPICK_ORDER_NUMBER_PATTERN = /^O(\d{8})([A-Z0-9])(\d{4,})$/i;
 
 type WorkDataDatabase = ReturnType<typeof assertWorkDataDatabaseEnabled>;
 type WorkDataTransaction = Parameters<Parameters<WorkDataDatabase["transaction"]>[0]>[0];
+type SelpickEntryLocation = "active" | "archive";
+type SelpickIntegrityEntry = {
+  location: SelpickEntryLocation;
+  id: string;
+  storeId: string;
+  sourceKey: string;
+  selpickOrderNumber: string;
+  orderDateKey: string;
+  createdAt: string;
+  sortOrder: number;
+  exportedAt: string | null;
+  invoiceAppliedAt: string | null;
+  invoiceNumber: string;
+  invoiceTransmissionStatus: string | null;
+};
 
 const COLUMN_BACKED_WORKSHEET_ROW_KEYS = new Set<keyof CoupangShipmentWorksheetRow>([
   "id",
@@ -509,7 +533,128 @@ function normalizePersistedStore(value: Partial<PersistedWorksheetStore> | null)
             ]),
           )
         : {},
+    selpickRegistry: Array.from(
+      new Set(
+        Array.isArray(value?.selpickRegistry)
+          ? value.selpickRegistry
+              .map((item) => normalizeOptionalString(item))
+              .filter((item): item is string => Boolean(item))
+          : [],
+      ),
+    ),
+    selpickCounters:
+      value?.selpickCounters &&
+      typeof value.selpickCounters === "object" &&
+      !Array.isArray(value.selpickCounters)
+        ? Object.fromEntries(
+            Object.entries(value.selpickCounters)
+              .map(([platformKey, sequence]) => [
+                normalizeOptionalString(platformKey)?.toUpperCase() ?? "",
+                Number.isFinite(sequence) ? Math.max(0, Math.trunc(Number(sequence))) : 0,
+              ])
+              .filter(([platformKey]) => Boolean(platformKey)),
+          )
+        : {},
   };
+}
+
+function normalizeSelpickOrderNumber(value: string | null | undefined) {
+  return normalizeOptionalString(value)?.toUpperCase() ?? null;
+}
+
+function parseSelpickOrderNumber(value: string | null | undefined) {
+  const normalized = normalizeSelpickOrderNumber(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const matched = normalized.match(SELPICK_ORDER_NUMBER_PATTERN);
+  if (!matched) {
+    return null;
+  }
+
+  const sequence = Number(matched[3]);
+  if (!Number.isFinite(sequence)) {
+    return null;
+  }
+
+  return {
+    normalized,
+    orderDateKey: matched[1],
+    platformKey: matched[2].toUpperCase(),
+    sequence,
+  };
+}
+
+function formatSelpickOrderNumber(orderDateKey: string, platformKey: string, sequence: number) {
+  return `O${orderDateKey}${platformKey}${String(sequence).padStart(4, "0")}`;
+}
+
+function compareSelpickIntegrityEntries(left: SelpickIntegrityEntry, right: SelpickIntegrityEntry) {
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt.localeCompare(right.createdAt);
+  }
+
+  if (left.location !== right.location) {
+    return left.location === "active" ? -1 : 1;
+  }
+
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+
+  return left.sourceKey.localeCompare(right.sourceKey);
+}
+
+function canAutoRepairSelpickIntegrityEntry(entry: SelpickIntegrityEntry) {
+  return (
+    !normalizeOptionalString(entry.exportedAt) &&
+    !normalizeOptionalString(entry.invoiceAppliedAt) &&
+    !normalizeOptionalString(entry.invoiceNumber) &&
+    entry.invoiceTransmissionStatus !== "succeeded"
+  );
+}
+
+function buildSelpickIntegrityBlockedError(entries: SelpickIntegrityEntry[]) {
+  const details = entries
+    .slice(0, 3)
+    .map((entry) => `${entry.selpickOrderNumber} (${entry.location}:${entry.sourceKey})`)
+    .join(", ");
+
+  return new Error(
+    `운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구하지 못했습니다.${details ? ` ${details}` : ""}${entries.length > 3 ? ` 외 ${entries.length - 3}건` : ""}`,
+  );
+}
+
+function findDuplicateSelpickOrderNumbers(rows: readonly Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber">[]) {
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    const selpickOrderNumber = normalizeSelpickOrderNumber(row.selpickOrderNumber);
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    counts.set(selpickOrderNumber, (counts.get(selpickOrderNumber) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([selpickOrderNumber]) => selpickOrderNumber);
+}
+
+function assertUniqueSelpickOrderNumbers(
+  rows: readonly Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber">[],
+  message: string,
+) {
+  const duplicates = findDuplicateSelpickOrderNumbers(rows);
+  if (!duplicates.length) {
+    return;
+  }
+
+  throw new Error(
+    `${message} ${duplicates.slice(0, 3).join(", ")}${duplicates.length > 3 ? ` 외 ${duplicates.length - 3}건` : ""}`,
+  );
 }
 
 function buildWorksheetDatabaseRowValue(
@@ -610,10 +755,574 @@ function hashAdvisoryLockPart(value: string) {
   return hash;
 }
 
+async function acquireSelpickIntegrityTransactionLock(tx: WorkDataTransaction) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(${hashAdvisoryLockPart("coupang_shipment_selpick_integrity")}, 0)`,
+  );
+}
+
+async function acquireSelpickPlatformTransactionLock(tx: WorkDataTransaction, platformKey: string) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(${hashAdvisoryLockPart("coupang_shipment_selpick_platform")}, ${hashAdvisoryLockPart(platformKey)})`,
+  );
+}
+
 async function acquireWorksheetStoreTransactionLock(tx: WorkDataTransaction, storeId: string) {
   await tx.execute(
     sql`select pg_advisory_xact_lock(${hashAdvisoryLockPart("coupang_shipment_rows")}, ${hashAdvisoryLockPart(storeId)})`,
   );
+}
+
+async function reserveNextSelpickOrderNumberTx(
+  tx: WorkDataTransaction,
+  input: { platformKey: string; orderDateKey: string },
+) {
+  const platformKey = normalizeOptionalString(input.platformKey)?.toUpperCase();
+  if (!platformKey || !/^[A-Z0-9]$/.test(platformKey)) {
+    throw new Error("셀픽주문번호 발급용 배송 KEY가 올바르지 않습니다.");
+  }
+
+  await acquireSelpickPlatformTransactionLock(tx, platformKey);
+
+  for (let attempt = 0; attempt < 10000; attempt += 1) {
+    const currentCounter = await tx
+      .select({ lastSequence: coupangShipmentSelpickCounters.lastSequence })
+      .from(coupangShipmentSelpickCounters)
+      .where(eq(coupangShipmentSelpickCounters.platformKey, platformKey))
+      .limit(1);
+    const nextSequence = (currentCounter[0]?.lastSequence ?? 0) + 1;
+    const now = new Date();
+
+    if (currentCounter[0]) {
+      await tx
+        .update(coupangShipmentSelpickCounters)
+        .set({
+          lastSequence: nextSequence,
+          updatedAt: now,
+        })
+        .where(eq(coupangShipmentSelpickCounters.platformKey, platformKey));
+    } else {
+      await tx.insert(coupangShipmentSelpickCounters).values({
+        platformKey,
+        lastSequence: nextSequence,
+        updatedAt: now,
+      });
+    }
+
+    const candidate = formatSelpickOrderNumber(input.orderDateKey, platformKey, nextSequence);
+    const inserted = await tx
+      .insert(coupangShipmentSelpickRegistry)
+      .values({
+        selpickOrderNumber: candidate,
+        createdAt: now,
+      })
+      .onConflictDoNothing()
+      .returning({ selpickOrderNumber: coupangShipmentSelpickRegistry.selpickOrderNumber });
+
+    if (inserted[0]?.selpickOrderNumber) {
+      return candidate;
+    }
+  }
+
+  throw new Error("셀픽주문번호를 예약하지 못했습니다.");
+}
+
+async function insertSelpickRegistryEntriesTx(
+  tx: WorkDataTransaction,
+  selpickOrderNumbers: readonly string[],
+) {
+  const normalized = Array.from(
+    new Set(
+      selpickOrderNumbers
+        .map((value) => normalizeSelpickOrderNumber(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  if (!normalized.length) {
+    return;
+  }
+
+  const now = new Date();
+  for (const chunk of chunkWorksheetRows(normalized, 500)) {
+    await tx
+      .insert(coupangShipmentSelpickRegistry)
+      .values(
+        chunk.map((selpickOrderNumber) => ({
+          selpickOrderNumber,
+          createdAt: now,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+}
+
+async function syncSelpickCounterMaxTx(
+  tx: WorkDataTransaction,
+  platformKey: string,
+  lastSequence: number,
+) {
+  if (!/^[A-Z0-9]$/.test(platformKey) || !Number.isFinite(lastSequence) || lastSequence < 0) {
+    return;
+  }
+
+  const now = new Date();
+  await tx
+    .insert(coupangShipmentSelpickCounters)
+    .values({
+      platformKey,
+      lastSequence,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: coupangShipmentSelpickCounters.platformKey,
+      set: {
+        lastSequence: sql`GREATEST(${coupangShipmentSelpickCounters.lastSequence}, ${lastSequence})`,
+        updatedAt: now,
+      },
+    });
+}
+
+async function syncSelpickStateForRowsTx(
+  tx: WorkDataTransaction,
+  rows: Array<Pick<CoupangShipmentWorksheetRow, "selpickOrderNumber">>,
+) {
+  const selpickOrderNumbers = rows
+    .map((row) => normalizeSelpickOrderNumber(row.selpickOrderNumber))
+    .filter((value): value is string => Boolean(value));
+  if (!selpickOrderNumbers.length) {
+    return;
+  }
+
+  await insertSelpickRegistryEntriesTx(tx, selpickOrderNumbers);
+  const maxSequenceByPlatformKey = new Map<string, number>();
+  for (const selpickOrderNumber of selpickOrderNumbers) {
+    const parsed = parseSelpickOrderNumber(selpickOrderNumber);
+    if (!parsed) {
+      continue;
+    }
+
+    maxSequenceByPlatformKey.set(
+      parsed.platformKey,
+      Math.max(maxSequenceByPlatformKey.get(parsed.platformKey) ?? 0, parsed.sequence),
+    );
+  }
+
+  for (const [platformKey, lastSequence] of Array.from(maxSequenceByPlatformKey.entries())) {
+    await syncSelpickCounterMaxTx(tx, platformKey, lastSequence);
+  }
+}
+
+function mapActiveSelpickIntegrityEntry(
+  row: Pick<
+    CoupangShipmentRowRow,
+    | "id"
+    | "storeId"
+    | "sourceKey"
+    | "selpickOrderNumber"
+    | "orderDateKey"
+    | "createdAt"
+    | "sortOrder"
+    | "exportedAt"
+    | "invoiceAppliedAt"
+    | "invoiceNumber"
+    | "invoiceTransmissionStatus"
+  >,
+): SelpickIntegrityEntry {
+  return {
+    location: "active",
+    id: row.id,
+    storeId: row.storeId,
+    sourceKey: row.sourceKey,
+    selpickOrderNumber: row.selpickOrderNumber,
+    orderDateKey: row.orderDateKey,
+    createdAt: toIsoString(row.createdAt) ?? new Date(0).toISOString(),
+    sortOrder: row.sortOrder,
+    exportedAt: toIsoString(row.exportedAt),
+    invoiceAppliedAt: toIsoString(row.invoiceAppliedAt),
+    invoiceNumber: row.invoiceNumber,
+    invoiceTransmissionStatus: row.invoiceTransmissionStatus,
+  };
+}
+
+function mapArchiveSelpickIntegrityEntry(
+  row: Pick<
+    CoupangShipmentArchiveRowRow,
+    | "id"
+    | "storeId"
+    | "sourceKey"
+    | "selpickOrderNumber"
+    | "orderDateKey"
+    | "createdAt"
+    | "sortOrder"
+    | "exportedAt"
+    | "invoiceAppliedAt"
+    | "invoiceNumber"
+    | "invoiceTransmissionStatus"
+  >,
+): SelpickIntegrityEntry {
+  return {
+    location: "archive",
+    id: row.id,
+    storeId: row.storeId,
+    sourceKey: row.sourceKey,
+    selpickOrderNumber: row.selpickOrderNumber,
+    orderDateKey: row.orderDateKey,
+    createdAt: toIsoString(row.createdAt) ?? new Date(0).toISOString(),
+    sortOrder: row.sortOrder,
+    exportedAt: toIsoString(row.exportedAt),
+    invoiceAppliedAt: toIsoString(row.invoiceAppliedAt),
+    invoiceNumber: row.invoiceNumber,
+    invoiceTransmissionStatus: row.invoiceTransmissionStatus,
+  };
+}
+
+async function ensureSelpickIntegrityDbTx(tx: WorkDataTransaction) {
+  await acquireSelpickIntegrityTransactionLock(tx);
+
+  const [activeRows, archiveRows] = await Promise.all([
+    tx
+      .select({
+        id: coupangShipmentRows.id,
+        storeId: coupangShipmentRows.storeId,
+        sourceKey: coupangShipmentRows.sourceKey,
+        selpickOrderNumber: coupangShipmentRows.selpickOrderNumber,
+        orderDateKey: coupangShipmentRows.orderDateKey,
+        createdAt: coupangShipmentRows.createdAt,
+        sortOrder: coupangShipmentRows.sortOrder,
+        exportedAt: coupangShipmentRows.exportedAt,
+        invoiceAppliedAt: coupangShipmentRows.invoiceAppliedAt,
+        invoiceNumber: coupangShipmentRows.invoiceNumber,
+        invoiceTransmissionStatus: coupangShipmentRows.invoiceTransmissionStatus,
+      })
+      .from(coupangShipmentRows),
+    tx
+      .select({
+        id: coupangShipmentArchiveRows.id,
+        storeId: coupangShipmentArchiveRows.storeId,
+        sourceKey: coupangShipmentArchiveRows.sourceKey,
+        selpickOrderNumber: coupangShipmentArchiveRows.selpickOrderNumber,
+        orderDateKey: coupangShipmentArchiveRows.orderDateKey,
+        createdAt: coupangShipmentArchiveRows.createdAt,
+        sortOrder: coupangShipmentArchiveRows.sortOrder,
+        exportedAt: coupangShipmentArchiveRows.exportedAt,
+        invoiceAppliedAt: coupangShipmentArchiveRows.invoiceAppliedAt,
+        invoiceNumber: coupangShipmentArchiveRows.invoiceNumber,
+        invoiceTransmissionStatus: coupangShipmentArchiveRows.invoiceTransmissionStatus,
+      })
+      .from(coupangShipmentArchiveRows),
+  ]);
+
+  const entries = [
+    ...activeRows.map(mapActiveSelpickIntegrityEntry),
+    ...archiveRows.map(mapArchiveSelpickIntegrityEntry),
+  ];
+  const entriesBySelpick = new Map<string, SelpickIntegrityEntry[]>();
+
+  for (const entry of entries) {
+    const selpickOrderNumber = normalizeSelpickOrderNumber(entry.selpickOrderNumber);
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    const group = entriesBySelpick.get(selpickOrderNumber);
+    if (group) {
+      group.push(entry);
+      continue;
+    }
+
+    entriesBySelpick.set(selpickOrderNumber, [entry]);
+  }
+
+  const blockedEntries: SelpickIntegrityEntry[] = [];
+  const existingSelpickOrderNumbers = entries
+    .map((entry) => normalizeSelpickOrderNumber(entry.selpickOrderNumber))
+    .filter((value): value is string => Boolean(value));
+  await insertSelpickRegistryEntriesTx(tx, existingSelpickOrderNumbers);
+  const existingMaxSequenceByPlatformKey = new Map<string, number>();
+  for (const selpickOrderNumber of existingSelpickOrderNumbers) {
+    const parsed = parseSelpickOrderNumber(selpickOrderNumber);
+    if (!parsed) {
+      continue;
+    }
+
+    existingMaxSequenceByPlatformKey.set(
+      parsed.platformKey,
+      Math.max(existingMaxSequenceByPlatformKey.get(parsed.platformKey) ?? 0, parsed.sequence),
+    );
+  }
+  for (const [platformKey, lastSequence] of Array.from(existingMaxSequenceByPlatformKey.entries())) {
+    await syncSelpickCounterMaxTx(tx, platformKey, lastSequence);
+  }
+
+  for (const group of Array.from(entriesBySelpick.values())) {
+    if (group.length <= 1) {
+      continue;
+    }
+
+    const sorted = [...group].sort(compareSelpickIntegrityEntries);
+    for (const entry of sorted.slice(1)) {
+      const parsed = parseSelpickOrderNumber(entry.selpickOrderNumber);
+      if (!parsed || !canAutoRepairSelpickIntegrityEntry(entry)) {
+        blockedEntries.push(entry);
+        continue;
+      }
+
+      const repairedSelpickOrderNumber = await reserveNextSelpickOrderNumberTx(tx, {
+        platformKey: parsed.platformKey,
+        orderDateKey: entry.orderDateKey,
+      });
+      const now = new Date();
+
+      if (entry.location === "active") {
+        await tx
+          .update(coupangShipmentRows)
+          .set({
+            selpickOrderNumber: repairedSelpickOrderNumber,
+            updatedAt: now,
+          })
+          .where(eq(coupangShipmentRows.id, entry.id));
+      } else {
+        await tx
+          .update(coupangShipmentArchiveRows)
+          .set({
+            selpickOrderNumber: repairedSelpickOrderNumber,
+            updatedAt: now,
+          })
+          .where(eq(coupangShipmentArchiveRows.id, entry.id));
+      }
+
+      entry.selpickOrderNumber = repairedSelpickOrderNumber;
+      entry.createdAt = entry.createdAt || now.toISOString();
+    }
+  }
+
+  if (blockedEntries.length) {
+    throw buildSelpickIntegrityBlockedError(blockedEntries);
+  }
+
+  const allSelpickOrderNumbers = entries
+    .map((entry) => normalizeSelpickOrderNumber(entry.selpickOrderNumber))
+    .filter((value): value is string => Boolean(value));
+  await insertSelpickRegistryEntriesTx(tx, allSelpickOrderNumbers);
+
+  const maxSequenceByPlatformKey = new Map<string, number>();
+  for (const selpickOrderNumber of allSelpickOrderNumbers) {
+    const parsed = parseSelpickOrderNumber(selpickOrderNumber);
+    if (!parsed) {
+      continue;
+    }
+
+    maxSequenceByPlatformKey.set(
+      parsed.platformKey,
+      Math.max(maxSequenceByPlatformKey.get(parsed.platformKey) ?? 0, parsed.sequence),
+    );
+  }
+
+  for (const [platformKey, lastSequence] of Array.from(maxSequenceByPlatformKey.entries())) {
+    await syncSelpickCounterMaxTx(tx, platformKey, lastSequence);
+  }
+}
+
+function finalizeLegacySelpickState(
+  data: PersistedWorksheetStore,
+  registry: Set<string>,
+  counters: Map<string, number>,
+) {
+  data.selpickRegistry = Array.from(registry).sort((left, right) => left.localeCompare(right));
+  data.selpickCounters = Object.fromEntries(
+    Array.from(counters.entries())
+      .filter(([, value]) => Number.isFinite(value) && value >= 0)
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function registerSelpickOrderNumbersLegacy(
+  registry: Set<string>,
+  counters: Map<string, number>,
+  selpickOrderNumbers: Iterable<string>,
+) {
+  for (const rawValue of Array.from(selpickOrderNumbers)) {
+    const selpickOrderNumber = normalizeSelpickOrderNumber(rawValue);
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    registry.add(selpickOrderNumber);
+    const parsed = parseSelpickOrderNumber(selpickOrderNumber);
+    if (!parsed) {
+      continue;
+    }
+
+    counters.set(
+      parsed.platformKey,
+      Math.max(counters.get(parsed.platformKey) ?? 0, parsed.sequence),
+    );
+  }
+}
+
+function resolveSelpickOrderDateKeyOrThrow(row: Pick<CoupangShipmentWorksheetRow, "sourceKey" | "orderDateKey">) {
+  const orderDateKey = (typeof row.orderDateKey === "string" ? row.orderDateKey.trim() : "")
+    .replace(/[^0-9]/g, "");
+  if (/^\d{8}$/.test(orderDateKey)) {
+    return orderDateKey;
+  }
+
+  throw new Error(
+    `셀픽주문번호를 발급할 주문일자를 확인하지 못했습니다. sourceKey=${row.sourceKey}`,
+  );
+}
+
+async function ensureSelpickIntegrityLegacy(
+  store: {
+    loadLegacy(): Promise<PersistedWorksheetStore>;
+    persistLegacy(nextData: PersistedWorksheetStore): Promise<void>;
+    setCache?(nextData: PersistedWorksheetStore): void;
+  },
+) {
+  const data = await store.loadLegacy();
+  const registry = new Set(
+    data.selpickRegistry
+      .map((value) => normalizeSelpickOrderNumber(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const counters = new Map(
+    Object.entries(data.selpickCounters).map(([platformKey, sequence]) => [
+      platformKey.toUpperCase(),
+      Math.max(0, Math.trunc(sequence)),
+    ]),
+  );
+  const entries: Array<SelpickIntegrityEntry & { row: CoupangShipmentWorksheetRow | CoupangShipmentArchiveRow }> = [];
+
+  for (const entry of Object.values(data.stores)) {
+    for (const row of entry.items) {
+      entries.push({
+        location: "active",
+        id: row.id,
+        storeId: row.storeId,
+        sourceKey: row.sourceKey,
+        selpickOrderNumber: row.selpickOrderNumber,
+        orderDateKey: row.orderDateKey,
+        createdAt: row.createdAt,
+        sortOrder: 0,
+        exportedAt: row.exportedAt,
+        invoiceAppliedAt: row.invoiceAppliedAt,
+        invoiceNumber: row.invoiceNumber,
+        invoiceTransmissionStatus: row.invoiceTransmissionStatus,
+        row,
+      });
+    }
+  }
+
+  for (const rows of Object.values(data.archives)) {
+    for (const row of rows) {
+      entries.push({
+        location: "archive",
+        id: row.id,
+        storeId: row.storeId,
+        sourceKey: row.sourceKey,
+        selpickOrderNumber: row.selpickOrderNumber,
+        orderDateKey: row.orderDateKey,
+        createdAt: row.createdAt,
+        sortOrder: 0,
+        exportedAt: row.exportedAt,
+        invoiceAppliedAt: row.invoiceAppliedAt,
+        invoiceNumber: row.invoiceNumber,
+        invoiceTransmissionStatus: row.invoiceTransmissionStatus,
+        row,
+      });
+    }
+  }
+
+  const entriesBySelpick = new Map<string, Array<typeof entries[number]>>();
+  for (const entry of entries) {
+    const selpickOrderNumber = normalizeSelpickOrderNumber(entry.selpickOrderNumber);
+    if (!selpickOrderNumber) {
+      continue;
+    }
+
+    const group = entriesBySelpick.get(selpickOrderNumber);
+    if (group) {
+      group.push(entry);
+      continue;
+    }
+
+    entriesBySelpick.set(selpickOrderNumber, [entry]);
+  }
+
+  let changed = false;
+  const blockedEntries: SelpickIntegrityEntry[] = [];
+  registerSelpickOrderNumbersLegacy(
+    registry,
+    counters,
+    entries.map((entry) => entry.selpickOrderNumber),
+  );
+
+  const reserveLegacySelpickOrderNumber = (platformKey: string, orderDateKey: string) => {
+    const normalizedPlatformKey = platformKey.toUpperCase();
+    let nextSequence = (counters.get(normalizedPlatformKey) ?? 0) + 1;
+
+    while (true) {
+      const candidate = formatSelpickOrderNumber(orderDateKey, normalizedPlatformKey, nextSequence);
+      if (!registry.has(candidate)) {
+        registry.add(candidate);
+        counters.set(normalizedPlatformKey, nextSequence);
+        return candidate;
+      }
+
+      nextSequence += 1;
+    }
+  };
+
+  for (const group of Array.from(entriesBySelpick.values())) {
+    if (group.length <= 1) {
+      continue;
+    }
+
+    const sorted = [...group].sort(compareSelpickIntegrityEntries);
+    for (const entry of sorted.slice(1)) {
+      const parsed = parseSelpickOrderNumber(entry.selpickOrderNumber);
+      if (!parsed || !canAutoRepairSelpickIntegrityEntry(entry)) {
+        blockedEntries.push(entry);
+        continue;
+      }
+
+      const repairedSelpickOrderNumber = reserveLegacySelpickOrderNumber(
+        parsed.platformKey,
+        entry.orderDateKey,
+      );
+      entry.row.selpickOrderNumber = repairedSelpickOrderNumber;
+      entry.row.updatedAt = new Date().toISOString();
+      entry.selpickOrderNumber = repairedSelpickOrderNumber;
+      changed = true;
+    }
+  }
+
+  if (blockedEntries.length) {
+    throw buildSelpickIntegrityBlockedError(blockedEntries);
+  }
+
+  for (const entry of entries) {
+    const normalizedSelpickOrderNumber = normalizeSelpickOrderNumber(entry.row.selpickOrderNumber);
+    if (normalizedSelpickOrderNumber) {
+      registry.add(normalizedSelpickOrderNumber);
+    }
+
+    const parsed = parseSelpickOrderNumber(entry.row.selpickOrderNumber);
+    if (!parsed) {
+      continue;
+    }
+
+    counters.set(parsed.platformKey, Math.max(counters.get(parsed.platformKey) ?? 0, parsed.sequence));
+  }
+
+  finalizeLegacySelpickState(data, registry as Set<string>, counters);
+  if (changed) {
+    await store.persistLegacy(data);
+  } else {
+    store.setCache?.(data);
+  }
+
+  return { data, registry, counters };
 }
 
 function buildWorksheetSheetDatabaseValue(
@@ -820,6 +1529,10 @@ export class CoupangShipmentWorksheetStore {
     await this.writePromise;
   }
 
+  private setLegacyCache(nextData: PersistedWorksheetStore) {
+    this.cache = nextData;
+  }
+
   private async ensureInitialized() {
     if (this.legacyMode) {
       return;
@@ -837,44 +1550,104 @@ export class CoupangShipmentWorksheetStore {
             const database = assertWorkDataDatabaseEnabled();
             let importedStoreCount = 0;
             let importedRowCount = 0;
+            let importedArchiveRowCount = 0;
+            const registry = new Set(
+              parsed.selpickRegistry
+                .map((value) => normalizeSelpickOrderNumber(value))
+                .filter((value): value is string => Boolean(value)),
+            );
+            const counters = new Map(
+              Object.entries(parsed.selpickCounters).map(([platformKey, sequence]) => [
+                platformKey.toUpperCase(),
+                Math.max(0, Math.trunc(Number(sequence ?? 0))),
+              ]),
+            );
+            const storeIds = Array.from(
+              new Set([...Object.keys(parsed.stores), ...Object.keys(parsed.archives)]),
+            );
 
-            for (const [storeId, entry] of Object.entries(parsed.stores)) {
-              const sheetId = `sheet:${storeId}`;
-              const importedAt = toDateOrNull(entry.updatedAt) ?? new Date();
+            for (const storeId of storeIds) {
+              const entry = parsed.stores[storeId]
+                ? normalizeStoreEntry(parsed.stores[storeId])
+                : null;
+              const archiveItems = (parsed.archives[storeId] ?? []).map(normalizeArchiveRow);
+              const importedAt =
+                toDateOrNull(entry?.updatedAt ?? archiveItems[0]?.archivedAt ?? null) ?? new Date();
               await database.transaction(async (tx) => {
                 await acquireWorksheetStoreTransactionLock(tx, storeId);
-                await upsertWorksheetSheetRecord(
-                  tx,
-                  {
+                if (entry) {
+                  const sheetId = `sheet:${storeId}`;
+                  await upsertWorksheetSheetRecord(
+                    tx,
+                    {
+                      sheetId,
+                      storeId,
+                      collectedAt: entry.collectedAt,
+                      source: entry.source,
+                      message: entry.message,
+                      syncState: entry.syncState,
+                      syncSummary: entry.syncSummary,
+                    },
+                    importedAt,
+                  );
+
+                  await tx
+                    .delete(coupangShipmentRows)
+                    .where(eq(coupangShipmentRows.storeId, storeId));
+
+                  await insertWorksheetRowsInChunks(tx, {
                     sheetId,
                     storeId,
-                    collectedAt: entry.collectedAt,
-                    source: entry.source,
-                    message: entry.message,
-                    syncState: entry.syncState,
-                    syncSummary: entry.syncSummary,
-                  },
-                  importedAt,
-                );
+                    items: entry.items,
+                  });
+                }
 
                 await tx
-                  .delete(coupangShipmentRows)
-                  .where(eq(coupangShipmentRows.storeId, storeId));
+                  .delete(coupangShipmentArchiveRows)
+                  .where(eq(coupangShipmentArchiveRows.storeId, storeId));
 
-                await insertWorksheetRowsInChunks(tx, {
-                  sheetId,
-                  storeId,
-                  items: entry.items,
-                });
+                if (archiveItems.length) {
+                  await tx.insert(coupangShipmentArchiveRows).values(
+                    archiveItems.map((item, index) =>
+                      buildArchiveDatabaseRowValue(item, index, storeId),
+                    ),
+                  );
+                }
               });
 
-              importedStoreCount += 1;
-              importedRowCount += entry.items.length;
+              if (entry) {
+                importedStoreCount += 1;
+                importedRowCount += entry.items.length;
+                registerSelpickOrderNumbersLegacy(
+                  registry,
+                  counters,
+                  entry.items.map((row) => row.selpickOrderNumber),
+                );
+              }
+
+              if (archiveItems.length) {
+                importedArchiveRowCount += archiveItems.length;
+                registerSelpickOrderNumbersLegacy(
+                  registry,
+                  counters,
+                  archiveItems.map((row) => row.selpickOrderNumber),
+                );
+              }
             }
+
+            await database.transaction(async (tx) => {
+              await insertSelpickRegistryEntriesTx(tx, Array.from(registry));
+              for (const [platformKey, lastSequence] of Array.from(counters.entries())) {
+                await syncSelpickCounterMaxTx(tx, platformKey, lastSequence);
+              }
+            });
 
             return {
               importedStoreCount,
               importedRowCount,
+              importedArchiveRowCount,
+              importedSelpickRegistryCount: registry.size,
+              importedSelpickCounterCount: counters.size,
             };
           },
           (result) => result,
@@ -925,6 +1698,137 @@ export class CoupangShipmentWorksheetStore {
     });
   }
 
+  async ensureSelpickIntegrity(_input: EnsureCoupangShipmentWorksheetSelpickIntegrityInput) {
+    if (this.legacyMode) {
+      await ensureSelpickIntegrityLegacy({
+        loadLegacy: () => this.loadLegacy(),
+        persistLegacy: (nextData) => this.persistLegacy(nextData),
+        setCache: (nextData) => this.setLegacyCache(nextData),
+      });
+      return;
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    await database.transaction(async (tx) => {
+      await ensureSelpickIntegrityDbTx(tx);
+    });
+  }
+
+  async materializeSelpickOrderNumbers(
+    input: MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
+  ) {
+    const normalizedItems = input.items.map(normalizeWorksheetRow);
+    assertUniqueSelpickOrderNumbers(
+      normalizedItems,
+      "셀픽주문번호 중복이 있어 번호 발급을 진행할 수 없습니다.",
+    );
+
+    if (!normalizedItems.length) {
+      return normalizedItems;
+    }
+
+    if (this.legacyMode) {
+      const { data, registry, counters } = await ensureSelpickIntegrityLegacy({
+        loadLegacy: () => this.loadLegacy(),
+        persistLegacy: (nextData) => this.persistLegacy(nextData),
+        setCache: (nextData) => this.setLegacyCache(nextData),
+      });
+      const platformKey = input.platformKey.trim().toUpperCase();
+      let metadataChanged = false;
+      const materializedItems = normalizedItems.map((row) => {
+        const existingSelpickOrderNumber = normalizeSelpickOrderNumber(row.selpickOrderNumber);
+        if (existingSelpickOrderNumber) {
+          const parsed = parseSelpickOrderNumber(existingSelpickOrderNumber);
+          const previousRegistrySize = registry.size;
+          const previousCounter = parsed ? counters.get(parsed.platformKey) ?? 0 : null;
+          registerSelpickOrderNumbersLegacy(registry, counters, [existingSelpickOrderNumber]);
+          if (registry.size !== previousRegistrySize) {
+            metadataChanged = true;
+          }
+          if (
+            parsed &&
+            (counters.get(parsed.platformKey) ?? 0) !== (previousCounter ?? 0)
+          ) {
+            metadataChanged = true;
+          }
+          return existingSelpickOrderNumber === row.selpickOrderNumber
+            ? row
+            : {
+                ...row,
+                selpickOrderNumber: existingSelpickOrderNumber,
+              };
+        }
+
+        const orderDateKey = resolveSelpickOrderDateKeyOrThrow(row);
+        let nextSequence = (counters.get(platformKey) ?? 0) + 1;
+        let nextSelpickOrderNumber = formatSelpickOrderNumber(orderDateKey, platformKey, nextSequence);
+        while (registry.has(nextSelpickOrderNumber)) {
+          nextSequence += 1;
+          nextSelpickOrderNumber = formatSelpickOrderNumber(orderDateKey, platformKey, nextSequence);
+        }
+
+        registry.add(nextSelpickOrderNumber);
+        counters.set(platformKey, nextSequence);
+        metadataChanged = true;
+        return {
+          ...row,
+          selpickOrderNumber: nextSelpickOrderNumber,
+        };
+      });
+
+      finalizeLegacySelpickState(data, registry, counters);
+      if (metadataChanged) {
+        await this.persistLegacy(data);
+      } else {
+        this.setLegacyCache(data);
+      }
+
+      assertUniqueSelpickOrderNumbers(
+        materializedItems,
+        "셀픽주문번호 중복이 있어 번호 발급 결과를 확정할 수 없습니다.",
+      );
+      return materializedItems;
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const platformKey = input.platformKey.trim().toUpperCase();
+    return database.transaction(async (tx) => {
+      await ensureSelpickIntegrityDbTx(tx);
+      await acquireSelpickPlatformTransactionLock(tx, platformKey);
+      await syncSelpickStateForRowsTx(tx, normalizedItems);
+
+      const materializedItems: CoupangShipmentWorksheetRow[] = [];
+      for (const row of normalizedItems) {
+        const existingSelpickOrderNumber = normalizeSelpickOrderNumber(row.selpickOrderNumber);
+        if (existingSelpickOrderNumber) {
+          materializedItems.push({
+            ...row,
+            selpickOrderNumber: existingSelpickOrderNumber,
+          });
+          continue;
+        }
+
+        const orderDateKey = resolveSelpickOrderDateKeyOrThrow(row);
+        const nextSelpickOrderNumber = await reserveNextSelpickOrderNumberTx(tx, {
+          platformKey,
+          orderDateKey,
+        });
+        materializedItems.push({
+          ...row,
+          selpickOrderNumber: nextSelpickOrderNumber,
+        });
+      }
+
+      assertUniqueSelpickOrderNumbers(
+        materializedItems,
+        "셀픽주문번호 중복이 있어 번호 발급 결과를 확정할 수 없습니다.",
+      );
+      return materializedItems;
+    });
+  }
+
   async setStoreSheet(input: {
     storeId: string;
     items: CoupangShipmentWorksheetRow[];
@@ -943,17 +1847,41 @@ export class CoupangShipmentWorksheetStore {
       syncSummary: normalizeSyncSummary(input.syncSummary),
       updatedAt: new Date().toISOString(),
     } satisfies PersistedWorksheetStoreEntry;
+    assertUniqueSelpickOrderNumbers(
+      nextEntry.items,
+      "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
+    );
 
     if (this.legacyMode) {
       const data = await this.loadLegacy();
-      await this.persistLegacy({
+      const nextData = {
         version: 2,
         stores: {
           ...data.stores,
           [input.storeId]: nextEntry,
         },
         archives: data.archives,
-      });
+        selpickRegistry: [...data.selpickRegistry],
+        selpickCounters: { ...data.selpickCounters },
+      } satisfies PersistedWorksheetStore;
+      const registry = new Set(
+        nextData.selpickRegistry
+          .map((value) => normalizeSelpickOrderNumber(value))
+          .filter((value): value is string => Boolean(value)),
+      );
+      const counters = new Map(
+        Object.entries(nextData.selpickCounters).map(([platformKey, sequence]) => [
+          platformKey.toUpperCase(),
+          Math.max(0, Math.trunc(sequence)),
+        ]),
+      );
+      registerSelpickOrderNumbersLegacy(
+        registry,
+        counters,
+        nextEntry.items.map((row) => row.selpickOrderNumber),
+      );
+      finalizeLegacySelpickState(nextData, registry, counters);
+      await this.persistLegacy(nextData);
 
       return normalizeStoreEntry(nextEntry);
     }
@@ -983,6 +1911,7 @@ export class CoupangShipmentWorksheetStore {
         .delete(coupangShipmentRows)
         .where(eq(coupangShipmentRows.storeId, input.storeId));
 
+      await syncSelpickStateForRowsTx(tx, nextEntry.items);
       await insertWorksheetRowsInChunks(tx, {
         sheetId,
         storeId: input.storeId,
@@ -1014,6 +1943,10 @@ export class CoupangShipmentWorksheetStore {
       syncSummary: normalizeSyncSummary(input.syncSummary),
       updatedAt: new Date().toISOString(),
     } satisfies PersistedWorksheetStoreEntry;
+    assertUniqueSelpickOrderNumbers(
+      nextEntry.items,
+      "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
+    );
 
     if (this.legacyMode) {
       const data = await this.loadLegacy();
@@ -1036,15 +1969,39 @@ export class CoupangShipmentWorksheetStore {
         syncSummary: nextEntry.syncSummary,
         updatedAt: nextEntry.updatedAt,
       } satisfies PersistedWorksheetStoreEntry;
+      assertUniqueSelpickOrderNumbers(
+        persistedEntry.items,
+        "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
+      );
 
-      await this.persistLegacy({
+      const nextData = {
         version: 2,
         stores: {
           ...data.stores,
           [input.storeId]: persistedEntry,
         },
         archives: data.archives,
-      });
+        selpickRegistry: [...data.selpickRegistry],
+        selpickCounters: { ...data.selpickCounters },
+      } satisfies PersistedWorksheetStore;
+      const registry = new Set(
+        nextData.selpickRegistry
+          .map((value) => normalizeSelpickOrderNumber(value))
+          .filter((value): value is string => Boolean(value)),
+      );
+      const counters = new Map(
+        Object.entries(nextData.selpickCounters).map(([platformKey, sequence]) => [
+          platformKey.toUpperCase(),
+          Math.max(0, Math.trunc(sequence)),
+        ]),
+      );
+      registerSelpickOrderNumbersLegacy(
+        registry,
+        counters,
+        persistedEntry.items.map((row) => row.selpickOrderNumber),
+      );
+      finalizeLegacySelpickState(nextData, registry, counters);
+      await this.persistLegacy(nextData);
 
       return normalizeStoreEntry(persistedEntry);
     }
@@ -1053,6 +2010,17 @@ export class CoupangShipmentWorksheetStore {
     const database = assertWorkDataDatabaseEnabled();
     const timestamp = new Date();
     const sheetId = `sheet:${input.storeId}`;
+    const currentSheet = await this.getStoreSheet(input.storeId);
+    const mergedBySourceKey = new Map(
+      currentSheet.items.map((row) => [row.sourceKey, row] as const),
+    );
+    for (const row of nextEntry.items) {
+      mergedBySourceKey.set(row.sourceKey, row);
+    }
+    assertUniqueSelpickOrderNumbers(
+      Array.from(mergedBySourceKey.values()),
+      "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
+    );
 
     await database.transaction(async (tx) => {
       await acquireWorksheetStoreTransactionLock(tx, input.storeId);
@@ -1085,6 +2053,7 @@ export class CoupangShipmentWorksheetStore {
         const nextSortOrder =
           existingRows.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
 
+        await syncSelpickStateForRowsTx(tx, nextEntry.items);
         await upsertWorksheetRowsInChunks(tx, {
           sheetId,
           storeId: input.storeId,
@@ -1185,6 +2154,8 @@ export class CoupangShipmentWorksheetStore {
               right.archivedAt.localeCompare(left.archivedAt),
             ),
           },
+          selpickRegistry: [...data.selpickRegistry],
+          selpickCounters: { ...data.selpickCounters },
         });
       }
 
@@ -1264,6 +2235,10 @@ export class CoupangShipmentWorksheetStore {
 
     if (this.legacyMode) {
       const current = await this.getStoreSheet(input.storeId);
+      assertUniqueSelpickOrderNumbers(
+        current.items,
+        "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 워크시트 수정을 진행할 수 없습니다.",
+      );
       const rows = [...current.items];
       const rowIndexBySourceKey = new Map(rows.map((row, index) => [row.sourceKey, index] as const));
       const rowIndexBySelpickOrderNumber = new Map(
@@ -1362,6 +2337,11 @@ export class CoupangShipmentWorksheetStore {
 
     await this.ensureInitialized();
     const database = assertWorkDataDatabaseEnabled();
+    const currentSheet = await this.getStoreSheet(input.storeId);
+    assertUniqueSelpickOrderNumbers(
+      currentSheet.items,
+      "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 워크시트 수정을 진행할 수 없습니다.",
+    );
     const sourceKeys = Array.from(
       new Set(
         input.items

@@ -1,4 +1,7 @@
 import type {
+  CoupangShipmentIssueFilter,
+  CoupangShipmentWorksheetPipelineCardFilter,
+  CoupangShipmentWorksheetPriorityCardFilter,
   CoupangStoreSummary,
   CoupangShipmentWorksheetColumnSource,
   CoupangShipmentWorksheetColumnSourceKey,
@@ -31,6 +34,9 @@ export type FilterState = {
   maxPerPage: number;
   scope: CoupangShipmentWorksheetViewScope;
   decisionStatus: FulfillmentDecisionFilterValue;
+  priorityCard: CoupangShipmentWorksheetPriorityCardFilter;
+  pipelineCard: CoupangShipmentWorksheetPipelineCardFilter;
+  issueFilter: CoupangShipmentIssueFilter;
   invoiceStatusCard: InvoiceStatusCardKey;
   orderStatusCard: OrderStatusCardKey;
   outputStatusCard: OutputStatusCardKey;
