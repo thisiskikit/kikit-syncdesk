@@ -236,10 +236,10 @@ function buildSyntheticOrderRawFields(
     ["order.receiverName", row.receiverBaseName ?? row.receiverName],
     ["order.receiverSafeNumber", row.contact],
     ["order.receiverAddress", row.receiverAddress],
-    ["order.productName", row.productName],
+    ["order.productName", row.exposedProductName ?? row.productName],
     ["order.optionName", row.optionName],
     ["order.sellerProductId", row.sellerProductId],
-    ["order.sellerProductName", row.productName],
+    ["order.sellerProductName", null],
     ["order.vendorItemId", row.vendorItemId],
     ["order.externalVendorSku", row.sellerProductCode],
     ["order.quantity", row.quantity],
@@ -279,8 +279,8 @@ function buildSyntheticOrderRawFields(
     ["detailItem.shipmentBoxId", row.shipmentBoxId],
     ["detailItem.vendorItemId", row.vendorItemId],
     ["detailItem.sellerProductId", row.sellerProductId],
-    ["detailItem.productName", row.productName],
-    ["detailItem.sellerProductName", row.productName],
+    ["detailItem.productName", row.exposedProductName ?? row.productName],
+    ["detailItem.sellerProductName", null],
     ["detailItem.optionName", row.optionName],
     ["detailItem.quantity", row.quantity],
   ];
@@ -291,8 +291,8 @@ function buildSyntheticOrderRawFields(
 
   const productAssignments: Array<[string, unknown]> = [
     ["product.sellerProductId", row.sellerProductId],
-    ["product.sellerProductName", row.productName],
-    ["product.displayProductName", row.coupangDisplayProductName ?? row.productName],
+    ["product.sellerProductName", null],
+    ["product.displayProductName", row.coupangDisplayProductName ?? row.exposedProductName ?? row.productName],
     ["product.deliveryInfo.deliveryCompanyCode", row.deliveryCompanyCode],
     ["product.deliveryInfo.pccNeeded", row.isOverseas],
   ];
@@ -303,7 +303,7 @@ function buildSyntheticOrderRawFields(
 
   const productItemAssignments: Array<[string, unknown]> = [
     ["productItem.vendorItemId", row.vendorItemId],
-    ["productItem.itemName", row.optionName ?? row.productName],
+    ["productItem.itemName", row.optionName ?? null],
     ["productItem.externalVendorSku", row.sellerProductCode],
     ["productItem.pccNeeded", row.isOverseas],
   ];
@@ -364,6 +364,76 @@ function normalizeOptionName(
   }
 
   return normalizedOptionName;
+}
+
+function isWorksheetPlaceholderProductName(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+  return !normalized || normalized === "주문 상품";
+}
+
+function stripOptionSuffixFromProductName(
+  productName: string | null | undefined,
+  optionName: string | null | undefined,
+) {
+  const normalizedProductName = normalizeText(productName);
+  const normalizedOptionName = normalizeText(optionName);
+
+  if (!normalizedProductName || !normalizedOptionName) {
+    return normalizedProductName;
+  }
+
+  const separators = [" / ", ", ", " - ", " | ", "/", ",", "-", "|"];
+
+  for (const separator of separators) {
+    const suffix = `${separator}${normalizedOptionName}`;
+    if (!normalizedProductName.endsWith(suffix)) {
+      continue;
+    }
+
+    const stripped = normalizeText(
+      normalizedProductName.slice(0, normalizedProductName.length - suffix.length),
+    );
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalizedProductName;
+}
+
+function collectProductNameOptionHints(input: {
+  rawFields: CoupangShipmentWorksheetRawFields;
+  currentRow?: Pick<CoupangShipmentWorksheetRow, "optionName">;
+}) {
+  return Array.from(
+    new Set(
+      [
+        readRawString(input.rawFields, "productItem.itemName"),
+        readRawString(input.rawFields, "detailItem.optionName"),
+        readRawString(input.rawFields, "order.optionName"),
+        normalizeText(input.currentRow?.optionName),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function normalizeProductNameCandidate(
+  productName: string | null | undefined,
+  optionHints: readonly string[],
+) {
+  const normalizedProductName = normalizeText(productName);
+  if (isWorksheetPlaceholderProductName(normalizedProductName)) {
+    return null;
+  }
+
+  for (const optionHint of optionHints) {
+    const stripped = stripOptionSuffixFromProductName(normalizedProductName, optionHint);
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalizedProductName;
 }
 
 function humanizeRawFieldKey(key: string) {
@@ -559,15 +629,32 @@ export function buildWorksheetRawFieldCatalog(
 
 export function resolveWorksheetProductNameFromRawFields(input: {
   rawFields: CoupangShipmentWorksheetRawFields;
-  currentRow?: Pick<CoupangShipmentWorksheetRow, "productName">;
+  currentRow?: Pick<CoupangShipmentWorksheetRow, "productName" | "optionName">;
 }) {
+  const optionHints = collectProductNameOptionHints(input);
+
   return (
-    readRawString(input.rawFields, "product.sellerProductName") ??
-    readRawString(input.rawFields, "order.sellerProductName") ??
-    readRawString(input.rawFields, "detailItem.sellerProductName") ??
-    readRawString(input.rawFields, "detailItem.productName") ??
-    readRawString(input.rawFields, "order.productName") ??
-    normalizeText(input.currentRow?.productName) ??
+    normalizeProductNameCandidate(
+      readRawString(input.rawFields, "product.sellerProductName"),
+      optionHints,
+    ) ??
+    normalizeProductNameCandidate(
+      readRawString(input.rawFields, "order.sellerProductName"),
+      optionHints,
+    ) ??
+    normalizeProductNameCandidate(
+      readRawString(input.rawFields, "detailItem.sellerProductName"),
+      optionHints,
+    ) ??
+    normalizeProductNameCandidate(input.currentRow?.productName, optionHints) ??
+    normalizeProductNameCandidate(
+      readRawString(input.rawFields, "detailItem.productName"),
+      optionHints,
+    ) ??
+    normalizeProductNameCandidate(
+      readRawString(input.rawFields, "order.productName"),
+      optionHints,
+    ) ??
     "주문 상품"
   );
 }
@@ -584,6 +671,10 @@ export function resolveWorksheetOptionNameFromRawFields(input: {
     ) ??
     normalizeOptionName(
       readRawString(input.rawFields, "detailItem.optionName"),
+      input.productName,
+    ) ??
+    normalizeOptionName(
+      readRawString(input.rawFields, "order.optionName"),
       input.productName,
     ) ??
     normalizeOptionName(input.currentRow?.optionName, input.productName) ??

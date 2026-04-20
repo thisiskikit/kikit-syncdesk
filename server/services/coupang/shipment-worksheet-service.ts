@@ -281,6 +281,36 @@ function normalizeWorksheetOptionName(
   return normalizedOptionName;
 }
 
+function stripWorksheetOptionSuffixFromProductName(
+  productName: string | null | undefined,
+  optionName: string | null | undefined,
+) {
+  const normalizedProductName = normalizeWhitespace(productName);
+  const normalizedOptionName = normalizeWhitespace(optionName);
+
+  if (!normalizedProductName || !normalizedOptionName) {
+    return normalizedProductName;
+  }
+
+  const separators = [" / ", ", ", " - ", " | ", "/", ",", "-", "|"];
+
+  for (const separator of separators) {
+    const suffix = `${separator}${normalizedOptionName}`;
+    if (!normalizedProductName.endsWith(suffix)) {
+      continue;
+    }
+
+    const stripped = normalizeWhitespace(
+      normalizedProductName.slice(0, normalizedProductName.length - suffix.length),
+    );
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalizedProductName;
+}
+
 function hasMixedWorksheetOptionName(
   optionName: string | null | undefined,
   productName: string | null | undefined,
@@ -298,6 +328,26 @@ function hasMixedWorksheetOptionName(
 
   const normalizedExposedProductName = normalizeWhitespace(exposedProductName);
   return Boolean(normalizedExposedProductName && normalizedOptionName === normalizedExposedProductName);
+}
+
+function hasMixedWorksheetProductName(
+  productName: string | null | undefined,
+  optionName: string | null | undefined,
+) {
+  const normalizedProductName = normalizeWhitespace(productName);
+  if (!normalizedProductName) {
+    return false;
+  }
+
+  const normalizedOptionName = normalizeWorksheetOptionName(optionName, normalizedProductName);
+  if (!normalizedOptionName) {
+    return false;
+  }
+
+  return (
+    stripWorksheetOptionSuffixFromProductName(normalizedProductName, normalizedOptionName) !==
+    normalizedProductName
+  );
 }
 
 function resolveStoredWorksheetOptionName(
@@ -2743,6 +2793,10 @@ function shouldHydrateProductRow(
     return true;
   }
 
+  if (hasMixedWorksheetProductName(currentRow.productName, currentRow.optionName)) {
+    return true;
+  }
+
   return !(normalizeWhitespace(currentRow.productName) && normalizeWhitespace(currentRow.optionName));
 }
 
@@ -2757,10 +2811,12 @@ function shouldHydrateWorksheetOptionDuringCollect(
     return true;
   }
 
-  return hasMixedWorksheetOptionName(
-    currentRow.optionName,
-    currentRow.productName,
-    currentRow.exposedProductName,
+  return (
+    hasMixedWorksheetOptionName(
+      currentRow.optionName,
+      currentRow.productName,
+      currentRow.exposedProductName,
+    ) || hasMixedWorksheetProductName(currentRow.productName, currentRow.optionName)
   );
 }
 
@@ -3452,10 +3508,10 @@ function buildOrderRowFromWorksheetRow(row: CoupangShipmentWorksheetRow): Coupan
     receiverSafeNumber: row.contact,
     receiverAddress: row.receiverAddress,
     receiverPostCode: null,
-    productName: row.productName,
+    productName: row.exposedProductName ?? buildExposedProductName(row.productName, row.optionName),
     optionName: row.optionName,
     sellerProductId: row.sellerProductId,
-    sellerProductName: row.productName,
+    sellerProductName: null,
     vendorItemId: row.vendorItemId,
     externalVendorSku: row.sellerProductCode,
     quantity: row.quantity,

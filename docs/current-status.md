@@ -132,11 +132,12 @@
 - 유일성 기준은 active worksheet만이 아니라 `쿠팡 출고 row + archive 전체 이력`이고, 보관함으로 이동한 뒤 다시 수집해도 과거 번호를 재사용하지 않습니다.
 - suffix는 `0001`처럼 4자리부터 시작하지만, 이제 `10000` 이상도 그대로 허용합니다.
 - 기존 중복이 발견되면 `미전송/미출력` 건만 자동 재번호하고, 이미 송장 반영·출력 등 운영 사용 이력이 있는 중복은 자동 변경하지 않고 write 계열 작업을 차단합니다.
-- `옵션명` 컬럼은 collect 직후부터 `실제 옵션값` 기준으로 맞추고, 주문 목록의 노출 옵션 문자열은 `옵션명`에 다시 쓰지 않습니다.
+- `상품명(productName)` 컬럼은 실제 상품명 우선으로 고정합니다. 우선순위는 `product.sellerProductName -> order.sellerProductName -> detailItem.sellerProductName -> 기존 정상 productName -> detail/order productName(옵션 suffix 제거)`입니다.
+- 주문 목록의 `productName`처럼 옵션이 합쳐진 노출 문자열은 더 이상 `상품명`에 그대로 재사용하지 않고, fallback이 필요할 때도 옵션 suffix를 분리한 값으로만 씁니다.
+- `옵션명(optionName)` 컬럼은 collect 직후부터 `실제 옵션값` 기준으로 맞추고, `productItem.itemName -> detailItem.optionName -> order.optionName -> 기존 stored optionName -> null` 우선순위로만 채웁니다.
 - 실제 옵션값을 collect 시점에 못 가져오면 기존 정상 `optionName`은 유지하고, 기존 값도 없으면 빈값으로 둡니다.
-- `노출상품명(exposedProductName)`은 계속 표시용 문자열이며, `옵션명`을 대신하지 않습니다.
-- 같은 규칙은 이제 `rawFields` 기반 파생으로 고정돼, `productItem.itemName -> detailItem.optionName -> 기존 stored optionName -> null` 우선순위로 `optionName`을 만듭니다.
-- `productName`, `coupangDisplayProductName`, `deliveryCompanyCode`, `invoiceNumber`, `isOverseas`도 같은 raw precedence를 따라 정규화 row로 다시 파생됩니다.
+- `노출상품명(exposedProductName)`은 계속 표시용 문자열이며, `상품명`이나 `옵션명`을 대신하지 않습니다.
+- synthetic `rawFields`와 refresh fallback도 이 규칙을 따르도록 맞춰, worksheet의 `상품명`을 다시 `sellerProductName`처럼 재주입해 값이 뒤틀리는 경로를 막았습니다.
 - 구형 CS summary 문자열만 남아 있는 row도 `shipment_stop_requested`, `shipment_stop_resolved` 같은 이슈 축으로 다시 정규화되며, handled 계열 legacy 표현은 fallback summary 파서로 흡수합니다.
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.

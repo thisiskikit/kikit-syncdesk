@@ -125,7 +125,7 @@ function buildOrderRow(input: {
   status: string;
   productName: string;
   optionName?: string | null;
-  sellerProductName?: string;
+  sellerProductName?: string | null;
   availableActions: ("markPreparing" | "cancelOrderItem" | "uploadInvoice")[];
   orderedAt?: string;
   paidAt?: string;
@@ -151,7 +151,8 @@ function buildOrderRow(input: {
     productName: input.productName,
     optionName: input.optionName ?? "Default",
     sellerProductId: `P-${input.vendorItemId}`,
-    sellerProductName: input.sellerProductName ?? input.productName,
+    sellerProductName:
+      input.sellerProductName !== undefined ? input.sellerProductName : input.productName,
     vendorItemId: input.vendorItemId,
     externalVendorSku: `SKU-${input.vendorItemId}`,
     quantity: input.quantity ?? 1,
@@ -1305,7 +1306,7 @@ describe("coupang shipment worksheet collection", () => {
     });
   });
 
-  it("leaves optionName empty instead of reusing exposed option text when collect-time option hydrate fails", async () => {
+  it("keeps the seller product name when collect-time product hydrate fails and does not mix exposed option text into productName", async () => {
     listOrdersMock.mockResolvedValue({
       items: [
         buildOrderRow({
@@ -1332,11 +1333,46 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.productName).toBe("Displayed Product, Red");
+    expect(result.items[0]?.productName).toBe("Deleted But Ordered Product");
     expect(result.items[0]?.optionName).toBe("Red");
     expect(getOrderDetailMock).toHaveBeenCalledTimes(1);
     expect(getProductDetailMock).toHaveBeenCalledTimes(1);
     expect(result.syncSummary?.pendingPhases).toContain("product_detail_hydration");
+  });
+
+  it("splits exposed product text into productName when no seller product name is available", async () => {
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "601:V-601",
+          shipmentBoxId: "601",
+          orderId: "O-601",
+          vendorItemId: "V-601",
+          status: "INSTRUCT",
+          productName: "Displayed Product, Red",
+          sellerProductName: null,
+          optionName: "Red",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      productName: "Displayed Product",
+      optionName: "Red",
+      exposedProductName: "Displayed Product, Red",
+    });
   });
 
   it("repairs mixed worksheet option values during collect when registered option data is available", async () => {
@@ -1409,6 +1445,86 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      productName: "Registered Product",
+      optionName: "Registered Option",
+      exposedProductName: "Registered Product, Registered Option",
+    });
+  });
+
+  it("rehydrates product detail during collect when the stored productName still contains option text", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [
+        buildWorksheetRow({
+          shipmentBoxId: "611",
+          orderId: "O-611",
+          vendorItemId: "V-611",
+          status: "INSTRUCT",
+          productName: "Displayed Product, Red",
+          optionName: "Red",
+          lastProductHydratedAt: "2026-03-26T10:00:00.000Z",
+        }),
+      ],
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-25",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-03-26T10:00:00.000Z",
+    });
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "611:V-611",
+          shipmentBoxId: "611",
+          orderId: "O-611",
+          vendorItemId: "V-611",
+          status: "INSTRUCT",
+          productName: "Displayed Product, Red",
+          sellerProductName: null,
+          optionName: "Red",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    getProductDetailMock.mockResolvedValue({
+      item: {
+        sellerProductId: "P-V-611",
+        sellerProductName: "Registered Product",
+        displayProductName: "Displayed Product",
+        deliveryInfo: {
+          pccNeeded: false,
+        },
+        items: [
+          {
+            vendorItemId: "V-611",
+            itemName: "Registered Option",
+            pccNeeded: false,
+          },
+        ],
+      },
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      status: "INSTRUCT",
+      maxPerPage: 20,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(getProductDetailMock).toHaveBeenCalledTimes(1);
     expect(result.items[0]).toMatchObject({
       productName: "Registered Product",
       optionName: "Registered Option",

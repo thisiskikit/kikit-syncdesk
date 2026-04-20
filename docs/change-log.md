@@ -616,6 +616,27 @@
   - 최근 collect/refresh 분리 이후 같은 워크시트 안에서 어떤 행은 노출 옵션 문자열, 어떤 행은 실제 옵션값이 들어가 일관성이 깨지고 있었기 때문입니다.
 - 남은 점:
   - 브라우저에서 실제 빠른 수집 직후 여러 주문 행의 옵션 컬럼이 시각적으로 일관된지까지는 아직 직접 확인하지 못했습니다.
+
+## 2026-04-20 / 출고 상품명·옵션명 컬럼 source policy 재고정
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/coupang/shipment-worksheet-raw-fields.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `상품명(productName)`은 이제 `sellerProductName` 계열을 최우선으로 쓰고, 실제 상품명이 없을 때만 `detail/order productName`에서 옵션 suffix를 분리한 fallback을 사용하도록 고정했습니다.
+  - synthetic `rawFields`가 worksheet의 `productName`을 다시 `order.sellerProductName`, `detailItem.sellerProductName`, `product.sellerProductName`으로 밀어 넣던 경로를 제거해, 한번 섞인 값이 이후 collect/refresh에서 다시 정답처럼 살아나는 문제를 막았습니다.
+  - `옵션명(optionName)` fallback도 `order.optionName`까지 포함하도록 보강하고, synthetic `productItem.itemName`이 `productName`으로 대신 채워지지 않게 조정했습니다.
+  - collect 시 `optionName`만이 아니라 `productName`에 옵션 문자열이 섞여 있는 기존 row도 상품 상세 재보정 대상으로 잡도록 바꿨습니다.
+  - 회귀 테스트를 추가해 `sellerProductName` 우선 유지, `sellerProductName` 없는 경우의 옵션 suffix 분리 fallback, 기존 혼합 `productName` row의 collect 재보정을 고정했습니다.
+- 이유:
+  - 같은 `상품명` 컬럼인데 어떤 주문은 실제 상품명, 어떤 주문은 노출 문자열, 어떤 주문은 `상품명 + 옵션명` 합쳐진 값이 들어가 운영 기준이 흔들리고 있었기 때문입니다.
+- 남은 점:
+  - 실제 브라우저 화면에서 여러 스토어의 기존 누적 row가 새 source policy로 얼마나 빠르게 교정되는지는 아직 직접 수동 확인하지 못했습니다.
 - 검증:
   - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
   - `npm run check`
