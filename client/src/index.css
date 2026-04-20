@@ -659,12 +659,23 @@ textarea {
   gap: 0.9rem;
 }
 
+.shipment-hub-quick-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
 .shipment-hub-board-intro {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-start;
   flex-wrap: wrap;
+}
+
+.shipment-priority-strip {
+  gap: 0.75rem;
 }
 
 .shipment-action-queue-grid {
@@ -704,6 +715,12 @@ textarea {
 .shipment-action-queue-copy {
   display: grid;
   gap: 0.35rem;
+}
+
+.shipment-action-queue-meta {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: #5c6a7d;
 }
 
 .shipment-action-queue-label {
@@ -796,6 +813,11 @@ textarea {
   background: #fbfdff;
 }
 
+.shipment-action-queue-preview-name {
+  color: #152033;
+  line-height: 1.4;
+}
+
 .shipment-action-queue-preview-meta,
 .shipment-action-queue-empty-note {
   font-size: 0.82rem;
@@ -859,9 +881,36 @@ textarea {
   background: #fbfdff;
 }
 
+.shipment-hub-side-panel-hero-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #152033;
+}
+
 .shipment-hub-side-panel-section {
   display: grid;
   gap: 0.65rem;
+}
+
+.shipment-hub-side-panel-focus-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid #e1e8f0;
+  background: #fbfdff;
+}
+
+.shipment-hub-side-panel-focus-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.shipment-hub-side-panel-focus-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #5c6a7d;
+  letter-spacing: 0.04em;
 }
 
 .shipment-hub-side-panel-section-label {
@@ -875,6 +924,20 @@ textarea {
 .shipment-hub-side-panel-info-grid {
   display: grid;
   gap: 0.6rem;
+}
+
+.shipment-hub-side-panel-note-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.shipment-hub-side-panel-note-item {
+  padding: 0.8rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid #e1e8f0;
+  background: #fbfdff;
+  color: #334155;
+  line-height: 1.55;
 }
 
 .shipment-hub-side-panel-status-item,

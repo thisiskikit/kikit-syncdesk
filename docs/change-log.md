@@ -34,6 +34,8 @@
   - 배송 축은 `payment_completed / preparing_product / shipping_instruction / in_delivery / delivered`, 이슈 축은 `shipment_stop_requested / shipment_stop_resolved / cancel / return / exchange / cs_open / none` 어휘로 고정했습니다.
   - 상단 집계는 `decisionCounts` 중심이 아니라 `priorityCounts`, `pipelineCounts`, `issueCounts`, `directDeliveryCount`, `staleSyncCount` 중심으로 확장했습니다.
   - `우선 처리 카드 / 배송 처리 / 이슈 필터`는 현재 필터 전체 기준으로 계산하고, 클릭 시 하단 원본 테이블이 같은 쿠팡 기준 상태 축으로 연동됩니다.
+  - UX 레이어도 함께 정리해, 상단 첫 화면은 `즉시 출고 / 송장 입력 / 재확인 / 보류 / 차단` 행동 큐 카드와 대표 주문 미리보기 중심으로 재구성했습니다.
+  - 메인 테이블 상태 셀은 `배송 단계 / 이슈 / 다음 액션 / 원본+동기화 메타` 순서로 축약하고, 우측 판단 패널은 `지금 해야 할 일 -> 왜 이 큐에 들어왔는지 -> 다음 이동 -> 상태 비교` 순서로 재배치했습니다.
   - `NONE_TRACKING`은 `배송중`으로 보이되 `업체 직접 배송` 이슈 필터와 보조 배지로 따로 드러나도록 정리했습니다.
   - 우측 판단 패널과 상태 셀은 `쿠팡 원본 상태 -> 현재 배송 단계 -> 현재 이슈 단계`를 먼저 보여주고, 내부 `다음 액션` 정보는 보조 안내로만 남겼습니다.
   - 패널에는 `원본값`, `현재 표시값`, `불일치 사유`, `마지막 동기화 시각`을 같이 보여줘 live/worksheet 차이를 설명할 수 있게 했습니다.

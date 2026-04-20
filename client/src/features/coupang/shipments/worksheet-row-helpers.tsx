@@ -614,6 +614,8 @@ export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
   const presentation = getWorksheetStatusPresentation(row);
   const decision = getRowDecisionPresentation(row);
   const statusPresentation = getShipmentNormalizedStatusPresentation(row);
+  const shouldShowIssueSignal =
+    statusPresentation.snapshot.issueStage !== "none" || statusPresentation.snapshot.isDirectDelivery;
   const title = [
     statusPresentation.rawOrderLabel,
     statusPresentation.shippingLabel,
@@ -632,28 +634,26 @@ export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
           <span className={`status-pill ${presentation.orderToneClassName}`}>
             {statusPresentation.shippingLabel}
           </span>
-          {statusPresentation.snapshot.priorityBucket ? (
-            <span className={`status-pill ${statusPresentation.priorityTone}`}>
-              {statusPresentation.priorityLabel}
-            </span>
-          ) : null}
-        </div>
-        <div className="shipment-status-subrow">
-          <span className="shipment-status-chip">원본 {statusPresentation.rawOrderLabel}</span>
-          {presentation.customerServiceLabel ? (
-            <span className={`shipment-status-chip ${presentation.customerServiceToneClass}`}>
+          {shouldShowIssueSignal ? (
+            <span className={`status-pill ${presentation.customerServiceToneClass}`}>
               {presentation.customerServiceLabel}
             </span>
-          ) : (
-            <span className="shipment-status-muted">이슈 없음</span>
-          )}
+          ) : null}
         </div>
         <div className="shipment-status-subrow">
           <span className={decision.toneClassName}>{decision.statusLabel}</span>
           <span className="shipment-decision-reason-pill">{decision.reasonLabel}</span>
         </div>
         <div className="shipment-status-subrow">
+          <span className="shipment-status-muted">원본 {statusPresentation.rawOrderLabel}</span>
           <span className="shipment-status-muted">{presentation.lastSyncText}</span>
+        </div>
+        <div className="shipment-status-subrow">
+          {statusPresentation.snapshot.priorityBucket ? (
+            <span className="shipment-status-chip">{statusPresentation.priorityLabel}</span>
+          ) : (
+            <span className="shipment-status-muted">우선 경고 없음</span>
+          )}
         </div>
       </div>
     </div>
