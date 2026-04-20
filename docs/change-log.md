@@ -2,6 +2,119 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-20 / 쿠팡 기준 집계와 Active 작업 목록 분리
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `shared/schema.ts`
+  - `server/interfaces/coupang-shipment-worksheet-store.ts`
+  - `server/services/shared/work-data-db.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/types.ts`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-grid-controller.tsx`
+  - `client/src/index.css`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - worksheet 저장 구조를 `mirrorItems / activeItems / archiveItems` 3계층으로 고정하고, sheet 저장소와 DB schema에 `mirror_items_json`을 추가했습니다.
+  - `worksheet/view` 응답은 이제 `datasetMode`, `mirrorTotalRowCount`, `mirrorFilteredRowCount`, `activeTotalRowCount`, `activeFilteredRowCount`, `activeExclusionCounts`를 함께 반환합니다.
+  - 쿠팡 기준 집계(`priorityCounts / pipelineCounts / issueCounts / orderCounts / missingInCoupangCount`)는 `mirrorItems` 기준으로 계산하고, 작업용 지표(`scopeCounts / decisionCounts / invoiceReadyCount / invoiceCounts / outputCounts`)는 `activeItems` 기준으로 유지합니다.
+  - 기본 작업 표는 계속 `active` 목록으로 열리지만, 상단 `먼저 확인 / 배송 처리 / 이슈 필터` 카드를 누르면 표를 `mirror` 모드로 전환해 카드 숫자와 목록 건수가 맞도록 바꿨습니다.
+  - `mirror` 목록에서 `active` 제외 행은 `isVisibleInActive=false`, `excludedFromActiveReason`을 함께 내려주고, UI에서는 읽기 전용 + 강조선 + 상세 패널의 `active 제외 사유`로 표시합니다.
+  - `quick-collect` fallback 시트도 새 응답 shape를 맞추도록 보강해 `datasetMode=active`와 mirror/active 카운트 필드를 함께 채우게 했습니다.
+  - collect/full refresh 경로는 먼저 `mirrorItems`를 갱신하고, 완료 취소/반품·쿠팡 미조회 같은 자동보관 규칙은 그 다음 `active/archive` 파생 단계에서만 적용하도록 정리했습니다.
+- 이유:
+  - `return_completed / cancel_completed / not_found_in_coupang` 같은 자동보관 규칙 때문에 실제 작업 목록은 의도적으로 쿠팡 전체 집합보다 작아질 수 있고, 그 상태로 카드 숫자를 active 기준으로 계산하면 쿠팡 숫자와 계속 어긋나기 때문입니다.
+  - 카드 숫자는 쿠팡 기준 정합을 맞추고, 기본 표는 실제 작업 가능한 주문만 보여주려면 두 분모를 구조적으로 분리해야 했습니다.
+- 남은 점:
+  - 브라우저에서 실제 쿠팡 카드 숫자와 live 화면 숫자를 수동 대조하는 검증은 아직 하지 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-service-view-read.test.ts server/stores/work-data-coupang-shipment-worksheet-store.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-archive.test.ts`
+  - `npx vitest run --root . client/src/features/coupang/shipments/shipment-audit-missing.test.ts client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+
+## 2026-04-20 / 쿠팡 누락 검수 자동 반영 전환
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.ts`
+  - `client/src/features/coupang/shipments/shipment-audit-missing-dialog.tsx`
+  - `client/src/features/coupang/shipments/shipment-audit-missing.test.ts`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.ts`
+  - `client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `worksheet/audit-missing`는 더 이상 단순 비교 결과를 돌려주지 않고, live `ACCEPT/INSTRUCT` 주문을 읽은 뒤 정상 행은 바로 worksheet에 자동 반영하도록 바꿨습니다.
+  - audit 결과는 `autoAppliedCount / restoredCount / exceptionCount / hiddenInfoCount`와 `autoAppliedItems / exceptionItems / hiddenItems`로 재구성했습니다.
+  - 이미 worksheet에 있던 정상 행은 상태만 자동 갱신하고, worksheet에 없던 정상 행은 기존 row 생성 경로를 재사용해 자동 추가하거나 보관함에서 자동 복구합니다.
+  - 충돌, 식별 불완전, hydration 실패, 클레임/차단 이슈만 `exceptionItems.reasonCode`로 남기고, 현재 뷰 숨김은 정보용 섹션으로만 내렸습니다.
+  - 출고 화면은 수동 검수와 `new_only` 후속 auto audit 모두에서 `예외 > 0`일 때만 다이얼로그를 자동으로 열고, 정상 자동 반영만 있었던 경우에는 성공 피드백만 남기도록 바꿨습니다.
+  - `결제완료 -> 상품준비중` 흐름은 audit 경고 기준을 `exceptionCount`로 좁혀, 자동 반영/숨김 정보 때문에 warning 취급하지 않게 했습니다.
+- 이유:
+  - 정상 상태 변화와 복구 가능한 누락 행까지 사람이 직접 보게 하면 검수창이 잡음이 많아지고 실제로 대응해야 할 예외가 묻혔기 때문입니다.
+  - 현재 worksheet와 보관함을 audit 시점에 바로 보정해 줘야 `상품준비중 처리`와 후속 작업이 실제 화면 기준과 더 잘 맞습니다.
+- 남은 점:
+  - 브라우저에서 실제 모달과 토스트의 체감 흐름은 아직 직접 확인하지 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-audit-missing.test.ts client/src/features/coupang/shipments/shipment-audit-missing.test.ts client/src/features/coupang/shipments/shipment-prepare-flow.test.ts`
+
+## 2026-04-20 / 쿠팡 미조회 예외 포함 30일 정합 보강
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/interfaces/coupang-shipment-worksheet-store.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/shipment-archive-panel.tsx`
+  - `client/src/features/coupang/shipments/shipment-archive-panel.test.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `CoupangShipmentWorksheetRow`에 `missingInCoupang`, `missingDetectedAt`, `missingDetectionSource`, `lastSeenOrderStatus`, `lastSeenIssueSummary`를 추가해 `쿠팡 미조회`를 archive reason만이 아니라 row 메타로도 추적하게 했습니다.
+  - `worksheet/view` 응답에 `missingInCoupangCount`, `exceptionCounts.notFoundInCoupang`를 추가했고, 메인 배송 카드 분모에서는 `missingInCoupang` row를 제외하도록 projection을 분리했습니다.
+  - `syncMode="full"`은 최근 30일 authoritative mirror를 다시 수집한 뒤, 기존 active row 중 live Coupang 상세에서 `item === null`로 확인된 주문을 `not_found_in_coupang` 사유로 보관함으로 이동시키도록 보강했습니다.
+  - archive 실패 시에는 row를 삭제하지 않고 `missingInCoupang` 메타만 남겨 경고 상태로 유지합니다.
+  - 예전에 `쿠팡 미조회 제외`로 보관된 row가 다시 live 수집 결과에 나타나면 archive에서 제거하고 active worksheet로 자동 복귀시키도록 store restore 경로를 추가했습니다.
+  - 출고 허브에는 `예외 추적` 카드와 `쿠팡 미조회 n건 보기` CTA를 추가해 보관함으로 바로 이동할 수 있게 했고, 상세 패널/보관함 row에는 마지막 상태와 감지 시각을 함께 표시하도록 보강했습니다.
+- 이유:
+  - authoritative mirror 기준 숫자는 쿠팡 배송관리와 맞추되, 우리 DB에는 있었지만 쿠팡 현재 목록에서는 사라진 주문을 조용히 버리지 않고 예외로 추적해야 했기 때문입니다.
+  - 수동 `미조회 정리`만으로는 30일 재동기화 기준 정합과 예외 추적이 분리되어 운영자가 숫자와 예외를 함께 이해하기 어려웠기 때문입니다.
+- 남은 점:
+  - `쿠팡 미조회` 예외 카운트는 현재 `보관함 + active row 메타`를 합산한 값이고, 별도 전용 예외 목록 화면은 아직 없습니다.
+  - 브라우저에서 실제 보관함/상세 패널 문구를 끝까지 수동 확인하지는 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+
 ## 2026-04-20 / 쿠팡 배송관리 메인 분모 정합 보강
 
 - 변경 유형:

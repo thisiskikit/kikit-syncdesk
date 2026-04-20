@@ -31,6 +31,7 @@ function buildRow(input: {
   issueStage?: CoupangShipmentWorksheetRow["issueStage"];
   priorityBucket?: CoupangShipmentWorksheetRow["priorityBucket"];
   pipelineBucket?: CoupangShipmentWorksheetRow["pipelineBucket"];
+  missingInCoupang?: boolean;
 }) {
   const invoiceNumber = input.invoiceNumber ?? "";
   const deliveryCompanyCode = input.deliveryCompanyCode ?? "";
@@ -75,6 +76,7 @@ function buildRow(input: {
     vendorItemId: `VI-${input.id}`,
     availableActions: input.availableActions ?? ["uploadInvoice"],
     orderStatus: input.status,
+    missingInCoupang: input.missingInCoupang ?? false,
     shippingStage: input.shippingStage ?? null,
     issueStage: input.issueStage ?? null,
     priorityBucket: input.priorityBucket ?? null,
@@ -334,6 +336,33 @@ describe("shipment worksheet view", () => {
 
     expect(directDeliveryView.items.map((row) => row.id)).toEqual(["direct"]);
     expect(priorityView.items.map((row) => row.id)).toEqual(["same-day"]);
+  });
+
+  it("excludes missing-in-coupang rows from main card counts while tracking them as exceptions", () => {
+    const rows = [
+      buildRow({
+        id: "live",
+        status: "INSTRUCT",
+      }),
+      buildRow({
+        id: "missing",
+        status: "DEPARTURE",
+        missingInCoupang: true,
+      }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(view.items.map((row) => row.id)).toEqual(["live", "missing"]);
+    expect(view.pipelineCounts.all).toBe(1);
+    expect(view.pipelineCounts.preparing_product).toBe(1);
+    expect(view.pipelineCounts.shipping_instruction ?? 0).toBe(0);
+    expect(view.missingInCoupangCount).toBe(1);
+    expect(view.exceptionCounts.notFoundInCoupang).toBe(1);
   });
 
   it("applies createdAt range to cards, scope counts, and table rows together", () => {

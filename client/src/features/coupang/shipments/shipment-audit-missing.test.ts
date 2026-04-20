@@ -18,6 +18,9 @@ describe("shipment-audit-missing helpers", () => {
         createdAtTo: "2026-04-12",
         scope: "dispatch_active",
         query: "김",
+        priorityCard: "all",
+        pipelineCard: "all",
+        issueFilter: "all",
         invoiceStatusCard: "ready",
         orderStatusCard: "INSTRUCT",
         outputStatusCard: "notExported",
@@ -29,6 +32,9 @@ describe("shipment-audit-missing helpers", () => {
       viewQuery: {
         scope: "dispatch_active",
         query: "김",
+        priorityCard: "all",
+        pipelineCard: "all",
+        issueFilter: "all",
         invoiceStatusCard: "ready",
         orderStatusCard: "INSTRUCT",
         outputStatusCard: "notExported",
@@ -39,7 +45,7 @@ describe("shipment-audit-missing helpers", () => {
   it("formats audit hidden reasons for dialog output", () => {
     expect(formatShipmentWorksheetAuditHiddenReason("out_of_scope")).toBe("현재 scope 바깥");
     expect(formatShipmentWorksheetAuditHiddenReason("filtered_out")).toBe(
-      "현재 검색/카드 필터로 숨김",
+      "현재 검색/카드 필터에서 숨김",
     );
   });
 
@@ -49,13 +55,16 @@ describe("shipment-audit-missing helpers", () => {
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 4,
         worksheetMatchedCount: 2,
-        missingCount: 1,
-        hiddenCount: 1,
-        missingItems: [],
+        autoAppliedCount: 2,
+        restoredCount: 1,
+        exceptionCount: 1,
+        hiddenInfoCount: 1,
+        autoAppliedItems: [],
+        exceptionItems: [],
         hiddenItems: [],
         message: null,
       }),
-    ).toBe("live 4건 중 누락 1건, 현재 뷰 숨김 1건입니다.");
+    ).toBe("자동 반영 2건 / 예외 1건 / 현재 뷰 숨김 1건");
   });
 
   it("builds audit details for feedback output", () => {
@@ -65,9 +74,11 @@ describe("shipment-audit-missing helpers", () => {
           auditedStatuses: ["INSTRUCT", "ACCEPT"],
           liveCount: 4,
           worksheetMatchedCount: 2,
-          missingCount: 1,
-          hiddenCount: 1,
-          missingItems: [
+          autoAppliedCount: 2,
+          restoredCount: 1,
+          exceptionCount: 1,
+          hiddenInfoCount: 1,
+          autoAppliedItems: [
             {
               sourceKey: "store-1:100:VI-100",
               shipmentBoxId: "100",
@@ -75,14 +86,29 @@ describe("shipment-audit-missing helpers", () => {
               vendorItemId: "VI-100",
               sellerProductId: "SP-100",
               status: "INSTRUCT",
-              productName: "누락 주문",
+              productName: "자동 반영 주문",
               orderedAt: "2026-04-12T09:00:00+09:00",
+              action: "restored",
+            },
+          ],
+          exceptionItems: [
+            {
+              sourceKey: "store-1:200:VI-200",
+              shipmentBoxId: "200",
+              orderId: "ORDER-200",
+              vendorItemId: "VI-200",
+              sellerProductId: "SP-200",
+              status: "ACCEPT",
+              productName: "예외 주문",
+              orderedAt: "2026-04-12T09:30:00+09:00",
+              reasonCode: "duplicate_source_key",
+              message: "sourceKey 충돌",
             },
           ],
           hiddenItems: [
             {
-              sourceKey: "store-1:200:VI-200",
-              rowId: "row-200",
+              sourceKey: "store-1:300:VI-300",
+              rowId: "row-300",
               status: "ACCEPT",
               productName: "숨김 주문",
               hiddenReason: "filtered_out",
@@ -95,20 +121,24 @@ describe("shipment-audit-missing helpers", () => {
         },
       ),
     ).toEqual([
-      "[누락] INSTRUCT / 누락 주문 / 100",
-      "[숨김] ACCEPT / 숨김 주문 / filtered_out",
+      "[예외:sourceKey 충돌] ACCEPT / 예외 주문 / 200",
+      "[자동반영:보관함 자동 복구] INSTRUCT / 자동 반영 주문 / 100",
+      "[숨김] ACCEPT / 숨김 주문 / 현재 검색/카드 필터에서 숨김",
     ]);
   });
 
-  it("treats missing worksheet rows as warnings for prepare flow", () => {
+  it("treats exception items as warnings for prepare flow", () => {
     expect(
       hasShipmentPrepareAuditWarnings({
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 2,
         worksheetMatchedCount: 1,
-        missingCount: 1,
-        hiddenCount: 0,
-        missingItems: [],
+        autoAppliedCount: 1,
+        restoredCount: 0,
+        exceptionCount: 1,
+        hiddenInfoCount: 0,
+        autoAppliedItems: [],
+        exceptionItems: [],
         hiddenItems: [],
         message: null,
       }),
@@ -119,29 +149,35 @@ describe("shipment-audit-missing helpers", () => {
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 2,
         worksheetMatchedCount: 2,
-        missingCount: 0,
-        hiddenCount: 1,
-        missingItems: [],
+        autoAppliedCount: 2,
+        restoredCount: 0,
+        exceptionCount: 0,
+        hiddenInfoCount: 1,
+        autoAppliedItems: [],
+        exceptionItems: [],
         hiddenItems: [],
         message: null,
       }),
     ).toBe(false);
   });
 
-  it("summarizes the prepare warning without blocking wording", () => {
+  it("summarizes the prepare warning as exception-only guidance", () => {
     expect(
       summarizeShipmentPrepareAuditWarning({
         auditedStatuses: ["INSTRUCT", "ACCEPT"],
         liveCount: 4,
         worksheetMatchedCount: 2,
-        missingCount: 2,
-        hiddenCount: 1,
-        missingItems: [],
+        autoAppliedCount: 2,
+        restoredCount: 0,
+        exceptionCount: 2,
+        hiddenInfoCount: 1,
+        autoAppliedItems: [],
+        exceptionItems: [],
         hiddenItems: [],
         message: null,
       }),
     ).toBe(
-      "수집 누락 2건은 현재 worksheet에서 제외하고, 확인 가능한 주문만 계속 처리했습니다.",
+      "예외 2건은 자동 반영하지 못해 확인이 필요합니다. 현재 처리 가능한 주문만 계속 진행했습니다.",
     );
   });
 });

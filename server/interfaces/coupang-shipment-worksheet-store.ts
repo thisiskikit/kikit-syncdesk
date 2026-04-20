@@ -1,5 +1,6 @@
 import type {
   CoupangShipmentArchiveRow,
+  CoupangShipmentArchiveReason,
   CoupangDataSource,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetSyncSummary,
@@ -16,6 +17,7 @@ export type CoupangShipmentWorksheetSyncState = {
 
 export type CoupangShipmentWorksheetStoreSheet = {
   items: CoupangShipmentWorksheetRow[];
+  mirrorItems: CoupangShipmentWorksheetRow[];
   collectedAt: string | null;
   source: CoupangDataSource;
   message: string | null;
@@ -27,6 +29,7 @@ export type CoupangShipmentWorksheetStoreSheet = {
 export type SetCoupangShipmentWorksheetStoreSheetInput = {
   storeId: string;
   items: CoupangShipmentWorksheetRow[];
+  mirrorItems?: CoupangShipmentWorksheetRow[];
   collectedAt: string | null;
   source: CoupangDataSource;
   message: string | null;
@@ -37,6 +40,7 @@ export type SetCoupangShipmentWorksheetStoreSheetInput = {
 export type UpsertCoupangShipmentWorksheetRowsInput = {
   storeId: string;
   items: CoupangShipmentWorksheetRow[];
+  mirrorItems?: CoupangShipmentWorksheetRow[];
   collectedAt: string | null;
   source: CoupangDataSource;
   message: string | null;
@@ -69,6 +73,19 @@ export type ArchiveCoupangShipmentWorksheetRowsResult = {
   dryRun: boolean;
 };
 
+export type RestoreArchivedCoupangShipmentWorksheetRowsInput = {
+  storeId: string;
+  sourceKeys: string[];
+  archiveReason?: CoupangShipmentArchiveReason | null;
+};
+
+export type RestoreArchivedCoupangShipmentWorksheetRowsResult = {
+  restoredCount: number;
+  skippedCount: number;
+  restoredSourceKeys: string[];
+  items: CoupangShipmentArchiveRow[];
+};
+
 export type EnsureCoupangShipmentWorksheetSelpickIntegrityInput = {
   storeId: string;
   platformKey: string;
@@ -97,6 +114,9 @@ export interface CoupangShipmentWorksheetStorePort {
   patchRows(input: PatchCoupangShipmentWorksheetRowsInput): Promise<PatchCoupangShipmentWorksheetRowsResult>;
   getArchivedRows(storeId: string): Promise<CoupangShipmentArchiveRow[]>;
   getArchivedSourceKeys(storeId: string): Promise<string[]>;
+  restoreArchivedRows(
+    input: RestoreArchivedCoupangShipmentWorksheetRowsInput,
+  ): Promise<RestoreArchivedCoupangShipmentWorksheetRowsResult>;
   archiveRows(
     input: ArchiveCoupangShipmentWorksheetRowsInput,
   ): Promise<ArchiveCoupangShipmentWorksheetRowsResult>;

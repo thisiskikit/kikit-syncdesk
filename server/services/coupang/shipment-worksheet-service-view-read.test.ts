@@ -5,10 +5,12 @@ import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
 const {
   getOrderCustomerServiceSummaryMock,
   getStoreMock,
+  getArchivedRowsMock,
   getStoreSheetMock,
 } = vi.hoisted(() => ({
   getOrderCustomerServiceSummaryMock: vi.fn(),
   getStoreMock: vi.fn(),
+  getArchivedRowsMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
 }));
 
@@ -36,7 +38,7 @@ vi.mock("./settings-store", () => ({
 vi.mock("./shipment-worksheet-store", () => ({
   coupangShipmentWorksheetStore: {
     archiveRows: vi.fn(),
-    getArchivedRows: vi.fn(),
+    getArchivedRows: getArchivedRowsMock,
     getArchivedSourceKeys: vi.fn(),
     getStoreSheet: getStoreSheetMock,
     patchRows: vi.fn(),
@@ -54,6 +56,8 @@ function buildRow(input: {
   id: string;
   status: string;
   customerServiceState?: CoupangShipmentWorksheetRow["customerServiceState"];
+  customerServiceTerminalStatus?: CoupangShipmentWorksheetRow["customerServiceTerminalStatus"];
+  missingInCoupang?: boolean;
 }) {
   return {
     id: input.id,
@@ -95,10 +99,12 @@ function buildRow(input: {
     vendorItemId: `VI-${input.id}`,
     availableActions: ["uploadInvoice"],
     orderStatus: input.status,
+    missingInCoupang: input.missingInCoupang ?? false,
     customerServiceIssueCount: 0,
     customerServiceIssueSummary: null,
     customerServiceIssueBreakdown: [],
     customerServiceState: input.customerServiceState ?? "stale",
+    customerServiceTerminalStatus: input.customerServiceTerminalStatus ?? null,
     customerServiceFetchedAt: "2026-04-17T09:00:00.000Z",
     orderedAtRaw: "2026-04-17T09:00:00+09:00",
     lastOrderHydratedAt: null,
@@ -154,6 +160,7 @@ describe("getShipmentWorksheetView", () => {
       syncSummary: null,
       updatedAt: "2026-04-17T09:00:00.000Z",
     });
+    getArchivedRowsMock.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -179,6 +186,8 @@ describe("getShipmentWorksheetView", () => {
     expect(response.coverageCreatedAtTo).toBe(null);
     expect(response.isAuthoritativeMirror).toBe(false);
     expect(response.lastFullSyncedAt).toBe(null);
+    expect(response.missingInCoupangCount).toBe(0);
+    expect(response.exceptionCounts.notFoundInCoupang).toBe(0);
   });
 
   it("returns authoritative mirror metadata from the last successful full sync", async () => {
@@ -225,5 +234,79 @@ describe("getShipmentWorksheetView", () => {
     expect(response.coverageCreatedAtTo).toBe("2026-04-20");
     expect(response.isAuthoritativeMirror).toBe(true);
     expect(response.lastFullSyncedAt).toBe("2026-04-20T09:00:00.000Z");
+  });
+
+  it("includes archived not-found exceptions in the worksheet view exception counts", async () => {
+    getArchivedRowsMock.mockResolvedValue([
+      {
+        ...buildRow({ id: "missing", status: "DEPARTURE", customerServiceState: "ready" }),
+        archivedAt: "2026-04-20T10:00:00.000Z",
+        archiveReason: "not_found_in_coupang" as const,
+        missingInCoupang: true,
+        missingDetectedAt: "2026-04-20T10:00:00.000Z",
+        missingDetectionSource: "full_sync" as const,
+        lastSeenOrderStatus: "DEPARTURE",
+        lastSeenIssueSummary: null,
+      },
+    ]);
+
+    const response = await getShipmentWorksheetView({
+      storeId: "store-1",
+      createdAtFrom: "2026-04-17",
+      createdAtTo: "2026-04-20",
+      scope: "all",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(response.missingInCoupangCount).toBe(1);
+    expect(response.exceptionCounts.notFoundInCoupang).toBe(1);
+  });
+
+  it("separates Coupang mirror counts from the active worksheet list", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      items: [buildRow({ id: "active", status: "DEPARTURE", customerServiceState: "ready" })],
+      mirrorItems: [
+        buildRow({ id: "active", status: "DEPARTURE", customerServiceState: "ready" }),
+        buildRow({
+          id: "return-completed",
+          status: "DEPARTURE",
+          customerServiceState: "ready",
+          customerServiceTerminalStatus: "return_completed",
+        }),
+      ],
+      collectedAt: "2026-04-20T09:00:00.000Z",
+      source: "live",
+      message: null,
+      syncState: {
+        lastIncrementalCollectedAt: "2026-04-20T09:00:00.000Z",
+        lastFullCollectedAt: "2026-04-20T09:00:00.000Z",
+        coveredCreatedAtFrom: "2026-04-01",
+        coveredCreatedAtTo: "2026-04-20",
+        lastStatusFilter: null,
+      },
+      syncSummary: null,
+      updatedAt: "2026-04-20T09:00:00.000Z",
+    });
+
+    const response = await getShipmentWorksheetView({
+      storeId: "store-1",
+      createdAtFrom: "2026-04-01",
+      createdAtTo: "2026-04-20",
+      datasetMode: "mirror",
+      scope: "all",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(response.datasetMode).toBe("mirror");
+    expect(response.items.map((row) => row.id)).toEqual(["active", "return-completed"]);
+    expect(response.mirrorFilteredRowCount).toBe(2);
+    expect(response.activeFilteredRowCount).toBe(1);
+    expect(response.activeExclusionCounts.return_completed).toBe(1);
+    expect(response.items.find((row) => row.id === "return-completed")).toMatchObject({
+      isVisibleInActive: false,
+      excludedFromActiveReason: "return_completed",
+    });
   });
 });

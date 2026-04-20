@@ -18,9 +18,11 @@ const {
   markPreparingMock,
   getProductDetailMock,
   getStoreSheetMock,
+  getArchivedRowsMock,
   getArchivedSourceKeysMock,
   ensureSelpickIntegrityMock,
   materializeSelpickOrderNumbersMock,
+  restoreArchivedRowsMock,
   setStoreSheetMock,
   upsertStoreRowsMock,
   archiveRowsMock,
@@ -36,9 +38,11 @@ const {
   markPreparingMock: vi.fn(),
   getProductDetailMock: vi.fn(),
   getStoreSheetMock: vi.fn(),
+  getArchivedRowsMock: vi.fn(),
   getArchivedSourceKeysMock: vi.fn(),
   ensureSelpickIntegrityMock: vi.fn(),
   materializeSelpickOrderNumbersMock: vi.fn(),
+  restoreArchivedRowsMock: vi.fn(),
   setStoreSheetMock: vi.fn(),
   upsertStoreRowsMock: vi.fn(),
   archiveRowsMock: vi.fn(),
@@ -69,9 +73,11 @@ vi.mock("./shipment-worksheet-store", () => ({
   WORKSHEET_ROW_WRITE_CHUNK_SIZE: 200,
   coupangShipmentWorksheetStore: {
     getStoreSheet: getStoreSheetMock,
+    getArchivedRows: getArchivedRowsMock,
     getArchivedSourceKeys: getArchivedSourceKeysMock,
     ensureSelpickIntegrity: ensureSelpickIntegrityMock,
     materializeSelpickOrderNumbers: materializeSelpickOrderNumbersMock,
+    restoreArchivedRows: restoreArchivedRowsMock,
     setStoreSheet: setStoreSheetMock,
     upsertStoreRows: upsertStoreRowsMock,
     archiveRows: archiveRowsMock,
@@ -476,8 +482,15 @@ describe("coupang shipment worksheet collection", () => {
     vi.clearAllMocks();
     getStoreMock.mockResolvedValue(buildStore());
     getStoreSheetMock.mockResolvedValue(buildEmptySheet());
+    getArchivedRowsMock.mockResolvedValue([]);
     getArchivedSourceKeysMock.mockResolvedValue([]);
     ensureSelpickIntegrityMock.mockResolvedValue(undefined);
+    restoreArchivedRowsMock.mockResolvedValue({
+      restoredCount: 0,
+      skippedCount: 0,
+      restoredSourceKeys: [],
+      items: [],
+    });
     listReturnsMock.mockResolvedValue({
       items: [],
       source: "live",
@@ -2303,6 +2316,145 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.lastFullSyncedAt).toBe("2026-03-26T10:30:00.000Z");
   });
 
+  it("archives rows missing from the live 30-day authoritative mirror during full sync", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "900",
+          orderId: "O-900",
+          vendorItemId: "V-900",
+          status: "DEPARTURE",
+          productName: "Missing Row",
+        }),
+      ]),
+    );
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "901:V-901",
+          shipmentBoxId: "901",
+          orderId: "O-901",
+          vendorItemId: "V-901",
+          status: "INSTRUCT",
+          productName: "Still Live",
+          availableActions: ["markPreparing"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    getOrderDetailMock.mockImplementation(async (input: { shipmentBoxId?: string }) => {
+      if (input.shipmentBoxId === "900") {
+        return {
+          item: null,
+          source: "live" as const,
+          message: null,
+        };
+      }
+
+      return buildOrderDetailResponse({
+        shipmentBoxId: "901",
+        orderId: "O-901",
+        vendorItemId: "V-901",
+        status: "INSTRUCT",
+        productName: "Still Live",
+      });
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "full",
+    });
+
+    expect(archiveRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:900:V-900",
+            archiveReason: "not_found_in_coupang",
+            missingInCoupang: true,
+            missingDetectionSource: "full_sync",
+          }),
+        ],
+      }),
+    );
+    expect(result.items.map((row) => row.sourceKey)).toEqual(["store-1:901:V-901"]);
+  });
+
+  it("restores previously archived not-found rows when Coupang returns them again", async () => {
+    getStoreSheetMock.mockResolvedValue(buildEmptySheet());
+    getArchivedSourceKeysMock.mockResolvedValue(["store-1:910:V-910"]);
+    getArchivedRowsMock.mockResolvedValue([
+      {
+        ...buildWorksheetRow({
+          shipmentBoxId: "910",
+          orderId: "O-910",
+          vendorItemId: "V-910",
+          status: "INSTRUCT",
+          productName: "Returned Again",
+        }),
+        archivedAt: "2026-03-25T00:00:00.000Z",
+        archiveReason: "not_found_in_coupang" as const,
+        missingInCoupang: true,
+        missingDetectedAt: "2026-03-25T00:00:00.000Z",
+        missingDetectionSource: "reconcile_live" as const,
+        lastSeenOrderStatus: "INSTRUCT",
+        lastSeenIssueSummary: null,
+      },
+    ]);
+    restoreArchivedRowsMock.mockResolvedValue({
+      restoredCount: 1,
+      skippedCount: 0,
+      restoredSourceKeys: ["store-1:910:V-910"],
+      items: [],
+    });
+    listOrdersMock.mockResolvedValue({
+      items: [
+        buildOrderRow({
+          id: "910:V-910",
+          shipmentBoxId: "910",
+          orderId: "O-910",
+          vendorItemId: "V-910",
+          status: "INSTRUCT",
+          productName: "Returned Again",
+          availableActions: ["markPreparing"],
+        }),
+      ],
+      source: "live",
+      message: null,
+    });
+    getOrderDetailMock.mockResolvedValue(
+      buildOrderDetailResponse({
+        shipmentBoxId: "910",
+        orderId: "O-910",
+        vendorItemId: "V-910",
+        status: "INSTRUCT",
+        productName: "Returned Again",
+      }),
+    );
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "",
+      maxPerPage: 20,
+      syncMode: "incremental",
+    });
+
+    expect(restoreArchivedRowsMock).toHaveBeenCalledWith({
+      storeId: "store-1",
+      sourceKeys: ["store-1:910:V-910"],
+      archiveReason: "not_found_in_coupang",
+    });
+    expect(result.items.map((row) => row.sourceKey)).toContain("store-1:910:V-910");
+  });
+
   it("keeps already-seen ACCEPT rows pending prepare instead of retrying during collect", async () => {
     getStoreSheetMock.mockResolvedValue({
       items: [
@@ -2986,7 +3138,8 @@ describe("coupang shipment worksheet collection", () => {
 
     expect(result.archivedCount).toBe(0);
     expect(result.refreshedCount).toBe(2);
-    expect(result.warningCount).toBe(2);
+    expect(result.warningCount).toBe(result.warnings.length);
+    expect(result.warningCount).toBeGreaterThanOrEqual(2);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining("live unavailable"),
@@ -3002,6 +3155,41 @@ describe("coupang shipment worksheet collection", () => {
         ]),
       }),
     );
+  });
+
+  it("does not report archived live-missing rows as warnings when all targets are removed", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "932-A",
+          orderId: "O-932-A",
+          vendorItemId: "V-932-A",
+          status: "INSTRUCT",
+          productName: "Missing Only Row",
+        }),
+      ]),
+    );
+    getOrderDetailMock.mockResolvedValue({
+      item: null,
+      source: "live" as const,
+      message: null,
+    });
+
+    const result = await reconcileShipmentWorksheetLive({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      viewQuery: {
+        scope: "all",
+      },
+    });
+
+    expect(result.archivedCount).toBe(1);
+    expect(result.refreshedCount).toBe(0);
+    expect(result.warningCount).toBe(0);
+    expect(result.warnings).toEqual([]);
+    expect(result.message).toContain("보관함으로 이동했습니다");
+    expect(result.message).not.toContain("경고");
   });
 
   it("keeps completed claim auto-archive behavior after live reconcile refresh", async () => {

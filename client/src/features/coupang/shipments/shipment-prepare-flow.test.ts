@@ -47,7 +47,7 @@ function createRow(
     coupangInvoiceUploadedAt: null,
     salePrice: 10000,
     shippingFee: 0,
-    receiverAddress: "서울시 강남구",
+    receiverAddress: "서울 강남구",
     deliveryRequest: null,
     buyerPhoneNumber: "01012345678",
     productNumber: "P-1",
@@ -90,9 +90,12 @@ function createAuditResponse(
     auditedStatuses: ["INSTRUCT", "ACCEPT"],
     liveCount: 2,
     worksheetMatchedCount: 1,
-    missingCount: 1,
-    hiddenCount: 0,
-    missingItems: [
+    autoAppliedCount: 0,
+    restoredCount: 0,
+    exceptionCount: 1,
+    hiddenInfoCount: 0,
+    autoAppliedItems: [],
+    exceptionItems: [
       {
         sourceKey: "store-1:100:VI-100",
         shipmentBoxId: "100",
@@ -100,8 +103,10 @@ function createAuditResponse(
         vendorItemId: "VI-100",
         sellerProductId: "SP-100",
         status: "ACCEPT",
-        productName: "누락 주문",
+        productName: "예외 주문",
         orderedAt: "2026-04-12T09:00:00+09:00",
+        reasonCode: "duplicate_source_key",
+        message: "sourceKey 충돌",
       },
     ],
     hiddenItems: [],
@@ -142,7 +147,7 @@ function createBatchResponse(
 }
 
 describe("shipment prepare flow helpers", () => {
-  it("keeps prepare submission available when audit reports missing orders", () => {
+  it("keeps prepare submission available when audit reports exception orders", () => {
     const plan = resolvePrepareAcceptedOrdersPlan({
       auditResponse: createAuditResponse(),
       resolvedRows: {
@@ -154,7 +159,7 @@ describe("shipment prepare flow helpers", () => {
     expect(plan.hasAuditWarnings).toBe(true);
     expect(plan.shouldSubmitPrepare).toBe(true);
     expect(plan.targetRows).toHaveLength(1);
-    expect(plan.auditWarningDetails).toEqual(["[누락] ACCEPT / 누락 주문 / 100"]);
+    expect(plan.auditWarningDetails).toEqual(["[예외:sourceKey 충돌] ACCEPT / 예외 주문 / 100"]);
   });
 
   it("keeps prepare submission available when audit fails but resolved rows exist", () => {
@@ -176,19 +181,19 @@ describe("shipment prepare flow helpers", () => {
   it("combines failed action details with audit warnings in the result feedback", () => {
     const feedback = buildPrepareAcceptedOrdersFeedback({
       auditResponse: createAuditResponse(),
-      blockedClaimDetails: ["주문 ORDER-2 / 배송 BOX-2 / 출고중지"],
+      blockedClaimDetails: ["주문 ORDER-2 / 배송 BOX-2 / 출고중지요청"],
       result: createBatchResponse(),
       targetRowCount: 1,
     });
 
     expect(feedback.type).toBe("warning");
     expect(feedback.message).toContain("결제완료 1건 처리");
-    expect(feedback.message).toContain("수집 누락 1건");
+    expect(feedback.message).toContain("예외 1건은 자동 반영하지 못해 확인이 필요합니다.");
     expect(feedback.details).toEqual(
       expect.arrayContaining([
         "BOX-row-1: 아직 수집되지 않은 주문입니다.",
-        "주문 ORDER-2 / 배송 BOX-2 / 출고중지",
-        "[누락] ACCEPT / 누락 주문 / 100",
+        "주문 ORDER-2 / 배송 BOX-2 / 출고중지요청",
+        "[예외:sourceKey 충돌] ACCEPT / 예외 주문 / 100",
       ]),
     );
   });

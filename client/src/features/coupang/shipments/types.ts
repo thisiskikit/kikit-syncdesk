@@ -1,5 +1,6 @@
 import type {
   CoupangShipmentIssueFilter,
+  CoupangShipmentWorksheetDatasetMode,
   CoupangShipmentWorksheetPipelineCardFilter,
   CoupangShipmentWorksheetPriorityCardFilter,
   CoupangStoreSummary,
@@ -32,6 +33,7 @@ export type FilterState = {
   createdAtTo: string;
   query: string;
   maxPerPage: number;
+  datasetMode: CoupangShipmentWorksheetDatasetMode;
   scope: CoupangShipmentWorksheetViewScope;
   decisionStatus: FulfillmentDecisionFilterValue;
   priorityCard: CoupangShipmentWorksheetPriorityCardFilter;

@@ -6,6 +6,7 @@ import {
   COUPANG_INVOICE_ALREADY_PROCESSED_MESSAGE,
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangShipmentArchiveRow,
+  type CoupangShipmentArchiveReason,
   type CoupangDataSource,
   type CoupangShipmentWorksheetRow,
   type CoupangShipmentWorksheetSyncSummary,
@@ -36,12 +37,15 @@ import type {
   CoupangShipmentWorksheetSyncState,
   EnsureCoupangShipmentWorksheetSelpickIntegrityInput,
   MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
+  RestoreArchivedCoupangShipmentWorksheetRowsInput,
+  RestoreArchivedCoupangShipmentWorksheetRowsResult,
 } from "../interfaces/coupang-shipment-worksheet-store";
 
 export type { CoupangShipmentWorksheetSyncState } from "../interfaces/coupang-shipment-worksheet-store";
 
 type PersistedWorksheetStoreEntry = {
   items: CoupangShipmentWorksheetRow[];
+  mirrorItems: CoupangShipmentWorksheetRow[];
   collectedAt: string | null;
   source: CoupangDataSource;
   message: string | null;
@@ -183,6 +187,7 @@ function normalizeInvoiceTransmissionState(row: CoupangShipmentWorksheetRow) {
 function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipmentWorksheetRow {
   const row = structuredClone(value) as CoupangShipmentWorksheetRow;
   const invoiceTransmissionState = normalizeInvoiceTransmissionState(row);
+  const missingInCoupang = row.missingInCoupang === true;
 
   return {
     ...row,
@@ -237,6 +242,23 @@ function normalizeWorksheetRow(value: CoupangShipmentWorksheetRow): CoupangShipm
     coupangDisplayProductName:
       typeof row.coupangDisplayProductName === "string" && row.coupangDisplayProductName.trim()
         ? row.coupangDisplayProductName
+        : null,
+    missingInCoupang,
+    missingDetectedAt:
+      missingInCoupang && typeof row.missingDetectedAt === "string" ? row.missingDetectedAt : null,
+    missingDetectionSource:
+      missingInCoupang &&
+      (row.missingDetectionSource === "full_sync" ||
+        row.missingDetectionSource === "reconcile_live")
+        ? row.missingDetectionSource
+        : null,
+    lastSeenOrderStatus:
+      missingInCoupang && typeof row.lastSeenOrderStatus === "string"
+        ? row.lastSeenOrderStatus
+        : null,
+    lastSeenIssueSummary:
+      missingInCoupang && typeof row.lastSeenIssueSummary === "string"
+        ? row.lastSeenIssueSummary
         : null,
     coupangDeliveryCompanyCode: null,
     coupangInvoiceNumber: null,
@@ -497,8 +519,13 @@ function normalizeSyncSummary(
 }
 
 function normalizeStoreEntry(value: Partial<PersistedWorksheetStoreEntry> | null | undefined) {
+  const items = Array.isArray(value?.items) ? value.items.map(normalizeWorksheetRow) : [];
+  const mirrorItems = Array.isArray(value?.mirrorItems)
+    ? value.mirrorItems.map(normalizeWorksheetRow)
+    : items;
   return {
-    items: Array.isArray(value?.items) ? value.items.map(normalizeWorksheetRow) : [],
+    items,
+    mirrorItems,
     collectedAt: typeof value?.collectedAt === "string" ? value.collectedAt : null,
     source: value?.source === "fallback" ? "fallback" : "live",
     message: typeof value?.message === "string" ? value.message : null,
@@ -506,6 +533,66 @@ function normalizeStoreEntry(value: Partial<PersistedWorksheetStoreEntry> | null
     syncSummary: normalizeSyncSummary(value?.syncSummary),
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : new Date().toISOString(),
   } satisfies PersistedWorksheetStoreEntry;
+}
+
+function mergeWorksheetRowsBySourceKey(
+  currentRows: readonly CoupangShipmentWorksheetRow[],
+  nextRows: readonly CoupangShipmentWorksheetRow[],
+) {
+  const mergedBySourceKey = new Map(
+    currentRows.map((row) => [row.sourceKey, normalizeWorksheetRow(row)] as const),
+  );
+
+  for (const row of nextRows) {
+    mergedBySourceKey.set(row.sourceKey, normalizeWorksheetRow(row));
+  }
+
+  return Array.from(mergedBySourceKey.values());
+}
+
+function applyWorksheetRowPatch(
+  row: CoupangShipmentWorksheetRow,
+  patch: PatchCoupangShipmentWorksheetItemInput,
+  updatedAt: string,
+) {
+  return normalizeWorksheetRow({
+    ...row,
+    receiverName:
+      patch.receiverName !== undefined ? patch.receiverName ?? row.receiverName : row.receiverName,
+    receiverBaseName:
+      patch.receiverBaseName !== undefined ? patch.receiverBaseName : row.receiverBaseName,
+    personalClearanceCode:
+      patch.personalClearanceCode !== undefined
+        ? patch.personalClearanceCode
+        : row.personalClearanceCode,
+    deliveryCompanyCode:
+      patch.deliveryCompanyCode !== undefined
+        ? (patch.deliveryCompanyCode ?? "").trim()
+        : row.deliveryCompanyCode,
+    invoiceNumber:
+      patch.invoiceNumber !== undefined ? (patch.invoiceNumber ?? "").trim() : row.invoiceNumber,
+    deliveryRequest:
+      patch.deliveryRequest !== undefined ? patch.deliveryRequest : row.deliveryRequest,
+    invoiceTransmissionStatus:
+      patch.invoiceTransmissionStatus !== undefined
+        ? patch.invoiceTransmissionStatus
+        : row.invoiceTransmissionStatus,
+    invoiceTransmissionMessage:
+      patch.invoiceTransmissionMessage !== undefined
+        ? patch.invoiceTransmissionMessage
+        : row.invoiceTransmissionMessage,
+    invoiceTransmissionAt:
+      patch.invoiceTransmissionAt !== undefined
+        ? patch.invoiceTransmissionAt
+        : row.invoiceTransmissionAt,
+    exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : row.exportedAt,
+    invoiceAppliedAt:
+      patch.invoiceAppliedAt !== undefined ? patch.invoiceAppliedAt : row.invoiceAppliedAt,
+    orderStatus: patch.orderStatus !== undefined ? patch.orderStatus : row.orderStatus,
+    availableActions:
+      patch.availableActions !== undefined ? patch.availableActions ?? [] : row.availableActions,
+    updatedAt,
+  });
 }
 
 function normalizePersistedStore(value: Partial<PersistedWorksheetStore> | null) {
@@ -1332,6 +1419,7 @@ function buildWorksheetSheetDatabaseValue(
     collectedAt: string | null;
     source: CoupangDataSource;
     message: string | null;
+    mirrorItems: CoupangShipmentWorksheetRow[];
     syncState: CoupangShipmentWorksheetSyncState;
     syncSummary: CoupangShipmentWorksheetSyncSummary | null;
   },
@@ -1343,6 +1431,7 @@ function buildWorksheetSheetDatabaseValue(
     collectedAt: toDateOrNull(input.collectedAt),
     source: input.source,
     message: input.message,
+    mirrorItemsJson: input.mirrorItems,
     syncStateJson: input.syncState,
     syncSummaryJson: input.syncSummary,
     updatedAt: timestamp,
@@ -1357,6 +1446,7 @@ async function upsertWorksheetSheetRecord(
     collectedAt: string | null;
     source: CoupangDataSource;
     message: string | null;
+    mirrorItems: CoupangShipmentWorksheetRow[];
     syncState: CoupangShipmentWorksheetSyncState;
     syncSummary: CoupangShipmentWorksheetSyncSummary | null;
   },
@@ -1373,6 +1463,7 @@ async function upsertWorksheetSheetRecord(
         collectedAt: value.collectedAt,
         source: value.source,
         message: value.message,
+        mirrorItemsJson: value.mirrorItemsJson,
         syncStateJson: value.syncStateJson,
         syncSummaryJson: value.syncSummaryJson,
         updatedAt: value.updatedAt,
@@ -1585,6 +1676,7 @@ export class CoupangShipmentWorksheetStore {
                       collectedAt: entry.collectedAt,
                       source: entry.source,
                       message: entry.message,
+                      mirrorItems: entry.mirrorItems,
                       syncState: entry.syncState,
                       syncSummary: entry.syncSummary,
                     },
@@ -1621,7 +1713,7 @@ export class CoupangShipmentWorksheetStore {
                 registerSelpickOrderNumbersLegacy(
                   registry,
                   counters,
-                  entry.items.map((row) => row.selpickOrderNumber),
+                  entry.mirrorItems.map((row) => row.selpickOrderNumber),
                 );
               }
 
@@ -1689,6 +1781,9 @@ export class CoupangShipmentWorksheetStore {
 
     return normalizeStoreEntry({
       items: itemRows.map((row) => restoreWorksheetRowFromDatabaseRow(row)),
+      mirrorItems: Array.isArray(sheet.mirrorItemsJson)
+        ? sheet.mirrorItemsJson.map((row) => normalizeWorksheetRow(row as CoupangShipmentWorksheetRow))
+        : undefined,
       collectedAt: toIsoString(sheet.collectedAt),
       source: sheet.source === "fallback" ? "fallback" : "live",
       message: sheet.message,
@@ -1832,6 +1927,7 @@ export class CoupangShipmentWorksheetStore {
   async setStoreSheet(input: {
     storeId: string;
     items: CoupangShipmentWorksheetRow[];
+    mirrorItems?: CoupangShipmentWorksheetRow[];
     collectedAt: string | null;
     source: CoupangDataSource;
     message: string | null;
@@ -1840,6 +1936,7 @@ export class CoupangShipmentWorksheetStore {
   }) {
     const nextEntry = {
       items: input.items.map(normalizeWorksheetRow),
+      mirrorItems: (input.mirrorItems ?? input.items).map(normalizeWorksheetRow),
       collectedAt: input.collectedAt,
       source: input.source,
       message: input.message,
@@ -1848,7 +1945,7 @@ export class CoupangShipmentWorksheetStore {
       updatedAt: new Date().toISOString(),
     } satisfies PersistedWorksheetStoreEntry;
     assertUniqueSelpickOrderNumbers(
-      nextEntry.items,
+      nextEntry.mirrorItems,
       "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
     );
 
@@ -1878,7 +1975,7 @@ export class CoupangShipmentWorksheetStore {
       registerSelpickOrderNumbersLegacy(
         registry,
         counters,
-        nextEntry.items.map((row) => row.selpickOrderNumber),
+        nextEntry.mirrorItems.map((row) => row.selpickOrderNumber),
       );
       finalizeLegacySelpickState(nextData, registry, counters);
       await this.persistLegacy(nextData);
@@ -1901,6 +1998,7 @@ export class CoupangShipmentWorksheetStore {
           collectedAt: nextEntry.collectedAt,
           source: nextEntry.source,
           message: nextEntry.message,
+          mirrorItems: nextEntry.mirrorItems,
           syncState: nextEntry.syncState,
           syncSummary: nextEntry.syncSummary,
         },
@@ -1911,7 +2009,7 @@ export class CoupangShipmentWorksheetStore {
         .delete(coupangShipmentRows)
         .where(eq(coupangShipmentRows.storeId, input.storeId));
 
-      await syncSelpickStateForRowsTx(tx, nextEntry.items);
+      await syncSelpickStateForRowsTx(tx, nextEntry.mirrorItems);
       await insertWorksheetRowsInChunks(tx, {
         sheetId,
         storeId: input.storeId,
@@ -1928,6 +2026,7 @@ export class CoupangShipmentWorksheetStore {
   async upsertStoreRows(input: {
     storeId: string;
     items: CoupangShipmentWorksheetRow[];
+    mirrorItems?: CoupangShipmentWorksheetRow[];
     collectedAt: string | null;
     source: CoupangDataSource;
     message: string | null;
@@ -1936,6 +2035,7 @@ export class CoupangShipmentWorksheetStore {
   }) {
     const nextEntry = {
       items: input.items.map(normalizeWorksheetRow),
+      mirrorItems: (input.mirrorItems ?? input.items).map(normalizeWorksheetRow),
       collectedAt: input.collectedAt,
       source: input.source,
       message: input.message,
@@ -1944,24 +2044,20 @@ export class CoupangShipmentWorksheetStore {
       updatedAt: new Date().toISOString(),
     } satisfies PersistedWorksheetStoreEntry;
     assertUniqueSelpickOrderNumbers(
-      nextEntry.items,
+      nextEntry.mirrorItems,
       "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
     );
 
     if (this.legacyMode) {
       const data = await this.loadLegacy();
       const currentEntry = normalizeStoreEntry(data.stores[input.storeId]);
-      const mergedBySourceKey = new Map(
-        currentEntry.items.map((row) => [row.sourceKey, row] as const),
-      );
-
-      for (const row of nextEntry.items) {
-        mergedBySourceKey.set(row.sourceKey, row);
-      }
-
       const persistedEntry = {
         ...currentEntry,
-        items: Array.from(mergedBySourceKey.values()),
+        items: mergeWorksheetRowsBySourceKey(currentEntry.items, nextEntry.items),
+        mirrorItems: mergeWorksheetRowsBySourceKey(
+          currentEntry.mirrorItems,
+          nextEntry.mirrorItems,
+        ),
         collectedAt: nextEntry.collectedAt,
         source: nextEntry.source,
         message: nextEntry.message,
@@ -1970,7 +2066,7 @@ export class CoupangShipmentWorksheetStore {
         updatedAt: nextEntry.updatedAt,
       } satisfies PersistedWorksheetStoreEntry;
       assertUniqueSelpickOrderNumbers(
-        persistedEntry.items,
+        persistedEntry.mirrorItems,
         "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
       );
 
@@ -1998,7 +2094,7 @@ export class CoupangShipmentWorksheetStore {
       registerSelpickOrderNumbersLegacy(
         registry,
         counters,
-        persistedEntry.items.map((row) => row.selpickOrderNumber),
+        persistedEntry.mirrorItems.map((row) => row.selpickOrderNumber),
       );
       finalizeLegacySelpickState(nextData, registry, counters);
       await this.persistLegacy(nextData);
@@ -2011,14 +2107,13 @@ export class CoupangShipmentWorksheetStore {
     const timestamp = new Date();
     const sheetId = `sheet:${input.storeId}`;
     const currentSheet = await this.getStoreSheet(input.storeId);
-    const mergedBySourceKey = new Map(
-      currentSheet.items.map((row) => [row.sourceKey, row] as const),
+    const mergedActiveItems = mergeWorksheetRowsBySourceKey(currentSheet.items, nextEntry.items);
+    const mergedMirrorItems = mergeWorksheetRowsBySourceKey(
+      currentSheet.mirrorItems,
+      nextEntry.mirrorItems,
     );
-    for (const row of nextEntry.items) {
-      mergedBySourceKey.set(row.sourceKey, row);
-    }
     assertUniqueSelpickOrderNumbers(
-      Array.from(mergedBySourceKey.values()),
+      mergedMirrorItems,
       "셀픽주문번호 중복이 있어 워크시트 저장을 진행할 수 없습니다.",
     );
 
@@ -2032,6 +2127,7 @@ export class CoupangShipmentWorksheetStore {
           collectedAt: nextEntry.collectedAt,
           source: nextEntry.source,
           message: nextEntry.message,
+          mirrorItems: mergedMirrorItems,
           syncState: nextEntry.syncState,
           syncSummary: nextEntry.syncSummary,
         },
@@ -2053,14 +2149,16 @@ export class CoupangShipmentWorksheetStore {
         const nextSortOrder =
           existingRows.reduce((max, row) => Math.max(max, row.sortOrder), -1) + 1;
 
-        await syncSelpickStateForRowsTx(tx, nextEntry.items);
+        await syncSelpickStateForRowsTx(tx, mergedMirrorItems);
         await upsertWorksheetRowsInChunks(tx, {
           sheetId,
           storeId: input.storeId,
-          items: nextEntry.items,
+          items: mergedActiveItems,
           nextSortOrder,
           existingSortOrderBySourceKey,
         });
+      } else {
+        await syncSelpickStateForRowsTx(tx, mergedMirrorItems);
       }
     });
 
@@ -2098,6 +2196,101 @@ export class CoupangShipmentWorksheetStore {
       .where(eq(coupangShipmentArchiveRows.storeId, storeId));
 
     return Array.from(new Set(rows.map((row) => row.sourceKey)));
+  }
+
+  async restoreArchivedRows(
+    input: RestoreArchivedCoupangShipmentWorksheetRowsInput,
+  ): Promise<RestoreArchivedCoupangShipmentWorksheetRowsResult> {
+    const sourceKeys = Array.from(
+      new Set(
+        input.sourceKeys
+          .map((value) => value.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const archiveReason = input.archiveReason ?? null;
+
+    if (!sourceKeys.length) {
+      return {
+        restoredCount: 0,
+        skippedCount: 0,
+        restoredSourceKeys: [],
+        items: [],
+      };
+    }
+
+    const matchesArchiveReason = (
+      row: Pick<CoupangShipmentArchiveRow, "archiveReason">,
+      expectedReason: CoupangShipmentArchiveReason | null,
+    ) => expectedReason === null || row.archiveReason === expectedReason;
+
+    if (this.legacyMode) {
+      const data = await this.loadLegacy();
+      const currentArchives = (data.archives[input.storeId] ?? []).map(normalizeArchiveRow);
+      const rowsToRestore = currentArchives.filter(
+        (row) =>
+          sourceKeys.includes(row.sourceKey) && matchesArchiveReason(row, archiveReason),
+      );
+      const restoredSourceKeys = Array.from(new Set(rowsToRestore.map((row) => row.sourceKey)));
+
+      if (restoredSourceKeys.length) {
+        await this.persistLegacy({
+          version: 2,
+          stores: { ...data.stores },
+          archives: {
+            ...data.archives,
+            [input.storeId]: currentArchives.filter(
+              (row) => !restoredSourceKeys.includes(row.sourceKey),
+            ),
+          },
+          selpickRegistry: [...data.selpickRegistry],
+          selpickCounters: { ...data.selpickCounters },
+        });
+      }
+
+      return {
+        restoredCount: restoredSourceKeys.length,
+        skippedCount: sourceKeys.length - restoredSourceKeys.length,
+        restoredSourceKeys,
+        items: rowsToRestore,
+      };
+    }
+
+    await this.ensureInitialized();
+    const database = assertWorkDataDatabaseEnabled();
+    const selectedRows = await database
+      .select()
+      .from(coupangShipmentArchiveRows)
+      .where(
+        and(
+          eq(coupangShipmentArchiveRows.storeId, input.storeId),
+          inArray(coupangShipmentArchiveRows.sourceKey, sourceKeys),
+        ),
+      );
+
+    const rowsToRestore = selectedRows
+      .map((row) => restoreArchiveRowFromDatabaseRow(row))
+      .filter((row) => matchesArchiveReason(row, archiveReason));
+    const rowIdsToDelete = rowsToRestore.map((row) => row.id);
+    const restoredSourceKeys = Array.from(new Set(rowsToRestore.map((row) => row.sourceKey)));
+
+    if (rowIdsToDelete.length) {
+      await database
+        .delete(coupangShipmentArchiveRows)
+        .where(
+          and(
+            eq(coupangShipmentArchiveRows.storeId, input.storeId),
+            inArray(coupangShipmentArchiveRows.id, rowIdsToDelete),
+          ),
+        );
+    }
+
+    return {
+      restoredCount: restoredSourceKeys.length,
+      skippedCount: sourceKeys.length - restoredSourceKeys.length,
+      restoredSourceKeys,
+      items: rowsToRestore,
+    };
   }
 
   async archiveRows(input: ArchiveCoupangShipmentWorksheetRowsInput): Promise<ArchiveCoupangShipmentWorksheetRowsResult> {
@@ -2236,16 +2429,20 @@ export class CoupangShipmentWorksheetStore {
     if (this.legacyMode) {
       const current = await this.getStoreSheet(input.storeId);
       assertUniqueSelpickOrderNumbers(
-        current.items,
+        current.mirrorItems,
         "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 워크시트 수정을 진행할 수 없습니다.",
       );
-      const rows = [...current.items];
-      const rowIndexBySourceKey = new Map(rows.map((row, index) => [row.sourceKey, index] as const));
+      const activeRows = [...current.items];
+      const mirrorRows = [...current.mirrorItems];
+      const rowIndexBySourceKey = new Map(
+        activeRows.map((row, index) => [row.sourceKey, index] as const),
+      );
       const rowIndexBySelpickOrderNumber = new Map(
-        rows.map((row, index) => [row.selpickOrderNumber, index] as const),
+        activeRows.map((row, index) => [row.selpickOrderNumber, index] as const),
       );
       const missingKeys: string[] = [];
       const touchedSourceKeys: string[] = [];
+      const touchedRowBySourceKey = new Map<string, CoupangShipmentWorksheetRow>();
 
       for (const patch of input.items) {
         const index =
@@ -2263,64 +2460,21 @@ export class CoupangShipmentWorksheetStore {
           continue;
         }
 
-        const existingRow = rows[index];
-        const nextRow: CoupangShipmentWorksheetRow = {
-          ...existingRow,
-          receiverName:
-            patch.receiverName !== undefined
-              ? patch.receiverName ?? existingRow.receiverName
-              : existingRow.receiverName,
-          receiverBaseName:
-            patch.receiverBaseName !== undefined
-              ? patch.receiverBaseName
-              : existingRow.receiverBaseName,
-          personalClearanceCode:
-            patch.personalClearanceCode !== undefined
-              ? patch.personalClearanceCode
-              : existingRow.personalClearanceCode,
-          deliveryCompanyCode:
-            patch.deliveryCompanyCode !== undefined
-              ? (patch.deliveryCompanyCode ?? "").trim()
-              : existingRow.deliveryCompanyCode,
-          invoiceNumber:
-            patch.invoiceNumber !== undefined
-              ? (patch.invoiceNumber ?? "").trim()
-              : existingRow.invoiceNumber,
-          deliveryRequest:
-            patch.deliveryRequest !== undefined ? patch.deliveryRequest : existingRow.deliveryRequest,
-          invoiceTransmissionStatus:
-            patch.invoiceTransmissionStatus !== undefined
-              ? patch.invoiceTransmissionStatus
-              : existingRow.invoiceTransmissionStatus,
-          invoiceTransmissionMessage:
-            patch.invoiceTransmissionMessage !== undefined
-              ? patch.invoiceTransmissionMessage
-              : existingRow.invoiceTransmissionMessage,
-          invoiceTransmissionAt:
-            patch.invoiceTransmissionAt !== undefined
-              ? patch.invoiceTransmissionAt
-              : existingRow.invoiceTransmissionAt,
-          exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : existingRow.exportedAt,
-          invoiceAppliedAt:
-            patch.invoiceAppliedAt !== undefined
-              ? patch.invoiceAppliedAt
-              : existingRow.invoiceAppliedAt,
-          orderStatus:
-            patch.orderStatus !== undefined ? patch.orderStatus : existingRow.orderStatus,
-          availableActions:
-            patch.availableActions !== undefined
-              ? patch.availableActions ?? []
-              : existingRow.availableActions,
-          updatedAt: new Date().toISOString(),
-        };
+        const nextRow = applyWorksheetRowPatch(activeRows[index], patch, new Date().toISOString());
 
-        rows[index] = nextRow;
+        activeRows[index] = nextRow;
+        touchedRowBySourceKey.set(nextRow.sourceKey, nextRow);
         touchedSourceKeys.push(nextRow.sourceKey);
       }
 
+      const patchedMirrorRows = mirrorRows.map(
+        (row) => touchedRowBySourceKey.get(row.sourceKey) ?? row,
+      );
+
       const sheet = await this.setStoreSheet({
         storeId: input.storeId,
-        items: rows,
+        items: activeRows,
+        mirrorItems: patchedMirrorRows,
         collectedAt: current.collectedAt,
         source: current.source,
         message: current.message,
@@ -2339,7 +2493,7 @@ export class CoupangShipmentWorksheetStore {
     const database = assertWorkDataDatabaseEnabled();
     const currentSheet = await this.getStoreSheet(input.storeId);
     assertUniqueSelpickOrderNumbers(
-      currentSheet.items,
+      currentSheet.mirrorItems,
       "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 워크시트 수정을 진행할 수 없습니다.",
     );
     const sourceKeys = Array.from(
@@ -2392,6 +2546,7 @@ export class CoupangShipmentWorksheetStore {
     const timestamp = new Date();
     const touchedSourceKeys: string[] = [];
     const missingKeys: string[] = [];
+    const touchedRowBySourceKey = new Map<string, CoupangShipmentWorksheetRow>();
 
     await database.transaction(async (tx) => {
       for (const patch of input.items) {
@@ -2410,56 +2565,11 @@ export class CoupangShipmentWorksheetStore {
           continue;
         }
 
-        const existingRow = restoreWorksheetRowFromDatabaseRow(databaseRow);
-        const nextRow: CoupangShipmentWorksheetRow = {
-          ...existingRow,
-          receiverName:
-            patch.receiverName !== undefined
-              ? patch.receiverName ?? existingRow.receiverName
-              : existingRow.receiverName,
-          receiverBaseName:
-            patch.receiverBaseName !== undefined
-              ? patch.receiverBaseName
-              : existingRow.receiverBaseName,
-          personalClearanceCode:
-            patch.personalClearanceCode !== undefined
-              ? patch.personalClearanceCode
-              : existingRow.personalClearanceCode,
-          deliveryCompanyCode:
-            patch.deliveryCompanyCode !== undefined
-              ? (patch.deliveryCompanyCode ?? "").trim()
-              : existingRow.deliveryCompanyCode,
-          invoiceNumber:
-            patch.invoiceNumber !== undefined
-              ? (patch.invoiceNumber ?? "").trim()
-              : existingRow.invoiceNumber,
-          deliveryRequest:
-            patch.deliveryRequest !== undefined ? patch.deliveryRequest : existingRow.deliveryRequest,
-          invoiceTransmissionStatus:
-            patch.invoiceTransmissionStatus !== undefined
-              ? patch.invoiceTransmissionStatus
-              : existingRow.invoiceTransmissionStatus,
-          invoiceTransmissionMessage:
-            patch.invoiceTransmissionMessage !== undefined
-              ? patch.invoiceTransmissionMessage
-              : existingRow.invoiceTransmissionMessage,
-          invoiceTransmissionAt:
-            patch.invoiceTransmissionAt !== undefined
-              ? patch.invoiceTransmissionAt
-              : existingRow.invoiceTransmissionAt,
-          exportedAt: patch.exportedAt !== undefined ? patch.exportedAt : existingRow.exportedAt,
-          invoiceAppliedAt:
-            patch.invoiceAppliedAt !== undefined
-              ? patch.invoiceAppliedAt
-              : existingRow.invoiceAppliedAt,
-          orderStatus:
-            patch.orderStatus !== undefined ? patch.orderStatus : existingRow.orderStatus,
-          availableActions:
-            patch.availableActions !== undefined
-              ? patch.availableActions ?? []
-              : existingRow.availableActions,
-          updatedAt: timestamp.toISOString(),
-        };
+        const nextRow = applyWorksheetRowPatch(
+          restoreWorksheetRowFromDatabaseRow(databaseRow),
+          patch,
+          timestamp.toISOString(),
+        );
 
         await tx
           .update(coupangShipmentRows)
@@ -2480,13 +2590,20 @@ export class CoupangShipmentWorksheetStore {
           })
           .where(eq(coupangShipmentRows.id, databaseRow.id));
 
+        touchedRowBySourceKey.set(nextRow.sourceKey, nextRow);
         touchedSourceKeys.push(nextRow.sourceKey);
       }
 
       if (touchedSourceKeys.length) {
+        const patchedMirrorItems = currentSheet.mirrorItems.map(
+          (row) => touchedRowBySourceKey.get(row.sourceKey) ?? row,
+        );
         await tx
           .update(coupangShipmentSheets)
-          .set({ updatedAt: timestamp })
+          .set({
+            mirrorItemsJson: patchedMirrorItems,
+            updatedAt: timestamp,
+          })
           .where(eq(coupangShipmentSheets.storeId, input.storeId));
       }
     });

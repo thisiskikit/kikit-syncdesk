@@ -255,6 +255,7 @@ export const coupangShipmentSheets = pgTable(
     collectedAt: timestamp("collected_at", { withTimezone: true }),
     source: text("source").notNull().default("live"),
     message: text("message"),
+    mirrorItemsJson: jsonb("mirror_items_json").notNull().default([]),
     syncStateJson: jsonb("sync_state_json").notNull().default({}),
     syncSummaryJson: jsonb("sync_summary_json"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

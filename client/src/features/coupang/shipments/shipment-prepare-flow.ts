@@ -70,6 +70,7 @@ export function resolvePrepareAcceptedOrdersPlan(input: {
       ? buildShipmentWorksheetAuditDetails(input.auditResponse, {
           limit: 8,
           includeHidden: false,
+          includeAutoApplied: false,
         })
       : []),
   ].slice(0, 8);
@@ -104,6 +105,7 @@ export function buildPrepareAcceptedOrdersFeedback(input: {
       ? buildShipmentWorksheetAuditDetails(input.auditResponse, {
           limit: 8,
           includeHidden: false,
+          includeAutoApplied: false,
         })
       : []),
   ].slice(0, 8);

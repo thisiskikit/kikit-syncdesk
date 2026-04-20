@@ -399,6 +399,7 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
     left.createdAtTo === right.createdAtTo &&
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
+    left.datasetMode === right.datasetMode &&
     left.scope === right.scope &&
     left.decisionStatus === right.decisionStatus &&
     left.priorityCard === right.priorityCard &&
@@ -414,6 +415,7 @@ function buildWorksheetViewUrl(input: {
   storeId: string;
   createdAtFrom: string;
   createdAtTo: string;
+  datasetMode: FilterState["datasetMode"];
   scope: CoupangShipmentWorksheetViewScope;
   decisionStatus: FilterState["decisionStatus"];
   priorityCard: FilterState["priorityCard"];
@@ -432,6 +434,7 @@ function buildWorksheetViewUrl(input: {
     storeId: input.storeId,
     createdAtFrom: input.createdAtFrom,
     createdAtTo: input.createdAtTo,
+    datasetMode: input.datasetMode,
     scope: input.scope,
     page: String(input.page),
     pageSize: String(input.pageSize),
@@ -1260,22 +1263,28 @@ function resolveWorksheetOrderStatus(
   });
 }
 
-function getShipmentArchiveReasonLabel(
-  row: Pick<CoupangShipmentArchiveRow, "archiveReason">,
+function getShipmentArchiveReasonLabelByValue(
+  archiveReason: CoupangShipmentArchiveRow["archiveReason"] | null | undefined,
 ) {
-  if (row.archiveReason === "cancel_completed") {
+  if (archiveReason === "cancel_completed") {
     return "취소완료 자동보관";
   }
 
-  if (row.archiveReason === "return_completed") {
+  if (archiveReason === "return_completed") {
     return "반품완료 자동보관";
   }
 
-  if (row.archiveReason === "not_found_in_coupang") {
+  if (archiveReason === "not_found_in_coupang") {
     return "쿠팡 미조회 제외";
   }
 
   return "일반 보관";
+}
+
+function getShipmentArchiveReasonLabel(
+  row: Pick<CoupangShipmentArchiveRow, "archiveReason">,
+) {
+  return getShipmentArchiveReasonLabelByValue(row.archiveReason);
 }
 
 function getWorksheetStatusPresentation(row: ShipmentStatusCarrier) {
@@ -1795,6 +1804,7 @@ export default function CoupangShipmentsPage() {
   ]);
 
   const deferredQuery = useDeferredValue(filters.query);
+  const isMirrorWorksheetView = filters.datasetMode === "mirror";
   const effectiveWorksheetScope: CoupangShipmentWorksheetViewScope =
     activeTab === "confirmed" ? "confirmed" : filters.scope;
   const activeSortColumn = sortColumns[0] ?? null;
@@ -1845,6 +1855,7 @@ export default function CoupangShipmentsPage() {
       filters.selectedStoreId,
       filters.createdAtFrom,
       filters.createdAtTo,
+      filters.datasetMode,
       effectiveWorksheetScope,
       worksheetPage,
       worksheetPageSize,
@@ -1865,6 +1876,7 @@ export default function CoupangShipmentsPage() {
           storeId: filters.selectedStoreId,
           createdAtFrom: filters.createdAtFrom,
           createdAtTo: filters.createdAtTo,
+          datasetMode: filters.datasetMode,
           scope: effectiveWorksheetScope,
           decisionStatus: filters.decisionStatus,
           priorityCard: filters.priorityCard,
@@ -1978,6 +1990,7 @@ export default function CoupangShipmentsPage() {
     setSelectedCell(null);
   }, [
     filters.selectedStoreId,
+    filters.datasetMode,
     filters.scope,
     filters.decisionStatus,
     filters.priorityCard,
@@ -2079,10 +2092,13 @@ export default function CoupangShipmentsPage() {
     ],
   );
   useEffect(() => {
-    if (quickCollectFocus && quickCollectFocus.filterSignature !== quickCollectFocusSignature) {
+    if (
+      quickCollectFocus &&
+      (isMirrorWorksheetView || quickCollectFocus.filterSignature !== quickCollectFocusSignature)
+    ) {
       setQuickCollectFocus(null);
     }
-  }, [quickCollectFocus, quickCollectFocusSignature]);
+  }, [isMirrorWorksheetView, quickCollectFocus, quickCollectFocusSignature]);
   const quickCollectFocusRows = useMemo(
     () =>
       quickCollectFocus
@@ -2098,7 +2114,7 @@ export default function CoupangShipmentsPage() {
     () =>
       resolveQuickCollectFocusViewState({
         activeTab,
-        quickCollectFocus,
+        quickCollectFocus: isMirrorWorksheetView ? null : quickCollectFocus,
         filterSignature: quickCollectFocusSignature,
         rows: quickCollectFocusRows,
         draftRows,
@@ -2121,6 +2137,7 @@ export default function CoupangShipmentsPage() {
       baseActiveSheet,
       draftRows,
       effectiveWorksheetScope,
+      isMirrorWorksheetView,
       quickCollectFocus,
       quickCollectFocusRows,
       quickCollectFocusSignature,
@@ -2854,7 +2871,18 @@ export default function CoupangShipmentsPage() {
       : detailRow
         ? getCoupangCustomerServiceStateText(detailRow.customerServiceState)
         : null);
-  const detailRiskSummary = detailRow?.riskSummary ?? [];
+  const detailArchiveReason =
+    detailRow && "archiveReason" in detailRow ? detailRow.archiveReason : null;
+  const detailExcludedFromActiveReason = detailRow?.excludedFromActiveReason ?? null;
+  const detailExcludedFromActiveReasonLabel = detailExcludedFromActiveReason
+    ? getShipmentArchiveReasonLabelByValue(detailExcludedFromActiveReason)
+    : null;
+  const detailRiskSummary = [
+    ...(detailRow?.riskSummary ?? []),
+    ...(detailExcludedFromActiveReasonLabel
+      ? [`active ?묒뾽 ?몃줈?먯꽌 ?쒖쇅??${detailExcludedFromActiveReasonLabel}`]
+      : []),
+  ];
   const detailResolvedHandoffLinks = useMemo(() => {
     if (detailRow?.nextHandoffLinks?.length) {
       return resolveShipmentHandoffLinks({
@@ -2907,6 +2935,10 @@ export default function CoupangShipmentsPage() {
     ],
     " · ",
   );
+  const detailMissingDetectedAt = detailRow?.missingDetectedAt ?? null;
+  const detailMissingDetectionSource = detailRow?.missingDetectionSource ?? null;
+  const detailLastSeenOrderStatus = detailRow?.lastSeenOrderStatus ?? null;
+  const detailLastSeenIssueSummary = detailRow?.lastSeenIssueSummary ?? null;
   const detailWorksheetRows = detailRow
     ? [
         { label: "주문번호", value: detailRow.orderId },
@@ -2963,6 +2995,34 @@ export default function CoupangShipmentsPage() {
           label: "CS 요약",
           value: formatText(detailCustomerServiceSnapshot?.customerServiceIssueSummary),
         },
+        ...(detailExcludedFromActiveReasonLabel
+          ? [
+              {
+                label: "active ?쒖쇅 ?ъ쑀",
+                value: detailExcludedFromActiveReasonLabel,
+              },
+            ]
+          : []),
+        ...(detailArchiveReason === "not_found_in_coupang" || detailRow.missingInCoupang
+          ? [
+              {
+                label: "쿠팡 미조회 감지",
+                value: formatDateTimeLabel(detailMissingDetectedAt),
+              },
+              {
+                label: "미조회 감지 경로",
+                value: detailMissingDetectionSource ?? "-",
+              },
+              {
+                label: "마지막 쿠팡 상태",
+                value: detailLastSeenOrderStatus ?? "-",
+              },
+              {
+                label: "마지막 이슈 요약",
+                value: formatText(detailLastSeenIssueSummary),
+              },
+            ]
+          : []),
         { label: "클레임 조회 범위", value: detailClaimLookupRange },
         { label: "출력 메모", value: formatText(detailOrderDetail?.parcelPrintMessage) },
         { label: "송장 전송 메모", value: formatText(detailRow.invoiceTransmissionMessage) },
@@ -3190,6 +3250,7 @@ export default function CoupangShipmentsPage() {
   }, [feedback, infoBanner, isFallback, syncBanner]);
   const isArchiveTab = activeTab === "archive";
   const isConfirmedTab = activeTab === "confirmed";
+  const isReadOnlyWorksheetView = isConfirmedTab || isMirrorWorksheetView;
   const transmitActionLabel = "송장 전송하기";
   const transmitActionBusyLabel =
     busyAction === "invoice-transmit" || busyAction === "execute"
@@ -3197,6 +3258,7 @@ export default function CoupangShipmentsPage() {
       : transmitActionLabel;
   const transmitActionDisabled =
     !filters.selectedStoreId ||
+    isReadOnlyWorksheetView ||
     !(
       (activeSheet?.invoiceReadyCount ?? 0) ||
       invoiceReadyRows.length ||
@@ -3205,19 +3267,21 @@ export default function CoupangShipmentsPage() {
     isFallback ||
     busyAction !== null;
   const selectedTransmitActionDisabled =
-    !selectedReadyRows.length || isFallback || busyAction !== null;
+    isReadOnlyWorksheetView || !selectedReadyRows.length || isFallback || busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const reconcileLiveActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const purchaseConfirmActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const prepareActionDisabled =
     !filters.selectedStoreId ||
-    isConfirmedTab ||
+    isReadOnlyWorksheetView ||
     isFallback ||
     busyAction !== null;
   const refreshActionDisabled =
     !filters.selectedStoreId || (isArchiveTab ? archiveQuery.isFetching : worksheetQuery.isFetching) || busyAction !== null;
   const openInvoiceInputDisabled =
-    isConfirmedTab || !(activeSheet?.totalRowCount ?? effectiveDraftRows.length) || busyAction !== null;
+    isReadOnlyWorksheetView ||
+    !(activeSheet?.totalRowCount ?? effectiveDraftRows.length) ||
+    busyAction !== null;
   const openExcelExportDisabled = !selectedExportRows.length || busyAction !== null;
   const openNotExportedExcelExportDisabled =
     !(activeSheet?.outputCounts.notExported ?? 0) || busyAction !== null;
@@ -3234,6 +3298,7 @@ export default function CoupangShipmentsPage() {
 
   function buildCurrentWorksheetViewQuery() {
     return {
+      datasetMode: filters.datasetMode,
       scope: effectiveWorksheetScope,
       decisionStatus: activeDecisionStatus,
       priorityCard: filters.priorityCard,
@@ -3253,6 +3318,7 @@ export default function CoupangShipmentsPage() {
   function buildCurrentWorksheetFilterQuery() {
     const viewQuery = buildCurrentWorksheetViewQuery();
     return {
+      datasetMode: viewQuery.datasetMode,
       scope: viewQuery.scope,
       decisionStatus: viewQuery.decisionStatus,
       priorityCard: viewQuery.priorityCard,
@@ -3314,7 +3380,10 @@ export default function CoupangShipmentsPage() {
         return null;
       }
 
-      const warning = response.missingCount > 0 || response.hiddenCount > 0;
+      await refetchWorksheetView();
+      void archiveQuery.refetch();
+
+      const warning = response.exceptionCount > 0;
       const details = buildShipmentWorksheetAuditDetails(response);
 
       setAuditResult(response);
@@ -3327,7 +3396,7 @@ export default function CoupangShipmentsPage() {
       });
       finishLocalOperation(localToastId, {
         status: warning ? "warning" : "success",
-        summary: `누락 ${response.missingCount}건 / 숨김 ${response.hiddenCount}건`,
+        summary: `자동 반영 ${response.autoAppliedCount}건 / 예외 ${response.exceptionCount}건 / 숨김 ${response.hiddenInfoCount}건`,
       });
       const finishedToastId = localToastId;
       if (finishedToastId) {
@@ -4031,14 +4100,14 @@ export default function CoupangShipmentsPage() {
   );
   const gridColumns = useMemo(
     () =>
-      isConfirmedTab
+      isReadOnlyWorksheetView
         ? columns.map((column) => ({
             ...column,
             editable: false,
             renderEditCell: undefined,
           }))
         : columns,
-    [columns, isConfirmedTab],
+    [columns, isReadOnlyWorksheetView],
   );
 
   function handlePageSelectedRowsChange(nextSelectedRows: ReadonlySet<string>) {
@@ -4061,7 +4130,7 @@ export default function CoupangShipmentsPage() {
     sourceRow: CoupangShipmentWorksheetRow;
     targetRow: CoupangShipmentWorksheetRow;
   }) {
-    if (isConfirmedTab) {
+    if (isReadOnlyWorksheetView) {
       return event.targetRow;
     }
 
@@ -4186,8 +4255,10 @@ export default function CoupangShipmentsPage() {
         try {
           autoAuditResponse = await requestShipmentAuditMissingForCurrentFilters();
           if (autoAuditResponse) {
+            await refetchWorksheetView();
+            void archiveQuery.refetch();
             setAuditResult(autoAuditResponse);
-            if (autoAuditResponse.missingCount > 0 || autoAuditResponse.hiddenCount > 0) {
+            if (autoAuditResponse.exceptionCount > 0) {
               setIsAuditDialogOpen(true);
             }
           }
@@ -4310,6 +4381,16 @@ export default function CoupangShipmentsPage() {
   ]);
 
   async function saveWorksheetChanges() {
+    if (isReadOnlyWorksheetView) {
+      setFeedback({
+        type: "warning",
+        title: "읽기 전용 목록",
+        message: "쿠팡 기준 목록이나 구매확정 탭에서는 직접 수정할 수 없습니다. 실제 작업 대상 목록으로 돌아가서 저장해 주세요.",
+        details: [],
+      });
+      return false;
+    }
+
     if (!filters.selectedStoreId || !dirtyCount) {
       return true;
     }
@@ -5076,7 +5157,7 @@ export default function CoupangShipmentsPage() {
     nextVisibleRows: CoupangShipmentWorksheetRow[],
     data: RowsChangeData<CoupangShipmentWorksheetRow>,
   ) {
-    if (isConfirmedTab) {
+    if (isReadOnlyWorksheetView) {
       return;
     }
 
@@ -5109,7 +5190,7 @@ export default function CoupangShipmentsPage() {
   }
 
   async function handleGridPaste(event: React.ClipboardEvent<HTMLDivElement>) {
-    if (isConfirmedTab) {
+    if (isReadOnlyWorksheetView) {
       return;
     }
 
@@ -5260,7 +5341,7 @@ export default function CoupangShipmentsPage() {
     }
 
     const config = columnConfigById.get(columnKey);
-    if (!isConfirmedTab && config && isGridEditableSource(config.source, effectiveWorksheetMode)) {
+    if (!isReadOnlyWorksheetView && config && isGridEditableSource(config.source, effectiveWorksheetMode)) {
       return;
     }
 
@@ -5290,9 +5371,9 @@ export default function CoupangShipmentsPage() {
       openExcelExportDisabled={openExcelExportDisabled}
       openNotExportedExcelExportDisabled={openNotExportedExcelExportDisabled}
       transmitActionBusyLabel={transmitActionBusyLabel}
-      dirtyCount={dirtyCount}
+      dirtyCount={isReadOnlyWorksheetView ? 0 : dirtyCount}
       isFallback={isFallback}
-      selectedRowsCount={selectedRows.length}
+      selectedRowsCount={isReadOnlyWorksheetView ? 0 : selectedRows.length}
       selectedExportBlockedRowsCount={selectedExportBlockedRows.length}
       selectedInvoiceBlockedRowsCount={selectedInvoiceBlockedRows.length}
       notExportedCount={activeSheet?.outputCounts.notExported ?? 0}
@@ -5363,6 +5444,7 @@ export default function CoupangShipmentsPage() {
           setQuickCollectFocus(null);
           setWorksheetPage(1);
         },
+        onOpenMissingInCoupang: () => changeWorkspaceTab("archive"),
         onPatchFilters: (patch) =>
           setFilters((current) => ({
             ...current,
@@ -5371,6 +5453,7 @@ export default function CoupangShipmentsPage() {
         onResetFilters: () =>
           setFilters((current) => ({
             ...current,
+            datasetMode: "active",
             query: "",
             scope: "all",
             decisionStatus: "all",
@@ -5428,14 +5511,16 @@ export default function CoupangShipmentsPage() {
 
   const auditNode = auditResult ? (
     <div
-      className={`feedback${auditResult.missingCount > 0 || auditResult.hiddenCount > 0 ? " warning" : " success"}`}
+      className={`feedback${auditResult.exceptionCount > 0 ? " warning" : " success"}`}
     >
       <strong>누락 검수 결과</strong>
       <div className="muted">{auditResult.message ?? summarizeShipmentWorksheetAuditResult(auditResult)}</div>
       <div className="toolbar" style={{ justifyContent: "space-between", marginTop: 12 }}>
         <div className="muted">
-          live {formatNumber(auditResult.liveCount)}건 / 누락 {formatNumber(auditResult.missingCount)}건
-          / 현재 뷰 숨김 {formatNumber(auditResult.hiddenCount)}건
+          live {formatNumber(auditResult.liveCount)}건 / 자동 반영{" "}
+          {formatNumber(auditResult.autoAppliedCount)}건 / 예외{" "}
+          {formatNumber(auditResult.exceptionCount)}건 / 현재 뷰 숨김{" "}
+          {formatNumber(auditResult.hiddenInfoCount)}건
         </div>
         <button className="button ghost" onClick={() => setIsAuditDialogOpen(true)}>
           상세 보기
@@ -5468,7 +5553,7 @@ export default function CoupangShipmentsPage() {
       worksheet={{
         invoiceModeNotice,
         detailGuideNotice,
-        readOnly: isConfirmedTab,
+        readOnly: isReadOnlyWorksheetView,
         worksheetMode: effectiveWorksheetMode,
         activeColumnPreset,
         isLoading: worksheetQuery.isLoading && !activeSheet,
@@ -5482,10 +5567,10 @@ export default function CoupangShipmentsPage() {
         pageSizeOptions: SHIPMENT_WORKSHEET_PAGE_SIZE_OPTIONS,
         columns: gridColumns,
         rows: visibleRows,
-        selectedRows: isConfirmedTab ? new Set<string>() : pageSelectedRowIds,
+        selectedRows: isReadOnlyWorksheetView ? new Set<string>() : pageSelectedRowIds,
         sortColumns,
         dirtySourceKeys: dirtySet,
-        onWorksheetModeChange: isConfirmedTab ? () => undefined : setWorksheetMode,
+        onWorksheetModeChange: isReadOnlyWorksheetView ? () => undefined : setWorksheetMode,
         onApplyColumnPreset: applyColumnPreset,
         onOpenSettings: () => {
           setSettingsReturnTab(activeTab === "settings" ? "worksheet" : activeTab);
@@ -5499,8 +5584,8 @@ export default function CoupangShipmentsPage() {
         onNextPage: () => setWorksheetPage((current) => Math.min(worksheetTotalPages, current + 1)),
         onPasteCapture: handleGridPaste,
         onSortColumnsChange: (nextSortColumns) => setSortColumns(nextSortColumns.slice(-1)),
-        onSelectedRowsChange: isConfirmedTab ? () => undefined : handlePageSelectedRowsChange,
-        onRowsChange: isConfirmedTab ? () => undefined : handleVisibleRowsChange,
+        onSelectedRowsChange: isReadOnlyWorksheetView ? () => undefined : handlePageSelectedRowsChange,
+        onRowsChange: isReadOnlyWorksheetView ? () => undefined : handleVisibleRowsChange,
         onFill: handleGridFill,
         onCellClick: handleGridCellClick,
         onSelectedCellChange: (args: CellSelectArgs<CoupangShipmentWorksheetRow>) =>

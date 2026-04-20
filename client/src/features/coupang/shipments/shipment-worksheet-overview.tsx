@@ -51,6 +51,7 @@ type ShipmentWorksheetOverviewProps = {
   outputStatusOptions: readonly StatusOption<OutputStatusCardKey>[];
   orderStatusOptions: readonly StatusOption<OrderStatusCardKey>[];
   onClearQuickCollectFocus: () => void;
+  onOpenMissingInCoupang: () => void;
   onPatchFilters: (patch: Partial<FilterState>) => void;
   onResetFilters: () => void;
   onToggleDetailFilters: () => void;
@@ -108,23 +109,23 @@ const ACTION_QUEUE_COPY: Record<
 > = {
   ready: {
     headline: "지금 바로 이어서 처리할 주문",
-    note: "상품준비중 처리나 송장 단계로 바로 이어갈 수 있는 주문입니다.",
+    note: "상품준비중 처리나 송장 후속 작업으로 바로 넘어갈 수 있는 주문입니다.",
   },
   invoice_waiting: {
-    headline: "송장 입력과 전송만 남은 주문",
-    note: "송장 입력 또는 전송 상태를 먼저 정리하면 바로 다음 단계로 넘어갑니다.",
+    headline: "송장 입력이나 전송이 먼저 필요한 주문",
+    note: "송장 정리만 끝나면 바로 다음 단계로 이어갈 수 있는 주문입니다.",
   },
   recheck: {
-    headline: "데이터와 상태를 다시 봐야 하는 주문",
+    headline: "데이터나 상태를 다시 확인해야 하는 주문",
     note: "송장 실패, stale snapshot, 누락 데이터처럼 재확인이 필요한 주문입니다.",
   },
   hold: {
-    headline: "CS 영향 때문에 잠시 멈춰야 하는 주문",
-    note: "즉시 실행보다 문의·영향 확인이 먼저 필요한 주문입니다.",
+    headline: "CS 영향 때문에 잠시 멈춰봐야 하는 주문",
+    note: "즉시 실행보다 문의나 영향 확인이 먼저 필요한 주문입니다.",
   },
   blocked: {
-    headline: "지금은 출고를 막아야 하는 주문",
-    note: "취소·반품·교환·출고중지 계열 이슈가 확인된 주문입니다.",
+    headline: "지금은 출고를 진행하면 안 되는 주문",
+    note: "취소, 반품, 교환, 출고중지 계열 신호가 확인된 주문입니다.",
   },
 };
 
@@ -132,10 +133,10 @@ const PRIORITY_COPY: Record<
   Exclude<CoupangShipmentWorksheetPriorityCardFilter, "all">,
   string
 > = {
-  shipment_stop_requested: "가장 먼저 멈춰야 하는 건입니다.",
-  same_day_dispatch: "오늘 출고 예정인데 아직 출고 단계로 못 넘어간 건입니다.",
-  dispatch_delayed: "예정일이 지났는데 아직 결제완료·상품준비중에 머문 건입니다.",
-  long_in_transit: "배송지시 또는 배송중 상태가 30일을 넘긴 건입니다.",
+  shipment_stop_requested: "가장 먼저 멈춰야 하는 주문입니다.",
+  same_day_dispatch: "오늘 출고 예정인데 아직 출고 전 단계에 머물러 있는 주문입니다.",
+  dispatch_delayed: "출고 예정일이 지났는데도 아직 결제완료 또는 상품준비중인 주문입니다.",
+  long_in_transit: "배송지시 또는 배송중 상태가 30일을 넘긴 주문입니다.",
 };
 
 function formatQueuePreviewMeta(item: {
@@ -174,7 +175,7 @@ function buildMirrorSyncNotice(input: {
 
   const partialCountLabel = formatNumber(input.partialCount);
   const syncRangeSuffix = input.requirement.syncRangeLabel
-    ? ` 최근 수집 범위는 ${input.requirement.syncRangeLabel}입니다.`
+    ? ` 최근 동기화 범위는 ${input.requirement.syncRangeLabel}입니다.`
     : "";
   const prefix = input.autoSyncing
     ? "자동 쿠팡 기준 재동기화를 실행 중입니다."
@@ -183,49 +184,39 @@ function buildMirrorSyncNotice(input: {
   switch (input.requirement.reason) {
     case "fallback":
       return {
-        title: input.autoSyncing
-          ? "쿠팡 기준 재동기화 중"
-          : "쿠팡 기준 재동기화 필요",
+        title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 현재 응답이 fallback이라 메인 숫자를 확정할 수 없습니다.` +
-          ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
+          `${prefix} 현재 응답이 fallback이라 메인 숫자를 확정할 수 없습니다. ` +
+          `지금 보이는 ${partialCountLabel}건은 확정 집계가 아닙니다.${syncRangeSuffix}`,
       };
     case "missing_summary":
       return {
-        title: input.autoSyncing
-          ? "쿠팡 기준 재동기화 중"
-          : "쿠팡 기준 재동기화 필요",
+        title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 현재 선택 기간의 전체 수집 이력이 없어 메인 숫자를 확정할 수 없습니다.` +
-          ` 지금 보이는 ${partialCountLabel}건은 부분 미러입니다.`,
+          `${prefix} 현재 선택 기간에 전체 수집 이력이 없어 메인 숫자를 확정할 수 없습니다. ` +
+          `지금 보이는 ${partialCountLabel}건은 부분 미러입니다.`,
       };
     case "degraded_sync":
       return {
-        title: input.autoSyncing
-          ? "쿠팡 기준 재동기화 중"
-          : "쿠팡 기준 재동기화 필요",
+        title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 최근 전체 수집이 부분 실패 상태라 메인 숫자를 확정할 수 없습니다.` +
-          ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
+          `${prefix} 최근 전체 수집이 부분 실패 상태라 메인 숫자를 확정할 수 없습니다. ` +
+          `지금 보이는 ${partialCountLabel}건은 확정 집계가 아닙니다.${syncRangeSuffix}`,
       };
     case "range_outside_sync":
       return {
-        title: input.autoSyncing
-          ? "쿠팡 기준 재동기화 중"
-          : "쿠팡 기준 재동기화 필요",
+        title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 선택 기간이 최근 수집 범위를 벗어나 있습니다.` +
-          ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
+          `${prefix} 선택 기간이 최근 동기화 범위를 벗어나 있습니다. ` +
+          `지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
       };
     case "partial_sync":
     default:
       return {
-        title: input.autoSyncing
-          ? "쿠팡 기준 재동기화 중"
-          : "쿠팡 기준 재동기화 필요",
+        title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 최근 수집이 빠른 수집 또는 증분 갱신이라 메인 숫자를 확정할 수 없습니다.` +
-          ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
+          `${prefix} 최근 수집이 빠른 수집 또는 증분 갱신이라 메인 숫자를 확정할 수 없습니다. ` +
+          `지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
       };
   }
 }
@@ -257,28 +248,51 @@ export default function ShipmentWorksheetOverview({
   outputStatusOptions,
   orderStatusOptions,
   onClearQuickCollectFocus,
+  onOpenMissingInCoupang,
   onPatchFilters,
   onResetFilters,
   onToggleDetailFilters,
 }: ShipmentWorksheetOverviewProps) {
+  const isMirrorDatasetMode = filters.datasetMode === "mirror";
   const priorityCounts = activeSheet?.priorityCounts;
   const pipelineCounts = activeSheet?.pipelineCounts;
   const issueCounts = activeSheet?.issueCounts;
+  const missingInCoupangCount = activeSheet?.missingInCoupangCount ?? 0;
   const decisionPreviewGroups = activeSheet?.decisionPreviewGroups;
+  const mirrorFilteredRowCount = activeSheet?.mirrorFilteredRowCount ?? 0;
+  const activeFilteredRowCount = activeSheet?.activeFilteredRowCount ?? 0;
+  const activeExcludedCount = Object.values(activeSheet?.activeExclusionCounts ?? {}).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
   const latestSyncRangeLabel = authoritativeCountsSyncRequirement.syncRangeLabel;
   const mirrorSyncNotice = buildMirrorSyncNotice({
     countsReady: authoritativeCountsReady,
     autoSyncing: authoritativeCountsAutoSyncing,
     requirement: authoritativeCountsSyncRequirement,
-    partialCount: activeSheet?.filteredRowCount ?? 0,
+    partialCount: mirrorFilteredRowCount,
   });
+
+  const applyMirrorDatasetFilters = (patch: Partial<FilterState>) => {
+    onPatchFilters({
+      datasetMode: "mirror",
+      ...patch,
+    });
+  };
+
+  const applyActiveDatasetFilters = (patch: Partial<FilterState>) => {
+    onPatchFilters({
+      datasetMode: "active",
+      ...patch,
+    });
+  };
 
   return (
     <>
       {quickCollectFocusActive ? (
         <div className="card shipment-focus-banner">
           <div>
-            <div className="shipment-focus-banner-label">방금 수집한 주문 먼저 보기</div>
+            <div className="shipment-focus-banner-label">방금 수집된 주문 먼저 보기</div>
             <div className="muted shipment-focus-banner-note">
               {quickCollectFocusMessage ??
                 `빠른 수집으로 들어온 ${formatNumber(quickCollectFocusCount)}건을 먼저 보여주고 있습니다.`}
@@ -302,21 +316,24 @@ export default function ShipmentWorksheetOverview({
           <div>
             <div className="shipment-filter-summary-label">출고 작업 허브</div>
             <strong>
-              {!authoritativeCountsReady ? "현재 메인 숫자는 쿠팡 기준 재동기화가 끝난 뒤 다시 계산합니다." : selectedStoreId
-                ? `현재 필터 전체 ${formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady)}건을 다음 액션 기준으로 다시 정리했습니다.`
-                : "스토어를 선택하면 현재 조건의 작업 큐를 바로 정리해서 보여줍니다."}
+              {!authoritativeCountsReady
+                ? "현재 메인 숫자는 쿠팡 기준 재동기화가 끝난 뒤 다시 계산됩니다."
+                : selectedStoreId
+                  ? `현재 필터 전체 ${formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady)}건을 다음 액션 기준으로 다시 정리했습니다.`
+                  : "스토어를 선택하면 현재 조건의 작업 흐름을 바로 정리해서 보여줍니다."}
             </strong>
             <div className="muted shipment-filter-summary-note">
-              상단 카드는 현재 필터 전체 기준이고, 아래 원본 테이블은 같은 기준을 유지한 채 페이지 단위로 보여줍니다.
+              상단 카드는 쿠팡 기준 recent 30일 미러를 기준으로 집계하고, 기본 표는 실제 작업 대상
+              active 목록을 보여줍니다.
             </div>
             {latestSyncRangeLabel ? (
               <div className="muted shipment-filter-summary-meta">
-                최근 수집 범위 {latestSyncRangeLabel}
+                최근 동기화 범위 {latestSyncRangeLabel}
               </div>
             ) : null}
             <div className="shipment-hub-quick-stats">
               <span className="shipment-hub-side-panel-chip strong">
-                필터 전체 {formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady, "재계산 중")}건
+                필터 전체 {formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady, "집계 중")}건
               </span>
               <span className="shipment-hub-side-panel-chip">
                 현재 페이지 {formatNumber(pageRowCount)}건
@@ -330,14 +347,26 @@ export default function ShipmentWorksheetOverview({
                   : "보조 필터 없음"}
               </span>
             </div>
+            <div className="muted shipment-filter-summary-meta">
+              {`mirror ${formatOverviewCount(mirrorFilteredRowCount, authoritativeCountsReady, "-")}건 · active ${formatNumber(activeFilteredRowCount)}건 · 제외 ${formatNumber(activeExcludedCount)}건 · 목록 모드 ${isMirrorDatasetMode ? "쿠팡 기준" : "실제 작업"}`}
+            </div>
           </div>
           <div className="shipment-filter-summary-actions">
+            {isMirrorDatasetMode ? (
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => applyActiveDatasetFilters({})}
+              >
+                실제 작업 목록
+              </button>
+            ) : null}
             <button
               type="button"
               className={`button${detailFiltersOpen ? "" : " ghost"}`}
               onClick={onToggleDetailFilters}
             >
-              {detailFiltersOpen ? "보조 필터 접기" : detailFilterToggleLabel}
+              {detailFiltersOpen ? "보조 필터 닫기" : detailFilterToggleLabel}
             </button>
             <button
               type="button"
@@ -352,7 +381,7 @@ export default function ShipmentWorksheetOverview({
 
         <div className="card shipment-filter-summary-card shipment-priority-strip">
           <div className="shipment-status-group">
-            <div className="shipment-status-group-label">먼저 확인</div>
+            <div className="shipment-status-group-label">우선 확인</div>
             <div className="shipment-status-pill-list">
               <button
                 type="button"
@@ -360,7 +389,7 @@ export default function ShipmentWorksheetOverview({
                   filters.priorityCard === "all" ? " active" : ""
                 }`}
                 aria-pressed={filters.priorityCard === "all"}
-                onClick={() => onPatchFilters({ priorityCard: "all" })}
+                onClick={() => applyMirrorDatasetFilters({ priorityCard: "all" })}
               >
                 <span>전체</span>
                 <strong>{formatOverviewCount(priorityCounts?.all ?? 0, authoritativeCountsReady)}</strong>
@@ -373,7 +402,9 @@ export default function ShipmentWorksheetOverview({
                     type="button"
                     className={`shipment-filter-pill attention${active ? " active" : ""}`}
                     aria-pressed={active}
-                    onClick={() => onPatchFilters({ priorityCard: active ? "all" : card })}
+                    onClick={() =>
+                      applyMirrorDatasetFilters({ priorityCard: active ? "all" : card })
+                    }
                     title={PRIORITY_COPY[card]}
                   >
                     <span>{getShipmentPriorityCardLabel(card)}</span>
@@ -385,7 +416,7 @@ export default function ShipmentWorksheetOverview({
               })}
             </div>
             <div className="muted shipment-filter-summary-note">
-              배송 상태를 덮어쓰지 않고, 우선 확인이 필요한 주문만 별도 묶음으로 먼저 보여줍니다.
+              배송 상태와 별개로 먼저 확인이 필요한 주문을 따로 묶어서 보여줍니다.
             </div>
           </div>
         </div>
@@ -395,7 +426,8 @@ export default function ShipmentWorksheetOverview({
             <div>
               <div className="shipment-filter-summary-label">보조 작업 큐</div>
               <div className="muted shipment-filter-summary-note">
-                아래 액션 큐는 내부 작업 우선순위를 묶어 보여 주는 보조 정보이며, 메인 숫자의 기준은 배송 처리와 이슈 필터입니다.
+                아래 액션 큐는 실제 작업 대상을 기준으로 우선순위를 묶어 보여주는 보조 정보입니다.
+                메인 쿠팡 집계와 분모가 다를 수 있습니다.
               </div>
             </div>
           </div>
@@ -415,8 +447,11 @@ export default function ShipmentWorksheetOverview({
               >
                 <div className="shipment-action-queue-header">
                   <div className="shipment-action-queue-copy">
-                    <div className="shipment-action-queue-label">다음 액션 큐</div>
-                    <strong>{group?.statusLabel ?? DECISION_FILTER_OPTIONS.find((item) => item.value === status)?.label}</strong>
+                    <div className="shipment-action-queue-label">다음 액션</div>
+                    <strong>
+                      {group?.statusLabel ??
+                        DECISION_FILTER_OPTIONS.find((item) => item.value === status)?.label}
+                    </strong>
                     <div className="shipment-action-queue-meta">{ACTION_QUEUE_COPY[status].headline}</div>
                   </div>
                   {active ? <span className="shipment-action-queue-active">현재 보기</span> : null}
@@ -424,9 +459,9 @@ export default function ShipmentWorksheetOverview({
 
                 <div className="shipment-action-queue-count-row">
                   <div className="shipment-action-queue-count">
-                    {formatOverviewCount(group?.count ?? 0, authoritativeCountsReady, "재동기화 중")}
+                    {formatOverviewCount(group?.count ?? 0, authoritativeCountsReady, "동기화 중")}
                   </div>
-                  <div className="muted shipment-action-queue-count-note">현재 필터 전체 기준</div>
+                  <div className="muted shipment-action-queue-count-note">active 작업 기준</div>
                 </div>
 
                 <div className="shipment-action-queue-meta">{ACTION_QUEUE_COPY[status].note}</div>
@@ -474,17 +509,35 @@ export default function ShipmentWorksheetOverview({
                     type="button"
                     className={`button${active ? "" : " secondary"}`}
                     onClick={() =>
-                      onPatchFilters({
+                      applyActiveDatasetFilters({
                         decisionStatus: active ? "all" : status,
                       })
                     }
                   >
-                    {active ? "전체로 되돌리기" : `${group?.statusLabel ?? "이 큐"} 보기`}
+                    {active ? "전체로 돌리기" : `${group?.statusLabel ?? "해당 큐"} 보기`}
                   </button>
                 </div>
               </section>
             );
           })}
+        </div>
+      </div>
+
+      <div className="card shipment-filter-summary-card">
+        <div className="shipment-filter-summary-header">
+          <div>
+            <div className="shipment-filter-summary-label">예외 추적</div>
+            <strong>쿠팡 미조회 건은 메인 배송 분모에서 제외하고 보관함에서 별도로 추적합니다.</strong>
+            <div className="muted shipment-filter-summary-note">
+              마지막으로 우리 DB에 남아 있던 상태와 감지 시각을 근거로 보여주며, 취소 확정으로
+              자동 치환하지는 않습니다.
+            </div>
+          </div>
+          <div className="shipment-filter-summary-actions">
+            <button type="button" className="button secondary" onClick={onOpenMissingInCoupang}>
+              쿠팡 미조회 {formatOverviewCount(missingInCoupangCount, authoritativeCountsReady)}건 보기
+            </button>
+          </div>
         </div>
       </div>
 
@@ -499,7 +552,7 @@ export default function ShipmentWorksheetOverview({
                   filters.pipelineCard === "all" ? " active" : ""
                 }`}
                 aria-pressed={filters.pipelineCard === "all"}
-                onClick={() => onPatchFilters({ pipelineCard: "all" })}
+                onClick={() => applyMirrorDatasetFilters({ pipelineCard: "all" })}
               >
                 <span>전체</span>
                 <strong>{formatOverviewCount(pipelineCounts?.all ?? 0, authoritativeCountsReady)}</strong>
@@ -512,7 +565,9 @@ export default function ShipmentWorksheetOverview({
                     type="button"
                     className={`shipment-filter-pill progress${active ? " active" : ""}`}
                     aria-pressed={active}
-                    onClick={() => onPatchFilters({ pipelineCard: active ? "all" : card })}
+                    onClick={() =>
+                      applyMirrorDatasetFilters({ pipelineCard: active ? "all" : card })
+                    }
                   >
                     <span>{getShipmentPipelineCardLabel(card)}</span>
                     <strong>
@@ -523,7 +578,8 @@ export default function ShipmentWorksheetOverview({
               })}
             </div>
             <div className="muted shipment-filter-summary-note">
-              `NONE_TRACKING`은 별도 단계로 빼지 않고 `배송중`으로 묶고, 필요할 때만 `업체 직접 배송` 필터로 다시 좁힙니다.
+              <code>NONE_TRACKING</code>은 별도 단계로 빼지 않고 <code>배송중</code>으로 묶고,
+              필요할 때만 <code>업체 직접 배송</code> 필터로 다시 좁힙니다.
             </div>
           </div>
         </div>
@@ -540,7 +596,7 @@ export default function ShipmentWorksheetOverview({
                   filters.issueFilter === "all" ? " active" : ""
                 }`}
                 aria-pressed={filters.issueFilter === "all"}
-                onClick={() => onPatchFilters({ issueFilter: "all" })}
+                onClick={() => applyMirrorDatasetFilters({ issueFilter: "all" })}
               >
                 <span>전체</span>
                 <strong>{formatOverviewCount(issueCounts?.all ?? 0, authoritativeCountsReady)}</strong>
@@ -558,7 +614,9 @@ export default function ShipmentWorksheetOverview({
                     type="button"
                     className={`shipment-filter-pill attention${active ? " active" : ""}`}
                     aria-pressed={active}
-                    onClick={() => onPatchFilters({ issueFilter: active ? "all" : filter })}
+                    onClick={() =>
+                      applyMirrorDatasetFilters({ issueFilter: active ? "all" : filter })
+                    }
                   >
                     <span>{getShipmentIssueFilterLabel(filter)}</span>
                     <strong>{formatOverviewCount(count, authoritativeCountsReady)}</strong>
@@ -567,7 +625,7 @@ export default function ShipmentWorksheetOverview({
               })}
             </div>
             <div className="muted shipment-filter-summary-note">
-              취소·반품·교환·일반 CS는 이슈 축으로 남기고, 배송 단계는 그대로 유지합니다.
+              취소, 반품, 교환, 일반 CS는 이슈 축으로만 표시하고 배송 단계는 그대로 유지합니다.
             </div>
             <div className="muted shipment-filter-summary-meta">
               stale sync 경고 {formatNumber(activeSheet?.staleSyncCount ?? 0)}건
@@ -597,7 +655,7 @@ export default function ShipmentWorksheetOverview({
               className={`button${detailFiltersOpen ? "" : " ghost"}`}
               onClick={onToggleDetailFilters}
             >
-              {detailFiltersOpen ? "보조 필터 접기" : detailFilterToggleLabel}
+              {detailFiltersOpen ? "보조 필터 닫기" : detailFilterToggleLabel}
             </button>
           </div>
         </div>
@@ -609,7 +667,8 @@ export default function ShipmentWorksheetOverview({
             <div>
               <strong>보조 운영 필터</strong>
               <div className="muted shipment-grid-note">
-                다음 액션 허브 아래에서 세부 상태, 송장, 출력, 레거시 주문 상태를 추가로 좁혀볼 수 있습니다.
+                다음 액션 허브 아래에서 내부 운영 기준의 상태, 송장, 출력, 레거시 주문 상태를 추가로
+                좁혀볼 수 있습니다.
               </div>
             </div>
             <div className="muted">
@@ -637,7 +696,7 @@ export default function ShipmentWorksheetOverview({
                       className={`shipment-filter-pill neutral${active ? " active" : ""}`}
                       aria-pressed={active}
                       onClick={() =>
-                        onPatchFilters({
+                        applyActiveDatasetFilters({
                           decisionStatus: option.value,
                         })
                       }
@@ -669,7 +728,7 @@ export default function ShipmentWorksheetOverview({
                       className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
                       aria-pressed={active}
                       onClick={() =>
-                        onPatchFilters({
+                        applyActiveDatasetFilters({
                           invoiceStatusCard: option.value,
                         })
                       }
@@ -704,7 +763,7 @@ export default function ShipmentWorksheetOverview({
                       className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
                       aria-pressed={active}
                       onClick={() =>
-                        onPatchFilters({
+                        applyActiveDatasetFilters({
                           outputStatusCard: option.value,
                         })
                       }
@@ -739,7 +798,7 @@ export default function ShipmentWorksheetOverview({
                       className={`shipment-filter-pill ${option.toneClassName}${active ? " active" : ""}`}
                       aria-pressed={active}
                       onClick={() =>
-                        onPatchFilters({
+                        applyActiveDatasetFilters({
                           orderStatusCard: option.value,
                         })
                       }

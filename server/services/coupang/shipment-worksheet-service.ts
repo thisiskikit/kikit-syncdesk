@@ -11,6 +11,7 @@ import type {
   CoupangReturnRow,
   CoupangSettlementRow,
   CoupangShipmentWorksheetAuditMissingResponse,
+  CoupangShipmentMissingDetectionSource,
   CoupangShipmentWorksheetBulkResolveMode,
   CoupangShipmentWorksheetBulkResolveResponse,
   CoupangShipmentSyncMode,
@@ -61,7 +62,9 @@ import {
   getShipmentWorksheetBulkResolveTargetRows,
   hasShipmentWorksheetClaimIssue,
   isShipmentWorksheetPostDispatchRow,
+  matchesShipmentWorksheetDateRange,
   matchesShipmentWorksheetQuery,
+  normalizeShipmentWorksheetViewQuery,
   resolveShipmentWorksheetFilteredRows,
   resolveShipmentWorksheetRows,
 } from "./shipment-worksheet-view";
@@ -438,6 +441,48 @@ function buildWorksheetRows(sheet: WorksheetStoreSheet) {
   );
 }
 
+function buildMirrorWorksheetRows(sheet: WorksheetStoreSheet) {
+  const nowIso = new Date().toISOString();
+  const mirrorItems = sheet.mirrorItems ?? [];
+  const sourceRows = mirrorItems.length > 0 ? mirrorItems : sheet.items;
+  return sourceRows.map((row) =>
+    decorateWorksheetRowCustomerServiceState(normalizeWorksheetRow(row), nowIso),
+  );
+}
+
+function getWorksheetMirrorStoreItems(sheet: WorksheetStoreSheet) {
+  const mirrorItems = sheet.mirrorItems ?? [];
+  return (mirrorItems.length > 0 ? mirrorItems : sheet.items).map(normalizeWorksheetRow);
+}
+
+function resolveWorksheetActiveExclusionReason(
+  row: Pick<CoupangShipmentWorksheetRow, "missingInCoupang" | "customerServiceTerminalStatus">,
+) {
+  if (row.missingInCoupang === true) {
+    return "not_found_in_coupang" as const;
+  }
+
+  return resolveCompletedClaimArchiveReason(row);
+}
+
+function decorateMirrorWorksheetRows(
+  mirrorRows: readonly CoupangShipmentWorksheetRow[],
+  activeRows: readonly CoupangShipmentWorksheetRow[],
+) {
+  const activeSourceKeySet = new Set(activeRows.map((row) => row.sourceKey));
+
+  return mirrorRows.map((row) => {
+    const isVisibleInActive = activeSourceKeySet.has(row.sourceKey);
+    return {
+      ...row,
+      isVisibleInActive,
+      excludedFromActiveReason: isVisibleInActive
+        ? null
+        : resolveWorksheetActiveExclusionReason(row),
+    };
+  });
+}
+
 function hasWorksheetInvoicePayload(
   row: Pick<CoupangShipmentWorksheetRow, "deliveryCompanyCode" | "invoiceNumber">,
 ) {
@@ -555,23 +600,53 @@ function buildShipmentArchiveViewResponse(
   };
 }
 
+function countArchivedMissingInCoupangRows(
+  rows: ArchiveWorksheetRows,
+  query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
+) {
+  const normalizedQuery = normalizeShipmentWorksheetViewQuery(query);
+  return rows.filter(
+    (row) =>
+      row.archiveReason === "not_found_in_coupang" &&
+      matchesShipmentWorksheetDateRange(
+        row,
+        normalizedQuery.createdAtFrom,
+        normalizedQuery.createdAtTo,
+      ) &&
+      matchesShipmentWorksheetQuery(row, normalizedQuery.query),
+  ).length;
+}
+
 function buildWorksheetViewResponse(
   store: StoredCoupangStore,
   sheet: WorksheetStoreSheet,
+  archivedRows: ArchiveWorksheetRows,
   query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
   messageOverride?: string | null,
 ): CoupangShipmentWorksheetViewResponse {
-  const rows = buildWorksheetRows(sheet);
-  const view = buildShipmentWorksheetViewData(rows, query);
+  const activeRows = buildWorksheetRows(sheet);
+  const mirrorRows = decorateMirrorWorksheetRows(
+    buildMirrorWorksheetRows(sheet),
+    activeRows,
+  );
+  const view = buildShipmentWorksheetViewData(
+    {
+      activeRows,
+      mirrorRows,
+    },
+    query,
+  );
+  const archivedMissingInCoupangCount = countArchivedMissingInCoupangRows(archivedRows, query);
   const mirrorMetadata = resolveWorksheetMirrorMetadata(sheet, {
     createdAtFrom: query?.createdAtFrom,
     createdAtTo: query?.createdAtTo,
   });
+  const rawFieldCatalogRows = view.datasetMode === "mirror" ? mirrorRows : activeRows;
 
   return {
     store: asStoreRef(store),
     items: view.items,
-    rawFieldCatalog: buildWorksheetRawFieldCatalog(rows),
+    rawFieldCatalog: buildWorksheetRawFieldCatalog(rawFieldCatalogRows),
     fetchedAt: new Date().toISOString(),
     collectedAt: sheet.collectedAt,
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
@@ -581,6 +656,7 @@ function buildWorksheetViewResponse(
     coverageCreatedAtTo: mirrorMetadata.coverageCreatedAtTo,
     isAuthoritativeMirror: mirrorMetadata.isAuthoritativeMirror,
     lastFullSyncedAt: mirrorMetadata.lastFullSyncedAt,
+    datasetMode: view.datasetMode,
     scope: view.scope,
     page: view.page,
     pageSize: view.pageSize,
@@ -588,12 +664,23 @@ function buildWorksheetViewResponse(
     totalRowCount: view.totalRowCount,
     scopeRowCount: view.scopeRowCount,
     filteredRowCount: view.filteredRowCount,
+    mirrorTotalRowCount: view.mirrorTotalRowCount,
+    mirrorFilteredRowCount: view.mirrorFilteredRowCount,
+    activeTotalRowCount: view.activeTotalRowCount,
+    activeFilteredRowCount: view.activeFilteredRowCount,
+    activeExclusionCounts: view.activeExclusionCounts,
     invoiceReadyCount: view.invoiceReadyCount,
     decisionCounts: view.decisionCounts,
     decisionPreviewGroups: view.decisionPreviewGroups,
     priorityCounts: view.priorityCounts,
     pipelineCounts: view.pipelineCounts,
     issueCounts: view.issueCounts,
+    missingInCoupangCount:
+      view.missingInCoupangCount + archivedMissingInCoupangCount,
+    exceptionCounts: {
+      notFoundInCoupang:
+        view.exceptionCounts.notFoundInCoupang + archivedMissingInCoupangCount,
+    },
     directDeliveryCount: view.directDeliveryCount,
     staleSyncCount: view.staleSyncCount,
     scopeCounts: view.scopeCounts,
@@ -614,6 +701,7 @@ const QUICK_COLLECT_PAGE_SIZE = 50;
 const QUICK_COLLECT_MAX_PAGES = 10;
 const WORKSHEET_CHECKPOINT_FLUSH_SIZE = 100;
 const WORKSHEET_AUDIT_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
+const WORKSHEET_AUDIT_STATUS_SET = new Set<string>(WORKSHEET_AUDIT_STATUSES);
 const WORKSHEET_AUDIT_MAX_RANGE_DAYS = 7;
 const WORKSHEET_AUDIT_PAGE_SIZE = 50;
 const PURCHASE_CONFIRM_MAX_RANGE_DAYS = 31;
@@ -750,6 +838,87 @@ function buildShipmentWorksheetAuditRanges(createdAtFrom: string, createdAtTo: s
     dateFrom: createdAtFrom,
     dateTo: createdAtTo,
     maxRangeDays: WORKSHEET_AUDIT_MAX_RANGE_DAYS,
+  });
+}
+
+function buildShipmentWorksheetAuditRowItem(input: {
+  sourceKey: string;
+  row: Pick<
+    CoupangOrderRow,
+    | "shipmentBoxId"
+    | "orderId"
+    | "vendorItemId"
+    | "sellerProductId"
+    | "status"
+    | "productName"
+    | "orderedAt"
+    | "paidAt"
+  >;
+}) {
+  return {
+    sourceKey: input.sourceKey,
+    shipmentBoxId: input.row.shipmentBoxId,
+    orderId: input.row.orderId,
+    vendorItemId: input.row.vendorItemId ?? null,
+    sellerProductId: input.row.sellerProductId ?? null,
+    status: normalizeStatusFilter(input.row.status),
+    productName: input.row.productName,
+    orderedAt: input.row.orderedAt ?? input.row.paidAt ?? null,
+  };
+}
+
+function hasShipmentWorksheetAuditIdentity(
+  row: Pick<CoupangOrderRow, "shipmentBoxId" | "orderId">,
+) {
+  return Boolean(normalizeWhitespace(row.shipmentBoxId)) && Boolean(normalizeWhitespace(row.orderId));
+}
+
+function hasIncompleteShipmentWorksheetAuditIdentity(
+  row: Pick<
+    CoupangOrderRow,
+    "vendorItemId" | "sellerProductId" | "externalVendorSku" | "id"
+  >,
+) {
+  return !(
+    normalizeWhitespace(row.vendorItemId) ||
+    normalizeWhitespace(row.sellerProductId) ||
+    normalizeWhitespace(row.externalVendorSku) ||
+    normalizeWhitespace(row.id)
+  );
+}
+
+function isSameShipmentWorksheetAuditIdentity(
+  left: Pick<
+    CoupangOrderRow,
+    "shipmentBoxId" | "orderId" | "vendorItemId" | "sellerProductId" | "externalVendorSku"
+  >,
+  right: Pick<
+    CoupangOrderRow,
+    "shipmentBoxId" | "orderId" | "vendorItemId" | "sellerProductId" | "externalVendorSku"
+  >,
+) {
+  return (
+    normalizeWhitespace(left.shipmentBoxId) === normalizeWhitespace(right.shipmentBoxId) &&
+    normalizeWhitespace(left.orderId) === normalizeWhitespace(right.orderId) &&
+    normalizeWhitespace(left.vendorItemId) === normalizeWhitespace(right.vendorItemId) &&
+    normalizeWhitespace(left.sellerProductId) === normalizeWhitespace(right.sellerProductId) &&
+    normalizeWhitespace(left.externalVendorSku) === normalizeWhitespace(right.externalVendorSku)
+  );
+}
+
+function hasShipmentWorksheetAuditBlockingIssue(
+  row: Pick<
+    CoupangOrderRow,
+    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  > | Pick<
+    CoupangShipmentWorksheetRow,
+    "customerServiceIssueSummary" | "customerServiceIssueCount" | "customerServiceIssueBreakdown"
+  >,
+) {
+  return hasShipmentWorksheetClaimIssue({
+    customerServiceIssueSummary: row.customerServiceIssueSummary,
+    customerServiceIssueCount: row.customerServiceIssueCount,
+    customerServiceIssueBreakdown: row.customerServiceIssueBreakdown,
   });
 }
 
@@ -902,6 +1071,247 @@ function buildShipmentWorksheetArchiveRows(
       } satisfies CoupangShipmentArchiveRow;
     })
     .filter((row): row is CoupangShipmentArchiveRow => Boolean(row));
+}
+
+function markWorksheetRowMissingInCoupang(
+  row: CoupangShipmentWorksheetRow,
+  input: {
+    detectedAt: string;
+    detectionSource: CoupangShipmentMissingDetectionSource;
+  },
+) {
+  return normalizeWorksheetRow({
+    ...row,
+    missingInCoupang: true,
+    missingDetectedAt: input.detectedAt,
+    missingDetectionSource: input.detectionSource,
+    lastSeenOrderStatus:
+      normalizeWhitespace(row.rawOrderStatus) ??
+      normalizeWhitespace(row.orderStatus) ??
+      null,
+    lastSeenIssueSummary: normalizeWhitespace(row.customerServiceIssueSummary),
+    updatedAt: input.detectedAt,
+  });
+}
+
+function clearWorksheetRowMissingInCoupang(row: CoupangShipmentWorksheetRow) {
+  return normalizeWorksheetRow({
+    ...row,
+    missingInCoupang: false,
+    missingDetectedAt: null,
+    missingDetectionSource: null,
+    lastSeenOrderStatus: null,
+    lastSeenIssueSummary: null,
+  });
+}
+
+async function verifyMissingInCoupangRows(input: {
+  storeId: string;
+  rows: readonly CoupangShipmentWorksheetRow[];
+}) {
+  type MissingInCoupangCheckResult = {
+    row: CoupangShipmentWorksheetRow;
+    shouldArchive: boolean;
+    warning: string | null;
+  };
+  const warningMessages: string[] = [];
+  const liveMissingRows: CoupangShipmentWorksheetRow[] = [];
+
+  const liveCheckResults: MissingInCoupangCheckResult[] = await mapWithConcurrency(
+    Array.from(input.rows),
+    4,
+    async (row) => {
+    try {
+      const response = await getOrderDetail({
+        storeId: input.storeId,
+        shipmentBoxId: row.shipmentBoxId,
+        includeCustomerService: false,
+      });
+
+      if (response.source === "live" && !response.item) {
+        return {
+          row,
+          shouldArchive: true,
+          warning: null,
+        };
+      }
+
+      if (response.source !== "live") {
+        return {
+          row,
+          shouldArchive: false,
+          warning:
+            response.message ??
+            `${row.shipmentBoxId}: Coupang live 상세 조회가 fallback으로 내려와 미조회 예외로 확정하지 않았습니다.`,
+        };
+      }
+
+      return {
+        row,
+        shouldArchive: false,
+        warning: null,
+      };
+    } catch (error: any) {
+      return {
+        row,
+        shouldArchive: false,
+        warning:
+          error instanceof Error
+            ? `${row.shipmentBoxId}: ${error.message}`
+            : `${row.shipmentBoxId}: Coupang live 상세 조회에 실패해 미조회 예외로 확정하지 않았습니다.`,
+      };
+    }
+    },
+  );
+
+  for (const result of liveCheckResults) {
+    if (result.shouldArchive) {
+      liveMissingRows.push(result.row);
+      continue;
+    }
+
+    if (result.warning) {
+      pushUniqueWorksheetWarning(warningMessages, result.warning);
+    }
+  }
+
+  return {
+    liveMissingRows,
+    warningMessages,
+  };
+}
+
+async function archiveMissingInCoupangRows(input: {
+  storeId: string;
+  rows: readonly CoupangShipmentWorksheetRow[];
+  missingRows: readonly CoupangShipmentWorksheetRow[];
+  detectedAt: string;
+  detectionSource: CoupangShipmentMissingDetectionSource;
+}) {
+  const markedMissingRows = input.missingRows.map((row) =>
+    markWorksheetRowMissingInCoupang(row, {
+      detectedAt: input.detectedAt,
+      detectionSource: input.detectionSource,
+    }),
+  );
+  const markedMissingBySourceKey = new Map(
+    markedMissingRows.map((row) => [row.sourceKey, row] as const),
+  );
+
+  if (!markedMissingRows.length) {
+    return {
+      rows: input.rows.map((row) => clearWorksheetRowMissingInCoupang(row)),
+      archivedCount: 0,
+      archivedSourceKeys: new Set<string>(),
+      warningMessages: [] as string[],
+    };
+  }
+
+  const archiveRows = buildShipmentWorksheetArchiveRows(markedMissingRows, {
+    archivedAt: input.detectedAt,
+    reasonResolver: () => "not_found_in_coupang",
+  });
+
+  try {
+    const archiveResult = await coupangShipmentWorksheetStore.archiveRows({
+      storeId: input.storeId,
+      items: archiveRows,
+      archivedAt: input.detectedAt,
+    });
+    const archivedSourceKeys = new Set(archiveResult.archivedSourceKeys);
+    const unresolvedMissingRows = markedMissingRows.filter(
+      (row) => !archivedSourceKeys.has(row.sourceKey),
+    );
+    const unresolvedMissingBySourceKey = new Map(
+      unresolvedMissingRows.map((row) => [row.sourceKey, row] as const),
+    );
+    const warningMessages: string[] = [];
+
+    if (unresolvedMissingRows.length) {
+      pushUniqueWorksheetWarning(
+        warningMessages,
+        `쿠팡 미조회 ${unresolvedMissingRows.length}건을 보관함으로 옮기지 못해 워크시트에 남겼습니다.`,
+      );
+    }
+
+    return {
+      rows: input.rows
+        .filter((row) => !archivedSourceKeys.has(row.sourceKey))
+        .map((row) => unresolvedMissingBySourceKey.get(row.sourceKey) ?? clearWorksheetRowMissingInCoupang(row)),
+      archivedCount: archiveResult.archivedCount,
+      archivedSourceKeys,
+      warningMessages,
+    };
+  } catch (error) {
+    const warningMessages = [
+      error instanceof Error
+        ? `쿠팡 미조회 ${markedMissingRows.length}건을 보관함으로 이동하지 못했습니다. ${error.message}`
+        : `쿠팡 미조회 ${markedMissingRows.length}건을 보관함으로 이동하지 못했습니다.`,
+    ];
+
+    return {
+      rows: input.rows.map(
+        (row) => markedMissingBySourceKey.get(row.sourceKey) ?? clearWorksheetRowMissingInCoupang(row),
+      ),
+      archivedCount: 0,
+      archivedSourceKeys: new Set<string>(),
+      warningMessages,
+    };
+  }
+}
+
+async function restoreMissingInCoupangArchiveRows(input: {
+  storeId: string;
+  archivedRows: readonly CoupangShipmentArchiveRow[];
+  sourceKeys: readonly string[];
+}) {
+  const sourceKeys = Array.from(
+    new Set(
+      input.sourceKeys
+        .map((value) => value.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const restorableSourceKeys = sourceKeys.filter((sourceKey) =>
+    input.archivedRows.some(
+      (row) =>
+        row.sourceKey === sourceKey &&
+        row.archiveReason === "not_found_in_coupang",
+    ),
+  );
+
+  if (!restorableSourceKeys.length) {
+    return {
+      restoredSourceKeys: new Set<string>(),
+      warningMessage: null,
+    };
+  }
+
+  try {
+    const restoreResult = await coupangShipmentWorksheetStore.restoreArchivedRows({
+      storeId: input.storeId,
+      sourceKeys: restorableSourceKeys,
+      archiveReason: "not_found_in_coupang",
+    });
+    const restoredSourceKeys = new Set(restoreResult.restoredSourceKeys);
+    const warningMessage =
+      restoreResult.skippedCount > 0
+        ? `쿠팡에서 다시 조회된 미조회 보관 ${restoreResult.skippedCount}건을 아직 복귀하지 못했습니다.`
+        : null;
+
+    return {
+      restoredSourceKeys,
+      warningMessage,
+    };
+  } catch (error) {
+    return {
+      restoredSourceKeys: new Set<string>(),
+      warningMessage:
+        error instanceof Error
+          ? `쿠팡에서 다시 조회된 미조회 보관 주문을 복귀하지 못했습니다. ${error.message}`
+          : "쿠팡에서 다시 조회된 미조회 보관 주문을 복귀하지 못했습니다.",
+    };
+  }
 }
 
 async function applyCompletedClaimAutoArchive(input: {
@@ -1325,7 +1735,7 @@ async function fetchQuickCollectOrders(input: {
       }
 
       succeededStatusCount += 1;
-    } catch (error) {
+    } catch (error: any) {
       void recordSystemErrorEvent({
         source: "coupang.shipment.quick-collect.status",
         channel: "coupang",
@@ -1751,6 +2161,10 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
     input.currentSheet.items,
     Array.from(updatedRowsBySourceKey.values()),
   );
+  const mergedMirrorRows = mergeWorksheetRowsBySourceKey(
+    getWorksheetMirrorStoreItems(input.currentSheet),
+    Array.from(updatedRowsBySourceKey.values()),
+  );
   const nextMessage = mergeMessages([
     input.currentSheet.message,
     warnings.length > 0 ? `구매확정 sync 중 경고 ${warnings.length}건이 있습니다.` : null,
@@ -1767,12 +2181,14 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
       ? {
           ...input.currentSheet,
           items: autoArchiveResult.rows,
+          mirrorItems: mergedMirrorRows,
           message: autoArchiveResult.message,
           updatedAt: input.nowIso,
         }
       : await coupangShipmentWorksheetStore.setStoreSheet({
           storeId: input.request.storeId,
           items: autoArchiveResult.rows,
+          mirrorItems: mergedMirrorRows,
           collectedAt: input.currentSheet.collectedAt,
           source: input.currentSheet.source,
           message: autoArchiveResult.message,
@@ -2068,6 +2484,10 @@ async function refreshShipmentWorksheetRows(
     customerServiceRefresh.message,
   ]);
   const mergedRows = mergeWorksheetRowsBySourceKey(currentSheet.items, finalRows);
+  const mergedMirrorRows = mergeWorksheetRowsBySourceKey(
+    getWorksheetMirrorStoreItems(currentSheet),
+    finalRows,
+  );
   const autoArchiveResult = await applyCompletedClaimAutoArchive({
     storeId: input.storeId,
     rows: mergedRows,
@@ -2083,6 +2503,7 @@ async function refreshShipmentWorksheetRows(
       ? {
           ...currentSheet,
           items: autoArchiveResult.rows,
+          mirrorItems: mergedMirrorRows,
           message: autoArchiveResult.message,
           syncSummary: nextSyncSummary,
           updatedAt: new Date().toISOString(),
@@ -2090,6 +2511,7 @@ async function refreshShipmentWorksheetRows(
       : await coupangShipmentWorksheetStore.setStoreSheet({
           storeId: input.storeId,
           items: autoArchiveResult.rows,
+          mirrorItems: mergedMirrorRows,
           collectedAt: currentSheet.collectedAt,
           source: currentSheet.source,
           message: autoArchiveResult.message,
@@ -2162,116 +2584,45 @@ export async function reconcileShipmentWorksheetLive(
 
   const nowIso = new Date().toISOString();
   const warningMessages: string[] = [];
-  const warningSourceKeys = new Set<string>();
-  const liveMissingRows: CoupangShipmentWorksheetRow[] = [];
-
-  const liveCheckResults = await mapWithConcurrency(targetRows, 4, async (row) => {
-    try {
-      const response = await getOrderDetail({
-        storeId: input.storeId,
-        shipmentBoxId: row.shipmentBoxId,
-        includeCustomerService: false,
-      });
-
-      if (response.source === "live" && !response.item) {
-        return {
-          row,
-          shouldArchive: true,
-          warning: null,
-        };
-      }
-
-      if (response.source !== "live") {
-        return {
-          row,
-          shouldArchive: false,
-          warning:
-            response.message ??
-            `${row.shipmentBoxId}: 쿠팡 live 상세 조회가 fallback으로 내려와 제외하지 않았습니다.`,
-        };
-      }
-
-      return {
-        row,
-        shouldArchive: false,
-        warning: null,
-      };
-    } catch (error) {
-      return {
-        row,
-        shouldArchive: false,
-        warning:
-          error instanceof Error
-            ? `${row.shipmentBoxId}: ${error.message}`
-            : `${row.shipmentBoxId}: 쿠팡 live 상세 조회에 실패해 제외하지 않았습니다.`,
-      };
-    }
+  const missingVerification = await verifyMissingInCoupangRows({
+    storeId: input.storeId,
+    rows: targetRows,
   });
-
-  for (const result of liveCheckResults) {
-    if (result.shouldArchive) {
-      liveMissingRows.push(result.row);
-      continue;
-    }
-
-    if (result.warning) {
-      warningSourceKeys.add(result.row.sourceKey);
-      pushUniqueWorksheetWarning(warningMessages, result.warning);
-    }
+  for (const warning of missingVerification.warningMessages) {
+    pushUniqueWorksheetWarning(warningMessages, warning);
   }
 
-  let archivedCount = 0;
-  let archivedSourceKeys = new Set<string>();
-  let workingRows = worksheetRows;
-
-  if (liveMissingRows.length) {
-    const archiveRows = buildShipmentWorksheetArchiveRows(liveMissingRows, {
-      archivedAt: nowIso,
-      reasonResolver: () => "not_found_in_coupang",
-    });
-
-    try {
-      const archiveResult = await coupangShipmentWorksheetStore.archiveRows({
-        storeId: input.storeId,
-        items: archiveRows,
-        archivedAt: nowIso,
-      });
-      archivedCount = archiveResult.archivedCount;
-      archivedSourceKeys = new Set(archiveResult.archivedSourceKeys);
-      workingRows = worksheetRows.filter((row) => !archivedSourceKeys.has(row.sourceKey));
-
-      const unresolvedRows = liveMissingRows.filter(
-        (row) => !archivedSourceKeys.has(row.sourceKey),
-      );
-      if (unresolvedRows.length) {
-        for (const row of unresolvedRows) {
-          warningSourceKeys.add(row.sourceKey);
-        }
-        pushUniqueWorksheetWarning(
-          warningMessages,
-          `쿠팡 live 미조회 ${unresolvedRows.length}건은 보관함으로 옮기지 못해 워크시트에 남겼습니다.`,
-        );
-      }
-    } catch (error) {
-      for (const row of liveMissingRows) {
-        warningSourceKeys.add(row.sourceKey);
-      }
-      pushUniqueWorksheetWarning(
-        warningMessages,
-        error instanceof Error
-          ? `쿠팡 live 미조회 ${liveMissingRows.length}건을 보관함으로 이동하지 못했습니다. ${error.message}`
-          : `쿠팡 live 미조회 ${liveMissingRows.length}건을 보관함으로 이동하지 못했습니다.`,
-      );
-    }
+  const missingArchiveResult = await archiveMissingInCoupangRows({
+    storeId: input.storeId,
+    rows: worksheetRows,
+    missingRows: missingVerification.liveMissingRows,
+    detectedAt: nowIso,
+    detectionSource: "reconcile_live",
+  });
+  for (const warning of missingArchiveResult.warningMessages) {
+    pushUniqueWorksheetWarning(warningMessages, warning);
   }
+
+  const archivedCount = missingArchiveResult.archivedCount;
+  const archivedSourceKeys = missingArchiveResult.archivedSourceKeys;
+  const workingRows = missingArchiveResult.rows;
+  const workingMirrorRows = mergeWorksheetRowsBySourceKey(
+    mergeWorksheetRowsBySourceKey(getWorksheetMirrorStoreItems(currentSheet), workingRows),
+    missingVerification.liveMissingRows.map((row) =>
+      markWorksheetRowMissingInCoupang(row, {
+        detectedAt: nowIso,
+        detectionSource: "reconcile_live",
+      }),
+    ),
+  );
 
   const baseMessage = mergeMessages([
     currentSheet.message,
     archivedCount > 0
-      ? `쿠팡 live 상세에서 조회되지 않은 ${archivedCount}건을 보관함으로 이동했습니다.`
+      ? `쿠팡 live 상세에서 더 이상 조회되지 않은 ${archivedCount}건을 보관함으로 이동했습니다.`
       : null,
-    warningSourceKeys.size > 0
-      ? `제외하지 못한 경고 ${warningSourceKeys.size}건이 있어 워크시트에 유지했습니다.`
+    warningMessages.length > 0
+      ? `미조회 예외를 확정하지 못한 경고 ${warningMessages.length}건이 있어 워크시트에 남겼습니다.`
       : null,
   ]);
 
@@ -2288,6 +2639,7 @@ export async function reconcileShipmentWorksheetLive(
     const nextSheet = await coupangShipmentWorksheetStore.setStoreSheet({
       storeId: input.storeId,
       items: workingRows,
+      mirrorItems: workingMirrorRows,
       collectedAt: currentSheet.collectedAt,
       source: currentSheet.source,
       message: baseMessage,
@@ -2298,7 +2650,7 @@ export async function reconcileShipmentWorksheetLive(
     return buildReconcileShipmentWorksheetResponse(store, nextSheet, {
       archivedCount,
       refreshedCount: 0,
-      warningCount: warningSourceKeys.size,
+      warningCount: warningMessages.length,
       warnings: warningMessages,
       message: baseMessage,
     });
@@ -2311,6 +2663,7 @@ export async function reconcileShipmentWorksheetLive(
     currentSheet: {
       ...currentSheet,
       items: workingRows,
+      mirrorItems: workingMirrorRows,
       message: baseMessage,
       updatedAt: nowIso,
     },
@@ -2325,7 +2678,7 @@ export async function reconcileShipmentWorksheetLive(
   return buildReconcileShipmentWorksheetResponse(store, nextSheet, {
     archivedCount,
     refreshedCount: refreshResult.refreshedCount,
-    warningCount: warningSourceKeys.size,
+    warningCount: warningMessages.length,
     warnings: warningMessages,
     message: refreshResult.message,
   });
@@ -3662,6 +4015,23 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
   const exposedProductName = buildExposedProductName(row.productName, optionName);
   const coupangDisplayProductName = normalizeWhitespace(row.coupangDisplayProductName);
   const rawFields = ensureWorksheetRawFields(row);
+  const missingInCoupang = row.missingInCoupang === true;
+  const missingDetectedAt =
+    missingInCoupang && typeof row.missingDetectedAt === "string" ? row.missingDetectedAt : null;
+  const missingDetectionSource =
+    missingInCoupang &&
+    (row.missingDetectionSource === "full_sync" ||
+      row.missingDetectionSource === "reconcile_live")
+      ? row.missingDetectionSource
+      : null;
+  const lastSeenOrderStatus =
+    missingInCoupang && typeof row.lastSeenOrderStatus === "string"
+      ? row.lastSeenOrderStatus
+      : null;
+  const lastSeenIssueSummary =
+    missingInCoupang && typeof row.lastSeenIssueSummary === "string"
+      ? row.lastSeenIssueSummary
+      : null;
   const customerServiceIssueCount = Number.isFinite(row.customerServiceIssueCount)
     ? Math.max(0, Math.trunc(row.customerServiceIssueCount))
     : 0;
@@ -3715,6 +4085,11 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     purchaseConfirmedSyncedAt === row.purchaseConfirmedSyncedAt &&
     purchaseConfirmedFinalSettlementDate === row.purchaseConfirmedFinalSettlementDate &&
     purchaseConfirmedSource === row.purchaseConfirmedSource &&
+    missingInCoupang === row.missingInCoupang &&
+    missingDetectedAt === row.missingDetectedAt &&
+    missingDetectionSource === row.missingDetectionSource &&
+    lastSeenOrderStatus === row.lastSeenOrderStatus &&
+    lastSeenIssueSummary === row.lastSeenIssueSummary &&
     coupangDeliveryCompanyCode === row.coupangDeliveryCompanyCode &&
     coupangInvoiceNumber === row.coupangInvoiceNumber &&
     coupangInvoiceUploadedAt === row.coupangInvoiceUploadedAt &&
@@ -3735,6 +4110,11 @@ function normalizeWorksheetRow(row: CoupangShipmentWorksheetRow): CoupangShipmen
     purchaseConfirmedSyncedAt,
     purchaseConfirmedFinalSettlementDate,
     purchaseConfirmedSource,
+    missingInCoupang,
+    missingDetectedAt,
+    missingDetectionSource,
+    lastSeenOrderStatus,
+    lastSeenIssueSummary,
     coupangDeliveryCompanyCode,
     coupangInvoiceNumber,
     coupangInvoiceUploadedAt,
@@ -3881,7 +4261,8 @@ export async function getShipmentWorksheetView(
 ): Promise<CoupangShipmentWorksheetViewResponse> {
   const store = await getStoreOrThrow(query.storeId);
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(query.storeId);
-  return buildWorksheetViewResponse(store, currentSheet, query);
+  const archivedRows = await coupangShipmentWorksheetStore.getArchivedRows(query.storeId);
+  return buildWorksheetViewResponse(store, currentSheet, archivedRows, query);
 }
 
 export async function getShipmentArchiveView(
@@ -3975,9 +4356,586 @@ export async function runShipmentArchive(
   };
 }
 
+async function auditShipmentWorksheetMissingV2(
+  input: AuditCoupangShipmentWorksheetMissingInput,
+): Promise<CoupangShipmentWorksheetAuditMissingResponse> {
+  const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
+  const createdAtTo = normalizeWhitespace(input.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    throw new Error("누락 검수에는 조회 시작일과 종료일이 모두 필요합니다.");
+  }
+
+  const auditRanges = buildShipmentWorksheetAuditRanges(createdAtFrom, createdAtTo);
+  const store = await getStoreOrThrow(input.storeId);
+  const platformKey = resolvePlatformKey(store);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const archivedRows = await coupangShipmentWorksheetStore.getArchivedRows(input.storeId);
+  const worksheetRows = buildWorksheetRows(currentSheet);
+  const liveRowBySourceKey = new Map<string, CoupangOrderRow>();
+  const duplicateLiveSourceKeys = new Set<string>();
+  const archivedRowBySourceKey = new Map<string, CoupangShipmentArchiveRow>();
+  const archivedRowCountBySourceKey = new Map<string, number>();
+  const exceptionItems: CoupangShipmentWorksheetAuditMissingResponse["exceptionItems"] = [];
+  const exceptionKeys = new Set<string>();
+  const hiddenQuery = {
+    ...input.viewQuery,
+    storeId: input.storeId,
+    createdAtFrom,
+    createdAtTo,
+  };
+  const getStatusPriority = (status: string | null | undefined) =>
+    normalizeStatusFilter(status) === "INSTRUCT" ? 2 : normalizeStatusFilter(status) === "ACCEPT" ? 1 : 0;
+  const pushException = (
+    item: CoupangShipmentWorksheetAuditMissingResponse["exceptionItems"][number],
+  ) => {
+    const exceptionKey = `${item.reasonCode}:${item.sourceKey}:${item.shipmentBoxId ?? "-"}:${item.orderId ?? "-"}:${item.vendorItemId ?? "-"}:${item.status ?? "-"}`;
+    if (exceptionKeys.has(exceptionKey)) {
+      return;
+    }
+    exceptionKeys.add(exceptionKey);
+    exceptionItems.push(item);
+  };
+
+  for (const archivedRow of archivedRows) {
+    archivedRowCountBySourceKey.set(
+      archivedRow.sourceKey,
+      (archivedRowCountBySourceKey.get(archivedRow.sourceKey) ?? 0) + 1,
+    );
+    const existing = archivedRowBySourceKey.get(archivedRow.sourceKey);
+    if (!existing || archivedRow.archivedAt.localeCompare(existing.archivedAt) > 0) {
+      archivedRowBySourceKey.set(archivedRow.sourceKey, archivedRow);
+    }
+  }
+
+  for (const status of WORKSHEET_AUDIT_STATUSES) {
+    for (const auditRange of auditRanges) {
+      const response = await listOrders({
+        storeId: input.storeId,
+        createdAtFrom: auditRange.createdAtFrom,
+        createdAtTo: auditRange.createdAtTo,
+        status,
+        maxPerPage: WORKSHEET_AUDIT_PAGE_SIZE,
+        fetchAllPages: true,
+        includeCustomerService: false,
+      });
+
+      if (response.source !== "live") {
+        throw new Error(response.message ?? `${status} 상태 live 주문 조회에 실패했습니다.`);
+      }
+
+      for (const row of response.items) {
+        const normalizedStatus = normalizeStatusFilter(row.status);
+        if (!normalizedStatus || !WORKSHEET_AUDIT_STATUS_SET.has(normalizedStatus)) {
+          continue;
+        }
+
+        if (
+          !hasShipmentWorksheetAuditIdentity(row) ||
+          hasIncompleteShipmentWorksheetAuditIdentity(row)
+        ) {
+          pushException({
+            ...buildShipmentWorksheetAuditRowItem({
+              sourceKey: buildSourceKey(input.storeId, row),
+              row,
+            }),
+            shipmentBoxId: normalizeWhitespace(row.shipmentBoxId),
+            orderId: normalizeWhitespace(row.orderId),
+            reasonCode: "identity_incomplete",
+            message: "shipmentBoxId/orderId 또는 상품 식별자가 불완전해 자동 반영하지 않았습니다.",
+          });
+          continue;
+        }
+
+        if (!isShipmentWorksheetCandidate(row)) {
+          continue;
+        }
+
+        const sourceKey = buildSourceKey(input.storeId, row);
+        const existing = liveRowBySourceKey.get(sourceKey);
+        if (!existing) {
+          liveRowBySourceKey.set(sourceKey, row);
+          continue;
+        }
+
+        if (!isSameShipmentWorksheetAuditIdentity(existing, row)) {
+          duplicateLiveSourceKeys.add(sourceKey);
+          liveRowBySourceKey.delete(sourceKey);
+          pushException({
+            ...buildShipmentWorksheetAuditRowItem({
+              sourceKey,
+              row: getStatusPriority(row.status) >= getStatusPriority(existing.status) ? row : existing,
+            }),
+            reasonCode: "duplicate_source_key",
+            message: "같은 sourceKey로 서로 다른 live 주문이 겹쳐 자동 반영하지 않았습니다.",
+          });
+          continue;
+        }
+
+        if (getStatusPriority(row.status) >= getStatusPriority(existing.status)) {
+          liveRowBySourceKey.set(sourceKey, row);
+        }
+      }
+    }
+  }
+
+  const protectedLiveSourceKeys = new Set([
+    ...Array.from(liveRowBySourceKey.keys()),
+    ...Array.from(duplicateLiveSourceKeys),
+  ]);
+  const warningMessages: string[] = [];
+  const missingVerificationTargets = worksheetRows.filter((row) => {
+    const normalizedStatus = normalizeStatusFilter(row.orderStatus);
+    return (
+      Boolean(normalizedStatus && WORKSHEET_AUDIT_STATUS_SET.has(normalizedStatus)) &&
+      matchesWorksheetRowDateRange(row, createdAtFrom, createdAtTo) &&
+      !protectedLiveSourceKeys.has(row.sourceKey)
+    );
+  });
+  const missingVerification = await verifyMissingInCoupangRows({
+    storeId: input.storeId,
+    rows: missingVerificationTargets,
+  });
+  for (const warning of missingVerification.warningMessages) {
+    pushUniqueWorksheetWarning(warningMessages, warning);
+  }
+
+  const missingArchiveResult = await archiveMissingInCoupangRows({
+    storeId: input.storeId,
+    rows: worksheetRows,
+    missingRows: missingVerification.liveMissingRows,
+    detectedAt: new Date().toISOString(),
+    detectionSource: "reconcile_live",
+  });
+  for (const warning of missingArchiveResult.warningMessages) {
+    pushUniqueWorksheetWarning(warningMessages, warning);
+  }
+
+  const workingWorksheetRows = missingArchiveResult.rows;
+  const workingWorksheetRowBySourceKey = new Map(
+    workingWorksheetRows.map((row) => [row.sourceKey, row] as const),
+  );
+  const autoAppliedItems: CoupangShipmentWorksheetAuditMissingResponse["autoAppliedItems"] = [];
+  const hiddenItems: CoupangShipmentWorksheetAuditMissingResponse["hiddenItems"] = [];
+  const matchedUpdatedRows = new Map<string, CoupangShipmentWorksheetRow>();
+  const auditAutoUpsertCandidates: Array<{
+    sourceKey: string;
+    row: CoupangOrderRow;
+    seedRow: CoupangShipmentWorksheetRow | undefined;
+    action: "inserted" | "restored";
+  }> = [];
+  let worksheetMatchedCount = 0;
+  let restoredCount = 0;
+
+  for (const [sourceKey, liveRow] of Array.from(liveRowBySourceKey.entries())) {
+    const worksheetRow = workingWorksheetRowBySourceKey.get(sourceKey);
+    const archivedRow = archivedRowBySourceKey.get(sourceKey);
+
+    if (worksheetRow) {
+      worksheetMatchedCount += 1;
+    }
+
+    if (
+      (worksheetRow && archivedRow) ||
+      (archivedRow && (archivedRowCountBySourceKey.get(sourceKey) ?? 0) > 1)
+    ) {
+      pushException({
+        ...buildShipmentWorksheetAuditRowItem({
+          sourceKey,
+          row: liveRow,
+        }),
+        reasonCode: "archived_conflict",
+        message: "같은 sourceKey 주문이 보관함에도 남아 있어 자동 반영하지 않았습니다.",
+      });
+      continue;
+    }
+
+    if (
+      hasShipmentWorksheetAuditBlockingIssue(liveRow) ||
+      (worksheetRow && hasShipmentWorksheetAuditBlockingIssue(worksheetRow))
+    ) {
+      pushException({
+        ...buildShipmentWorksheetAuditRowItem({
+          sourceKey,
+          row: liveRow,
+        }),
+        reasonCode: "claim_or_blocking_issue",
+        message: "클레임 또는 차단 이슈가 있어 자동 반영하지 않았습니다.",
+      });
+      continue;
+    }
+
+    if (!worksheetRow) {
+      auditAutoUpsertCandidates.push({
+        sourceKey,
+        row: liveRow,
+        seedRow: archivedRow,
+        action: archivedRow ? "restored" : "inserted",
+      });
+      continue;
+    }
+
+    const nowIso = new Date().toISOString();
+    const nextRow = buildWorksheetRow({
+      store,
+      row: liveRow,
+      currentRow: worksheetRow,
+      nowIso,
+      detail: null,
+      productDetail: null,
+      selpickOrderNumber: worksheetRow.selpickOrderNumber,
+    });
+    const visibleRow = hasWorksheetRowChanged(worksheetRow, nextRow) ? nextRow : worksheetRow;
+
+    if (visibleRow === nextRow) {
+      matchedUpdatedRows.set(sourceKey, nextRow);
+      autoAppliedItems.push({
+        ...buildShipmentWorksheetAuditRowItem({
+          sourceKey,
+          row: {
+            ...liveRow,
+            productName: nextRow.productName,
+            status: nextRow.orderStatus ?? liveRow.status,
+            orderedAt: nextRow.orderedAtRaw,
+            paidAt: nextRow.orderedAtRaw,
+          },
+        }),
+        action: "status_updated",
+      });
+    }
+
+    const hiddenReason = getShipmentWorksheetRowHiddenReason(visibleRow, hiddenQuery);
+    if (hiddenReason) {
+      hiddenItems.push({
+        sourceKey,
+        rowId: visibleRow.id,
+        status: normalizeStatusFilter(visibleRow.orderStatus),
+        productName: visibleRow.exposedProductName || visibleRow.productName,
+        hiddenReason,
+      });
+    }
+  }
+
+  const hydratedAutoUpsertResults = await mapWithConcurrency(
+    auditAutoUpsertCandidates,
+    4,
+    async (candidate) => {
+      const shouldHydrate = shouldHydrateWorksheetOptionDuringCollect(candidate.seedRow);
+      let detail: CoupangOrderDetail | null = null;
+      let productDetail: Awaited<ReturnType<typeof getProductDetail>> | null = null;
+
+      if (shouldHydrate) {
+        try {
+          const detailResponse = await getOrderDetail({
+            storeId: input.storeId,
+            shipmentBoxId: candidate.row.shipmentBoxId,
+            includeCustomerService: false,
+          });
+          if (detailResponse.source !== "live" || !detailResponse.item) {
+            return {
+              candidate,
+              exception: {
+                ...buildShipmentWorksheetAuditRowItem({
+                  sourceKey: candidate.sourceKey,
+                  row: candidate.row,
+                }),
+                reasonCode: "hydration_failed" as const,
+                message:
+                  detailResponse.message ??
+                  "주문 상세 live hydration에 실패해 자동 반영하지 않았습니다.",
+              },
+            };
+          }
+          detail = detailResponse.item;
+        } catch (error) {
+          return {
+            candidate,
+            exception: {
+              ...buildShipmentWorksheetAuditRowItem({
+                sourceKey: candidate.sourceKey,
+                row: candidate.row,
+              }),
+              reasonCode: "hydration_failed" as const,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "주문 상세 live hydration에 실패해 자동 반영하지 않았습니다.",
+            },
+          };
+        }
+
+        if (candidate.row.sellerProductId) {
+          try {
+            const productResponse = await getProductDetail({
+              storeId: input.storeId,
+              sellerProductId: candidate.row.sellerProductId,
+            });
+            if (!productResponse || productResponse.source !== "live" || !productResponse.item) {
+              return {
+                candidate,
+                exception: {
+                  ...buildShipmentWorksheetAuditRowItem({
+                    sourceKey: candidate.sourceKey,
+                    row: candidate.row,
+                  }),
+                  reasonCode: "hydration_failed" as const,
+                  message:
+                    productResponse?.message ??
+                    "상품 상세 live hydration에 실패해 자동 반영하지 않았습니다.",
+                },
+              };
+            }
+            productDetail = productResponse;
+          } catch (error) {
+            return {
+              candidate,
+              exception: {
+                ...buildShipmentWorksheetAuditRowItem({
+                  sourceKey: candidate.sourceKey,
+                  row: candidate.row,
+                }),
+                reasonCode: "hydration_failed" as const,
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "상품 상세 live hydration에 실패해 자동 반영하지 않았습니다.",
+              },
+            };
+          }
+        }
+      }
+
+      try {
+        return {
+          candidate,
+          row: buildWorksheetRow({
+            store,
+            row: candidate.row,
+            currentRow: candidate.seedRow,
+            nowIso: new Date().toISOString(),
+            detail,
+            productDetail,
+            selpickOrderNumber: candidate.seedRow?.selpickOrderNumber ?? "",
+          }),
+        };
+      } catch (error) {
+        return {
+          candidate,
+          exception: {
+            ...buildShipmentWorksheetAuditRowItem({
+              sourceKey: candidate.sourceKey,
+              row: candidate.row,
+            }),
+            reasonCode: "unknown" as const,
+            message:
+              error instanceof Error
+                ? error.message
+                : "자동 반영 row 구성 중 알 수 없는 오류가 발생했습니다.",
+          },
+        };
+      }
+    },
+  );
+
+  for (const result of hydratedAutoUpsertResults) {
+    if ("exception" in result && result.exception) {
+      pushException(result.exception);
+    }
+  }
+
+  const readyAutoUpsertResults = hydratedAutoUpsertResults.flatMap((result) =>
+    "row" in result && result.row ? [{ candidate: result.candidate, row: result.row }] : [],
+  );
+  const rowsToMaterialize = readyAutoUpsertResults.map((result) => result.row);
+  if (platformKey.warning && rowsToMaterialize.length > 0) {
+    pushUniqueWorksheetWarning(warningMessages, platformKey.warning);
+  }
+
+  let materializedAutoUpsertRows: CoupangShipmentWorksheetRow[] = [];
+  if (rowsToMaterialize.length > 0) {
+    try {
+      materializedAutoUpsertRows =
+        await coupangShipmentWorksheetStore.materializeSelpickOrderNumbers({
+          storeId: input.storeId,
+          platformKey: platformKey.key,
+          items: rowsToMaterialize,
+        });
+    } catch (error) {
+      for (const result of readyAutoUpsertResults) {
+        pushException({
+          ...buildShipmentWorksheetAuditRowItem({
+            sourceKey: result.candidate.sourceKey,
+            row: result.candidate.row,
+          }),
+          reasonCode: "unknown",
+          message:
+            error instanceof Error
+              ? error.message
+              : "셀픽 주문번호 예약 중 오류가 발생해 자동 반영하지 않았습니다.",
+        });
+      }
+      materializedAutoUpsertRows = [];
+    }
+  }
+
+  const materializedRowBySourceKey = new Map(
+    materializedAutoUpsertRows.map((row) => [row.sourceKey, row] as const),
+  );
+  const restoredSourceKeysToRequest = readyAutoUpsertResults
+    .filter((result) => result.candidate.action === "restored")
+    .map((result) => result.candidate.sourceKey);
+  let restoredSourceKeys = new Set<string>();
+
+  if (restoredSourceKeysToRequest.length > 0) {
+    try {
+      const restoreResult = await coupangShipmentWorksheetStore.restoreArchivedRows({
+        storeId: input.storeId,
+        sourceKeys: restoredSourceKeysToRequest,
+      });
+      restoredSourceKeys = new Set(restoreResult.restoredSourceKeys);
+      if (restoreResult.skippedCount > 0) {
+        pushUniqueWorksheetWarning(
+          warningMessages,
+          `보관함에서 복구되지 않은 ${restoreResult.skippedCount}건은 예외로 남겼습니다.`,
+        );
+      }
+    } catch (error) {
+      pushUniqueWorksheetWarning(
+        warningMessages,
+        error instanceof Error
+          ? `보관함 복구 중 실패가 발생했습니다. ${error.message}`
+          : "보관함 복구 중 실패가 발생했습니다.",
+      );
+    }
+  }
+
+  const appliedAutoUpsertRows: CoupangShipmentWorksheetRow[] = [];
+  for (const result of readyAutoUpsertResults) {
+    const nextRow = materializedRowBySourceKey.get(result.candidate.sourceKey);
+    if (!nextRow) {
+      continue;
+    }
+
+    if (
+      result.candidate.action === "restored" &&
+      !restoredSourceKeys.has(result.candidate.sourceKey)
+    ) {
+      pushException({
+        ...buildShipmentWorksheetAuditRowItem({
+          sourceKey: result.candidate.sourceKey,
+          row: result.candidate.row,
+        }),
+        reasonCode: "archived_conflict",
+        message: "보관함 복구에 실패해 자동 반영하지 않았습니다.",
+      });
+      continue;
+    }
+
+    appliedAutoUpsertRows.push(nextRow);
+    if (result.candidate.action === "restored") {
+      restoredCount += 1;
+    }
+    autoAppliedItems.push({
+      ...buildShipmentWorksheetAuditRowItem({
+        sourceKey: result.candidate.sourceKey,
+        row: {
+          ...result.candidate.row,
+          productName: nextRow.productName,
+          status: nextRow.orderStatus ?? result.candidate.row.status,
+          orderedAt: nextRow.orderedAtRaw,
+          paidAt: nextRow.orderedAtRaw,
+        },
+      }),
+      action: result.candidate.action,
+    });
+
+    const hiddenReason = getShipmentWorksheetRowHiddenReason(nextRow, hiddenQuery);
+    if (hiddenReason) {
+      hiddenItems.push({
+        sourceKey: nextRow.sourceKey,
+        rowId: nextRow.id,
+        status: normalizeStatusFilter(nextRow.orderStatus),
+        productName: nextRow.exposedProductName || nextRow.productName,
+        hiddenReason,
+      });
+    }
+  }
+
+  const mergedRows = mergeWorksheetRowsBySourceKey(workingWorksheetRows, [
+    ...Array.from(matchedUpdatedRows.values()),
+    ...appliedAutoUpsertRows,
+  ]);
+  const currentRowsBySourceKey = new Map(
+    worksheetRows.map((row) => [row.sourceKey, row] as const),
+  );
+  const mergedRowsBySourceKey = new Map(
+    mergedRows.map((row) => [row.sourceKey, row] as const),
+  );
+  const didWorksheetRowsChange =
+    currentRowsBySourceKey.size !== mergedRowsBySourceKey.size ||
+    Array.from(mergedRowsBySourceKey.entries()).some(([sourceKey, row]) => {
+      const currentRow = currentRowsBySourceKey.get(sourceKey);
+      return !currentRow || hasWorksheetRowChanged(currentRow, row);
+    }) ||
+    Array.from(currentRowsBySourceKey.keys()).some(
+      (sourceKey) => !mergedRowsBySourceKey.has(sourceKey),
+    );
+
+  if (didWorksheetRowsChange) {
+    await setWorksheetStoreSheetWithDiagnostics(
+      {
+        storeId: input.storeId,
+        items: mergedRows,
+        collectedAt: currentSheet.collectedAt,
+        source: currentSheet.source,
+        message: currentSheet.message,
+        syncState: currentSheet.syncState ?? createEmptySyncState(),
+        syncSummary: currentSheet.syncSummary,
+      },
+      {
+        storeId: input.storeId,
+        mode: DEFAULT_SYNC_MODE,
+        createdAtFrom,
+        createdAtTo,
+      },
+    );
+  }
+
+  const liveCount = liveRowBySourceKey.size + exceptionItems.length;
+  const autoAppliedCount = autoAppliedItems.length;
+  const exceptionCount = exceptionItems.length;
+  const hiddenInfoCount = hiddenItems.length;
+  const message = mergeMessages([
+    liveCount === 0
+      ? "선택한 기간의 live 상품준비중/주문접수 주문이 없습니다."
+      : `live ${liveCount}건 / worksheet 매칭 ${worksheetMatchedCount}건 / 자동 반영 ${autoAppliedCount}건 / 예외 ${exceptionCount}건 / 현재 뷰 숨김 ${hiddenInfoCount}건`,
+    restoredCount > 0 ? `보관함에서 ${restoredCount}건을 복구했습니다.` : null,
+    missingArchiveResult.archivedCount > 0
+      ? `쿠팡에서 더 이상 조회되지 않은 ${missingArchiveResult.archivedCount}건을 미조회 예외로 보관했습니다.`
+      : null,
+    warningMessages.length ? warningMessages.join(" ") : null,
+  ]);
+
+  return {
+    auditedStatuses: [...WORKSHEET_AUDIT_STATUSES],
+    liveCount,
+    worksheetMatchedCount,
+    autoAppliedCount,
+    restoredCount,
+    exceptionCount,
+    hiddenInfoCount,
+    autoAppliedItems,
+    exceptionItems,
+    hiddenItems,
+    message,
+  };
+}
+
 export async function auditShipmentWorksheetMissing(
   input: AuditCoupangShipmentWorksheetMissingInput,
 ): Promise<CoupangShipmentWorksheetAuditMissingResponse> {
+  return auditShipmentWorksheetMissingV2(input);
+/*
   const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
   const createdAtTo = normalizeWhitespace(input.createdAtTo);
 
@@ -4086,6 +5044,7 @@ export async function auditShipmentWorksheetMissing(
     hiddenItems,
     message,
   };
+*/
 }
 
 export async function resolveShipmentWorksheetBulkRows(input: {
@@ -4439,9 +5398,10 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     });
   }
 
+  const archivedRows = await coupangShipmentWorksheetStore.getArchivedRows(input.storeId);
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
   const claimWarnings: string[] = [];
-  const collectionCandidates: ShipmentWorksheetCollectionCandidate[] = candidateRows
+  const rawCollectionCandidates: ShipmentWorksheetCollectionCandidate[] = candidateRows
     .map((row) => {
       const sourceKey = buildSourceKey(input.storeId, row);
       const currentRow = currentBySourceKey.get(sourceKey);
@@ -4453,11 +5413,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         shouldHydrateOrder: shouldHydrateOrderRow(row, currentRow, now),
         shouldHydrateProduct: shouldHydrateProductRow(row, currentRow),
       } satisfies ShipmentWorksheetCollectionCandidate;
-    })
-    .filter((candidate) => !archivedSourceKeys.has(candidate.sourceKey));
-  const collectionCandidateBySourceKey = new Map(
-    collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
-  );
+    });
   const claimGroupsBySourceKey = new Map<string, ShipmentWorksheetClaimGroup>();
   const shouldLookupClaimsDuringCollect = true;
   let returnsLookup: PromiseSettledResult<Awaited<ReturnType<typeof listReturns>>> | null = null;
@@ -4491,10 +5447,6 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     returnRow?: CoupangReturnRow;
     exchangeRow?: CoupangExchangeRow;
   }) => {
-    if (archivedSourceKeys.has(inputGroup.sourceKey)) {
-      return;
-    }
-
     const existing = claimGroupsBySourceKey.get(inputGroup.sourceKey);
     if (existing) {
       if (inputGroup.returnRow) {
@@ -4525,7 +5477,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   if (shouldLookupClaimsDuringCollect && returnsLookup && exchangesLookup) {
   if (returnsLookup.status === "fulfilled" && returnsLookup.value.source === "live") {
     for (const request of returnsLookup.value.items) {
-      const matchedCandidate = matchReturnClaimCandidate(collectionCandidates, request);
+      const matchedCandidate = matchReturnClaimCandidate(rawCollectionCandidates, request);
       const matchedWorksheetRow =
         matchedCandidate?.currentRow ?? matchReturnWorksheetRow(currentSheet.items, request) ?? undefined;
       const descriptor = matchedCandidate
@@ -4582,7 +5534,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
 
   if (exchangesLookup.status === "fulfilled" && exchangesLookup.value.source === "live") {
     for (const request of exchangesLookup.value.items) {
-      const matchedCandidate = matchExchangeClaimCandidate(collectionCandidates, request);
+      const matchedCandidate = matchExchangeClaimCandidate(rawCollectionCandidates, request);
       const matchedWorksheetRow =
         matchedCandidate?.currentRow ??
         matchExchangeWorksheetRow(currentSheet.items, request) ??
@@ -4641,11 +5593,37 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
 
   }
 
+  const restoredMissingArchiveRows = await restoreMissingInCoupangArchiveRows({
+    storeId: input.storeId,
+    archivedRows,
+    sourceKeys: [
+      ...rawCollectionCandidates.map((candidate) => candidate.sourceKey),
+      ...Array.from(claimGroupsBySourceKey.keys()),
+    ],
+  });
+  restoredMissingArchiveRows.restoredSourceKeys.forEach((restoredSourceKey) => {
+    archivedSourceKeys.delete(restoredSourceKey);
+  });
+  const restoredMissingArchiveCount = restoredMissingArchiveRows.restoredSourceKeys.size;
+  if (restoredMissingArchiveRows.warningMessage) {
+    claimWarnings.push(restoredMissingArchiveRows.warningMessage);
+  }
+
+  const collectionCandidates: ShipmentWorksheetCollectionCandidate[] = rawCollectionCandidates.filter(
+    (candidate) => !archivedSourceKeys.has(candidate.sourceKey),
+  );
+  const collectionCandidateBySourceKey = new Map(
+    collectionCandidates.map((candidate) => [candidate.sourceKey, candidate] as const),
+  );
   const claimFetchedAt = now;
   let quickCollectClaimInsertCount = 0;
   let quickCollectClaimMatchedCount = 0;
 
   for (const claimGroup of Array.from(claimGroupsBySourceKey.values())) {
+    if (archivedSourceKeys.has(claimGroup.sourceKey)) {
+      continue;
+    }
+
     const issueState = buildCoupangCustomerServiceIssueState({
       relatedReturnRequests: claimGroup.returns,
       relatedExchangeRequests: claimGroup.exchanges,
@@ -5013,6 +5991,55 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     mergedBySourceKey.set(nextRow.sourceKey, existingRow);
   }
 
+  let mergedRows = Array.from(mergedBySourceKey.values());
+  let mergedMirrorRows = mergeWorksheetRowsBySourceKey(
+    getWorksheetMirrorStoreItems(currentSheet),
+    materializedFetchedRows,
+  );
+  let fullSyncMissingArchivedCount = 0;
+  const fullSyncMissingWarnings: string[] = [];
+
+  if (syncPlan.mode === "full") {
+    const liveSourceKeys = new Set(materializedFetchedRows.map((row) => row.sourceKey));
+    const missingVerificationTargets = getWorksheetMirrorStoreItems(currentSheet).filter(
+      (row) =>
+        matchesWorksheetRowDateRange(
+          row,
+          syncPlan.fetchCreatedAtFrom,
+          syncPlan.fetchCreatedAtTo,
+        ) && !liveSourceKeys.has(row.sourceKey),
+    );
+    const missingVerification = await verifyMissingInCoupangRows({
+      storeId: input.storeId,
+      rows: missingVerificationTargets,
+    });
+    fullSyncMissingWarnings.push(...missingVerification.warningMessages);
+
+    const missingArchiveResult = await archiveMissingInCoupangRows({
+      storeId: input.storeId,
+      rows: mergedRows,
+      missingRows: missingVerification.liveMissingRows,
+      detectedAt: now,
+      detectionSource: "full_sync",
+    });
+    fullSyncMissingArchivedCount = missingArchiveResult.archivedCount;
+    fullSyncMissingWarnings.push(...missingArchiveResult.warningMessages);
+    mergedRows = missingArchiveResult.rows;
+    mergedMirrorRows = mergeWorksheetRowsBySourceKey(
+      mergedMirrorRows,
+      missingArchiveResult.rows,
+    );
+    mergedMirrorRows = mergeWorksheetRowsBySourceKey(
+      mergedMirrorRows,
+      missingVerification.liveMissingRows.map((row) =>
+        markWorksheetRowMissingInCoupang(row, {
+          detectedAt: now,
+          detectionSource: "full_sync",
+        }),
+      ),
+    );
+  }
+
   const syncState = buildNextSyncState(
     currentSheet.syncState ?? createEmptySyncState(),
     syncPlan,
@@ -5022,7 +6049,12 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     },
   );
   const phaseState = buildCollectPhaseState({
-    hasCollectWarnings: Boolean(listResponse.message || platformKey.warning || claimWarnings.length),
+    hasCollectWarnings: Boolean(
+      listResponse.message ||
+        platformKey.warning ||
+        claimWarnings.length ||
+        fullSyncMissingWarnings.length
+    ),
     hasOrderDetailHydration: collectionCandidates.some((candidate) => candidate.shouldHydrateOrder),
     hasProductDetailHydration: collectionCandidates.some((candidate) => candidate.shouldHydrateProduct),
     hasCustomerServiceRefresh: collectionCandidates.length > 0,
@@ -5043,6 +6075,13 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     listResponse.message,
     platformKey.warning,
     claimWarnings.length ? claimWarnings.join(" ") : null,
+    restoredMissingArchiveCount > 0
+      ? `쿠팡에서 다시 조회된 미조회 보관 ${restoredMissingArchiveCount}건을 활성 목록으로 복귀했습니다.`
+      : null,
+    fullSyncMissingArchivedCount > 0
+      ? `쿠팡 기준 재동기화 중 더 이상 조회되지 않은 ${fullSyncMissingArchivedCount}건을 보관함으로 이동했습니다.`
+      : null,
+    fullSyncMissingWarnings.length ? fullSyncMissingWarnings.join(" ") : null,
     claimGroupsBySourceKey.size
       ? insertOnlyMode
         ? `${syncModeLabel}에서 신규 클레임 ${quickCollectClaimInsertCount}건을 워크시트에 추가했습니다.`
@@ -5062,7 +6101,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   ]);
   const autoArchiveResult = await applyCompletedClaimAutoArchive({
     storeId: input.storeId,
-    rows: Array.from(mergedBySourceKey.values()),
+    rows: mergedRows,
     message: baseMessage,
     archivedAt: now,
     persistToStore: true,
@@ -5070,6 +6109,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const sheet = await setWorksheetStoreSheetWithDiagnostics({
     storeId: input.storeId,
     items: autoArchiveResult.rows,
+    mirrorItems: mergedMirrorRows,
     collectedAt: now,
     source: listResponse.source,
     message: autoArchiveResult.message,

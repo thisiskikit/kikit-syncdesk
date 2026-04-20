@@ -1832,6 +1832,10 @@ textarea {
   background: #fff8e7;
 }
 
+.shipment-row-excluded {
+  box-shadow: inset 3px 0 0 #6a5acd;
+}
+
 .shipment-row-pending {
   background: #eef6ff;
 }

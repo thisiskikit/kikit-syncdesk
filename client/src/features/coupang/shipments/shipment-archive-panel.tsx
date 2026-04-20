@@ -45,6 +45,22 @@ export default function ShipmentArchivePanel({
   formatInvoiceText,
   onOpenDetail,
 }: ShipmentArchivePanelProps) {
+  const buildArchiveEvidenceText = (row: CoupangShipmentArchiveRow) => {
+    if (row.archiveReason !== "not_found_in_coupang") {
+      return null;
+    }
+
+    const details = [
+      row.lastSeenOrderStatus ? `마지막 상태 ${row.lastSeenOrderStatus}` : null,
+      row.missingDetectedAt ? `감지 ${formatDateTimeLabel(row.missingDetectedAt)}` : null,
+      row.missingDetectionSource
+        ? `경로 ${row.missingDetectionSource === "full_sync" ? "30일 재동기화" : "미조회 정리"}`
+        : null,
+    ].filter((value): value is string => Boolean(value));
+
+    return details.length ? details.join(" / ") : null;
+  };
+
   return (
     <div className="card">
       <div className="card-header">
@@ -121,6 +137,7 @@ export default function ShipmentArchivePanel({
               <tbody>
                 {rows.map((row) => {
                   const statusPresentation = getStatusPresentation(row);
+                  const archiveEvidenceText = buildArchiveEvidenceText(row);
 
                   return (
                     <tr key={row.id}>
@@ -132,6 +149,9 @@ export default function ShipmentArchivePanel({
                             {statusPresentation.orderLabel}
                           </span>
                           <span className="muted">{getArchiveReasonLabel(row)}</span>
+                          {archiveEvidenceText ? (
+                            <span className="muted">{archiveEvidenceText}</span>
+                          ) : null}
                         </div>
                       </td>
                       <td>

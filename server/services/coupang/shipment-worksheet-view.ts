@@ -1,9 +1,11 @@
 import {
+  type CoupangShipmentArchiveReason,
   type CoupangShipmentWorksheetAuditHiddenReason,
   isCoupangInvoiceAlreadyProcessedResult,
   type CoupangCustomerServiceIssueBreakdownItem,
   type CoupangShipmentIssueFilter,
   type CoupangShipmentWorksheetBulkResolveMode,
+  type CoupangShipmentWorksheetDatasetMode,
   type CoupangShipmentWorksheetBulkResolveResponse,
   type CoupangShipmentWorksheetInvoiceStatusCard,
   type CoupangShipmentWorksheetOrderStatusCard,
@@ -35,6 +37,7 @@ import { resolveCoupangInvoiceTransmissionBlockReason } from "@shared/coupang-in
 
 type WorksheetViewCounts = Pick<
   CoupangShipmentWorksheetViewResponse,
+  | "datasetMode"
   | "scopeCounts"
   | "invoiceCounts"
   | "orderCounts"
@@ -45,10 +48,17 @@ type WorksheetViewCounts = Pick<
   | "priorityCounts"
   | "pipelineCounts"
   | "issueCounts"
+  | "missingInCoupangCount"
+  | "exceptionCounts"
   | "directDeliveryCount"
   | "staleSyncCount"
   | "scopeRowCount"
   | "filteredRowCount"
+  | "mirrorTotalRowCount"
+  | "mirrorFilteredRowCount"
+  | "activeTotalRowCount"
+  | "activeFilteredRowCount"
+  | "activeExclusionCounts"
   | "page"
   | "pageSize"
   | "totalPages"
@@ -68,12 +78,14 @@ type NormalizedQuery = Omit<
   "storeId"
 > & {
   storeId: string;
+  datasetMode: CoupangShipmentWorksheetDatasetMode;
   createdAtFrom: string | null;
   createdAtTo: string | null;
   sortField: CoupangShipmentWorksheetSortField | null;
 };
 
 const DEFAULT_SCOPE: CoupangShipmentWorksheetViewScope = "all";
+const DEFAULT_DATASET_MODE: CoupangShipmentWorksheetDatasetMode = "active";
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_DECISION_STATUS = "all";
@@ -150,6 +162,13 @@ const OUTPUT_STATUS_KEYS = [
   "exported",
 ] as const satisfies readonly CoupangShipmentWorksheetOutputStatusCard[];
 
+const ACTIVE_EXCLUSION_REASON_KEYS = [
+  "retention_post_dispatch",
+  "cancel_completed",
+  "return_completed",
+  "not_found_in_coupang",
+] as const satisfies readonly CoupangShipmentArchiveReason[];
+
 const DISPATCH_ACTIVE_STATUSES = new Set(["ACCEPT", "INSTRUCT"]);
 const POST_DISPATCH_STATUSES = new Set([
   "DEPARTURE",
@@ -196,6 +215,12 @@ export function hasShipmentWorksheetClaimIssue(
   >,
 ) {
   return hasCustomerServiceIssue(row);
+}
+
+function isMissingInCoupangRow(
+  row: Pick<CoupangShipmentWorksheetRow, "missingInCoupang">,
+) {
+  return row.missingInCoupang === true;
 }
 
 function resolveDisplayOrderStatus(
@@ -465,6 +490,9 @@ export function matchesShipmentWorksheetQuery(row: CoupangShipmentWorksheetRow, 
     buildCoupangShipmentStatusSnapshot(row).pipelineBucket,
     buildCoupangShipmentStatusSnapshot(row).syncSource,
     buildCoupangShipmentStatusSnapshot(row).statusMismatchReason,
+    row.lastSeenOrderStatus,
+    row.lastSeenIssueSummary,
+    row.missingInCoupang ? "missing_in_coupang" : "",
     resolveDisplayOrderStatus(row),
     normalizeSummary(row.customerServiceIssueSummary),
     row.productName,
@@ -525,6 +553,12 @@ function normalizeScope(value: string | null | undefined): CoupangShipmentWorksh
   return VIEW_SCOPES.includes(value as CoupangShipmentWorksheetViewScope)
     ? (value as CoupangShipmentWorksheetViewScope)
     : DEFAULT_SCOPE;
+}
+
+function normalizeDatasetMode(
+  value: string | null | undefined,
+): CoupangShipmentWorksheetDatasetMode {
+  return value === "mirror" ? "mirror" : DEFAULT_DATASET_MODE;
 }
 
 function normalizePriorityCard(
@@ -660,6 +694,14 @@ function matchesWorksheetRowDateRange(
   return rowDateKey >= fromKey && rowDateKey <= toKey;
 }
 
+export function matchesShipmentWorksheetDateRange(
+  row: CoupangShipmentWorksheetRow,
+  createdAtFrom: string | null,
+  createdAtTo: string | null,
+) {
+  return matchesWorksheetRowDateRange(row, createdAtFrom, createdAtTo);
+}
+
 export function normalizeShipmentWorksheetViewQuery(
   query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
 ): NormalizedQuery {
@@ -670,6 +712,7 @@ export function normalizeShipmentWorksheetViewQuery(
 
   return {
     storeId: query?.storeId ?? "",
+    datasetMode: normalizeDatasetMode(query?.datasetMode),
     createdAtFrom: normalizedDateRange.createdAtFrom,
     createdAtTo: normalizedDateRange.createdAtTo,
     scope: normalizeScope(query?.scope),
@@ -719,6 +762,7 @@ function resolveFilteredRows(
   const searchedRows = scopedRows.filter((row) => matchesShipmentWorksheetQuery(row, query.query));
   const priorityFacetRows = searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPipelineCard(row, query.pipelineCard) &&
       matchesIssueFilter(row, query.issueFilter) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
@@ -728,6 +772,7 @@ function resolveFilteredRows(
   );
   const pipelineFacetRows = searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPriorityCard(row, query.priorityCard) &&
       matchesIssueFilter(row, query.issueFilter) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
@@ -737,6 +782,7 @@ function resolveFilteredRows(
   );
   const issueFacetRows = searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPriorityCard(row, query.priorityCard) &&
       matchesPipelineCard(row, query.pipelineCard) &&
       matchesCoupangFulfillmentDecisionFilter(row, query.decisionStatus) &&
@@ -810,28 +856,41 @@ export function getShipmentWorksheetRowHiddenReason(
   return null;
 }
 
+type WorksheetViewDatasetInput =
+  | readonly CoupangShipmentWorksheetRow[]
+  | {
+      activeRows: readonly CoupangShipmentWorksheetRow[];
+      mirrorRows: readonly CoupangShipmentWorksheetRow[];
+    };
+
+function resolveWorksheetViewDatasets(input: WorksheetViewDatasetInput) {
+  if (!("activeRows" in input)) {
+    return {
+      activeRows: input,
+      mirrorRows: input,
+    };
+  }
+
+  return {
+    activeRows: input.activeRows,
+    mirrorRows: input.mirrorRows,
+  };
+}
+
 export function buildShipmentWorksheetViewData(
-  rows: readonly CoupangShipmentWorksheetRow[],
+  input: WorksheetViewDatasetInput,
   rawQuery: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
 ): WorksheetViewCounts {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
-  const datedRows = rows.filter((row) =>
-    matchesWorksheetRowDateRange(row, query.createdAtFrom, query.createdAtTo),
-  );
-  const scopeCounts = countScopeRows(datedRows);
-  const {
-    datedRows: filteredDatedRows,
-    scopedRows,
-    searchedRows,
-    priorityFacetRows,
-    pipelineFacetRows,
-    issueFacetRows,
-    queueFilteredRows,
-    filteredRows,
-  } = resolveFilteredRows(rows, query);
+  const { activeRows, mirrorRows } = resolveWorksheetViewDatasets(input);
+  const activeView = resolveFilteredRows(activeRows, query);
+  const mirrorView = resolveFilteredRows(mirrorRows, query);
+  const displayView = query.datasetMode === "mirror" ? mirrorView : activeView;
 
-  const invoiceFacetRows = searchedRows.filter(
+  const scopeCounts = countScopeRows(activeView.datedRows);
+  const invoiceFacetRows = activeView.searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPriorityCard(row, query.priorityCard) &&
       matchesPipelineCard(row, query.pipelineCard) &&
       matchesIssueFilter(row, query.issueFilter) &&
@@ -839,8 +898,9 @@ export function buildShipmentWorksheetViewData(
       matchesOrderStatusCard(row, query.orderStatusCard) &&
       matchesOutputStatusCard(row, query.outputStatusCard),
   );
-  const orderFacetRows = searchedRows.filter(
+  const orderFacetRows = mirrorView.searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPriorityCard(row, query.priorityCard) &&
       matchesPipelineCard(row, query.pipelineCard) &&
       matchesIssueFilter(row, query.issueFilter) &&
@@ -848,8 +908,9 @@ export function buildShipmentWorksheetViewData(
       matchesInvoiceStatusCard(row, query.invoiceStatusCard) &&
       matchesOutputStatusCard(row, query.outputStatusCard),
   );
-  const outputFacetRows = searchedRows.filter(
+  const outputFacetRows = activeView.searchedRows.filter(
     (row) =>
+      !isMissingInCoupangRow(row) &&
       matchesPriorityCard(row, query.priorityCard) &&
       matchesPipelineCard(row, query.pipelineCard) &&
       matchesIssueFilter(row, query.issueFilter) &&
@@ -859,7 +920,7 @@ export function buildShipmentWorksheetViewData(
   );
 
   const sortedRows = query.sortField
-    ? filteredRows.slice().sort((left, right) => {
+    ? displayView.filteredRows.slice().sort((left, right) => {
         const compared = compareSortValues(
           getSortValue(left, query.sortField),
           getSortValue(right, query.sortField),
@@ -869,7 +930,7 @@ export function buildShipmentWorksheetViewData(
         }
         return left.id.localeCompare(right.id);
       })
-    : filteredRows.slice();
+    : displayView.filteredRows.slice();
 
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / query.pageSize));
   const page = Math.min(query.page, totalPages);
@@ -881,25 +942,27 @@ export function buildShipmentWorksheetViewData(
   const issueCounts = createCountRecord(ISSUE_FILTER_KEYS);
   const orderCounts = createCountRecord(ORDER_STATUS_KEYS);
   const outputCounts = createCountRecord(OUTPUT_STATUS_KEYS);
+  const activeExclusionCounts = createCountRecord(ACTIVE_EXCLUSION_REASON_KEYS);
+  const missingInCoupangCount = mirrorView.searchedRows.filter((row) => isMissingInCoupangRow(row)).length;
 
-  priorityCounts.all = priorityFacetRows.length;
-  for (const row of priorityFacetRows) {
+  priorityCounts.all = mirrorView.priorityFacetRows.length;
+  for (const row of mirrorView.priorityFacetRows) {
     const cardKey = buildCoupangShipmentStatusSnapshot(row).priorityBucket;
     if (cardKey) {
       priorityCounts[cardKey] += 1;
     }
   }
 
-  pipelineCounts.all = pipelineFacetRows.length;
-  for (const row of pipelineFacetRows) {
+  pipelineCounts.all = mirrorView.pipelineFacetRows.length;
+  for (const row of mirrorView.pipelineFacetRows) {
     const cardKey = buildCoupangShipmentStatusSnapshot(row).pipelineBucket;
     if (cardKey) {
       pipelineCounts[cardKey] += 1;
     }
   }
 
-  issueCounts.all = issueFacetRows.length;
-  for (const row of issueFacetRows) {
+  issueCounts.all = mirrorView.issueFacetRows.length;
+  for (const row of mirrorView.issueFacetRows) {
     const issueStage = resolveCoupangShipmentIssueStage(row);
     if (issueStage !== "none") {
       issueCounts[issueStage] += 1;
@@ -927,10 +990,17 @@ export function buildShipmentWorksheetViewData(
     outputCounts[getOutputStatusCardKey(row)] += 1;
   }
 
-  const decisionCounts = buildCoupangFulfillmentDecisionCounts(queueFilteredRows);
-  const decisionPreviewGroups = buildCoupangShipmentDecisionPreviewGroups(queueFilteredRows);
+  for (const row of mirrorView.filteredRows) {
+    if (row.isVisibleInActive === false && row.excludedFromActiveReason) {
+      activeExclusionCounts[row.excludedFromActiveReason] += 1;
+    }
+  }
+
+  const decisionCounts = buildCoupangFulfillmentDecisionCounts(activeView.queueFilteredRows);
+  const decisionPreviewGroups = buildCoupangShipmentDecisionPreviewGroups(activeView.queueFilteredRows);
 
   return {
+    datasetMode: query.datasetMode,
     items: pagedRows.map((row) => {
       const statusSnapshot = buildCoupangShipmentStatusSnapshot(row);
       return {
@@ -946,17 +1016,26 @@ export function buildShipmentWorksheetViewData(
     page,
     pageSize: query.pageSize,
     totalPages,
-    totalRowCount: filteredDatedRows.length,
-    scopeRowCount: scopedRows.length,
+    totalRowCount: displayView.datedRows.length,
+    scopeRowCount: displayView.scopedRows.length,
     filteredRowCount: sortedRows.length,
-    invoiceReadyCount: filteredRows.filter((row) => canSendInvoiceRow(row)).length,
+    mirrorTotalRowCount: mirrorView.datedRows.length,
+    mirrorFilteredRowCount: mirrorView.filteredRows.length,
+    activeTotalRowCount: activeView.datedRows.length,
+    activeFilteredRowCount: activeView.filteredRows.length,
+    activeExclusionCounts,
+    invoiceReadyCount: activeView.filteredRows.filter((row) => canSendInvoiceRow(row)).length,
     decisionCounts,
     decisionPreviewGroups,
     priorityCounts,
     pipelineCounts,
     issueCounts,
-    directDeliveryCount: issueFacetRows.filter((row) => isCoupangShipmentDirectDelivery(row)).length,
-    staleSyncCount: issueFacetRows.filter((row) => isCoupangShipmentStaleSync(row)).length,
+    missingInCoupangCount,
+    exceptionCounts: {
+      notFoundInCoupang: missingInCoupangCount,
+    },
+    directDeliveryCount: mirrorView.issueFacetRows.filter((row) => isCoupangShipmentDirectDelivery(row)).length,
+    staleSyncCount: mirrorView.issueFacetRows.filter((row) => isCoupangShipmentStaleSync(row)).length,
     scopeCounts,
     invoiceCounts,
     orderCounts,

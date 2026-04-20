@@ -460,6 +460,7 @@ export function createDefaultFilters(): FilterState {
     createdAtTo: defaultSeoulDate(0),
     query: "",
     maxPerPage: 20,
+    datasetMode: "active",
     scope: "all",
     decisionStatus: "all",
     priorityCard: "all",
@@ -480,6 +481,7 @@ export function normalizeFiltersToSeoulToday(current: FilterState): FilterState 
     ...current,
     createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
     createdAtTo: today,
+    datasetMode: current.datasetMode === "mirror" ? "mirror" : "active",
     scope: current.scope ?? "all",
     decisionStatus: current.decisionStatus ?? "all",
     priorityCard: normalizePriorityCardFilter(current.priorityCard),
@@ -498,6 +500,7 @@ export function areFiltersEqual(left: FilterState, right: FilterState) {
     left.createdAtTo === right.createdAtTo &&
     left.query === right.query &&
     left.maxPerPage === right.maxPerPage &&
+    left.datasetMode === right.datasetMode &&
     left.scope === right.scope &&
     left.decisionStatus === right.decisionStatus &&
     left.priorityCard === right.priorityCard &&

@@ -134,6 +134,9 @@ function buildWorksheetRowClassName(
 ) {
   const classNames = [];
 
+  if (row.isVisibleInActive === false && row.excludedFromActiveReason) {
+    classNames.push("shipment-row-excluded");
+  }
   if (dirtySourceKeys.has(row.sourceKey)) {
     classNames.push("shipment-row-dirty");
   }

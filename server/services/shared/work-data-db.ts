@@ -55,6 +55,7 @@ const createTableStatements = [
       collected_at timestamptz,
       source text NOT NULL DEFAULT 'live',
       message text,
+      mirror_items_json jsonb NOT NULL DEFAULT '[]'::jsonb,
       sync_state_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       sync_summary_json jsonb,
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -479,6 +480,10 @@ const createTableStatements = [
 ];
 
 const alterTableStatements = [
+  `
+    ALTER TABLE coupang_shipment_sheets
+    ADD COLUMN IF NOT EXISTS mirror_items_json jsonb NOT NULL DEFAULT '[]'::jsonb
+  `,
   `
     ALTER TABLE naver_bulk_price_run_items
     ADD COLUMN IF NOT EXISTS seller_barcode text

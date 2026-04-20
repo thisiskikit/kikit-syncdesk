@@ -315,6 +315,7 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
   const item = value && typeof value === "object" ? (value as JsonRecord) : {};
   const createdAtFrom = asOptionalString(item.createdAtFrom);
   const createdAtTo = asOptionalString(item.createdAtTo);
+  const datasetMode = asOptionalString(item.datasetMode);
   const scope = asOptionalString(item.scope);
   const decisionStatus = asOptionalString(item.decisionStatus);
   const priorityCard = asOptionalString(item.priorityCard);
@@ -331,6 +332,7 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
     storeId: asString(item.storeId),
     createdAtFrom: createdAtFrom ?? undefined,
     createdAtTo: createdAtTo ?? undefined,
+    datasetMode: datasetMode === "mirror" || datasetMode === "active" ? datasetMode : undefined,
     scope:
       scope === "dispatch_active" ||
       scope === "post_dispatch" ||
@@ -476,6 +478,7 @@ export function parseShipmentWorksheetAuditMissingInput(
     createdAtFrom: asString(item.createdAtFrom),
     createdAtTo: asString(item.createdAtTo),
     viewQuery: {
+      datasetMode: parsedViewQuery.datasetMode,
       scope: parsedViewQuery.scope,
       decisionStatus: parsedViewQuery.decisionStatus,
       query: parsedViewQuery.query,
@@ -497,6 +500,7 @@ export function parseReconcileShipmentWorksheetLiveInput(
     createdAtFrom: asString(item.createdAtFrom),
     createdAtTo: asString(item.createdAtTo),
     viewQuery: {
+      datasetMode: parsedViewQuery.datasetMode,
       scope: parsedViewQuery.scope,
       decisionStatus: parsedViewQuery.decisionStatus,
       query: parsedViewQuery.query,
@@ -517,6 +521,7 @@ export function parseShipmentWorksheetBulkResolveRequest(
       : undefined;
   const viewQuery = parsedViewQuery
       ? {
+        datasetMode: parsedViewQuery.datasetMode,
         scope: parsedViewQuery.scope,
         decisionStatus: parsedViewQuery.decisionStatus,
         page: parsedViewQuery.page,

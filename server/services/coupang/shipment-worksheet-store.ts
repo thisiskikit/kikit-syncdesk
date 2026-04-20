@@ -16,6 +16,8 @@ export type {
   MaterializeCoupangShipmentWorksheetSelpickNumbersInput,
   PatchCoupangShipmentWorksheetRowsInput,
   PatchCoupangShipmentWorksheetRowsResult,
+  RestoreArchivedCoupangShipmentWorksheetRowsInput,
+  RestoreArchivedCoupangShipmentWorksheetRowsResult,
   SetCoupangShipmentWorksheetStoreSheetInput,
   UpsertCoupangShipmentWorksheetRowsInput,
 } from "../../interfaces/coupang-shipment-worksheet-store";

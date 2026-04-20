@@ -580,6 +580,7 @@ export type CoupangCustomerServiceIssueType =
   | "exchange";
 export type CoupangCustomerServiceState = "unknown" | "ready" | "stale";
 export type CoupangCustomerServiceTerminalStatus = "cancel_completed" | "return_completed";
+export type CoupangShipmentMissingDetectionSource = "full_sync" | "reconcile_live";
 export type CoupangShipmentArchiveReason =
   | "retention_post_dispatch"
   | "cancel_completed"
@@ -1086,6 +1087,13 @@ export interface CoupangShipmentWorksheetRow {
   syncSource?: CoupangShipmentStatusSyncSource | null;
   statusDerivedAt?: string | null;
   statusMismatchReason?: string | null;
+  missingInCoupang?: boolean;
+  missingDetectedAt?: string | null;
+  missingDetectionSource?: CoupangShipmentMissingDetectionSource | null;
+  lastSeenOrderStatus?: string | null;
+  lastSeenIssueSummary?: string | null;
+  isVisibleInActive?: boolean;
+  excludedFromActiveReason?: CoupangShipmentArchiveReason | null;
   customerServiceIssueCount: number;
   customerServiceIssueSummary: string | null;
   customerServiceIssueBreakdown: CoupangCustomerServiceIssueBreakdownItem[];
@@ -1246,6 +1254,8 @@ export type CoupangShipmentWorksheetViewScope =
   | "claims"
   | "all";
 
+export type CoupangShipmentWorksheetDatasetMode = "active" | "mirror";
+
 export const coupangShipmentShippingStages = [
   "payment_completed",
   "preparing_product",
@@ -1388,6 +1398,7 @@ export interface CoupangShipmentWorksheetViewQuery {
   createdAtFrom?: string;
   createdAtTo?: string;
   scope?: CoupangShipmentWorksheetViewScope;
+  datasetMode?: CoupangShipmentWorksheetDatasetMode;
   decisionStatus?: CoupangFulfillmentDecisionFilterValue;
   priorityCard?: CoupangShipmentWorksheetPriorityCardFilter;
   pipelineCard?: CoupangShipmentWorksheetPipelineCardFilter;
@@ -1415,6 +1426,7 @@ export interface CoupangShipmentWorksheetViewResponse {
   coverageCreatedAtTo: string | null;
   isAuthoritativeMirror: boolean;
   lastFullSyncedAt: string | null;
+  datasetMode: CoupangShipmentWorksheetDatasetMode;
   scope: CoupangShipmentWorksheetViewScope;
   page: number;
   pageSize: number;
@@ -1422,6 +1434,11 @@ export interface CoupangShipmentWorksheetViewResponse {
   totalRowCount: number;
   scopeRowCount: number;
   filteredRowCount: number;
+  mirrorTotalRowCount: number;
+  mirrorFilteredRowCount: number;
+  activeTotalRowCount: number;
+  activeFilteredRowCount: number;
+  activeExclusionCounts: Record<CoupangShipmentArchiveReason, number>;
   invoiceReadyCount: number;
   decisionCounts: CoupangFulfillmentDecisionCounts;
   decisionPreviewGroups: Record<
@@ -1431,6 +1448,10 @@ export interface CoupangShipmentWorksheetViewResponse {
   priorityCounts: Record<CoupangShipmentWorksheetPriorityCardFilter, number>;
   pipelineCounts: Record<CoupangShipmentWorksheetPipelineCardFilter, number>;
   issueCounts: Record<CoupangShipmentIssueFilter, number>;
+  missingInCoupangCount: number;
+  exceptionCounts: {
+    notFoundInCoupang: number;
+  };
   directDeliveryCount: number;
   staleSyncCount: number;
   scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
@@ -1496,13 +1517,54 @@ export interface CoupangShipmentWorksheetAuditHiddenItem {
   hiddenReason: CoupangShipmentWorksheetAuditHiddenReason;
 }
 
+export type CoupangShipmentWorksheetAuditAutoAppliedAction =
+  | "status_updated"
+  | "inserted"
+  | "restored";
+
+export type CoupangShipmentWorksheetAuditExceptionReasonCode =
+  | "duplicate_source_key"
+  | "archived_conflict"
+  | "identity_incomplete"
+  | "hydration_failed"
+  | "claim_or_blocking_issue"
+  | "unknown";
+
+export interface CoupangShipmentWorksheetAuditAutoAppliedItem {
+  sourceKey: string;
+  shipmentBoxId: string;
+  orderId: string;
+  vendorItemId: string | null;
+  sellerProductId: string | null;
+  status: string | null;
+  productName: string;
+  orderedAt: string | null;
+  action: CoupangShipmentWorksheetAuditAutoAppliedAction;
+}
+
+export interface CoupangShipmentWorksheetAuditExceptionItem {
+  sourceKey: string;
+  shipmentBoxId: string | null;
+  orderId: string | null;
+  vendorItemId: string | null;
+  sellerProductId: string | null;
+  status: string | null;
+  productName: string;
+  orderedAt: string | null;
+  reasonCode: CoupangShipmentWorksheetAuditExceptionReasonCode;
+  message: string | null;
+}
+
 export interface CoupangShipmentWorksheetAuditMissingResponse {
   auditedStatuses: CoupangShipmentWorksheetAuditStatus[];
   liveCount: number;
   worksheetMatchedCount: number;
-  missingCount: number;
-  hiddenCount: number;
-  missingItems: CoupangShipmentWorksheetAuditMissingItem[];
+  autoAppliedCount: number;
+  restoredCount: number;
+  exceptionCount: number;
+  hiddenInfoCount: number;
+  autoAppliedItems: CoupangShipmentWorksheetAuditAutoAppliedItem[];
+  exceptionItems: CoupangShipmentWorksheetAuditExceptionItem[];
   hiddenItems: CoupangShipmentWorksheetAuditHiddenItem[];
   message: string | null;
 }
