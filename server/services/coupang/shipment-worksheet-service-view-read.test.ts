@@ -145,8 +145,8 @@ describe("getShipmentWorksheetView", () => {
       syncState: {
         lastIncrementalCollectedAt: null,
         lastFullCollectedAt: null,
-        coveredCreatedAtFrom: null,
-        coveredCreatedAtTo: null,
+        coveredCreatedAtFrom: "2026-04-01",
+        coveredCreatedAtTo: "2026-04-17",
         lastStatusFilter: null,
       },
       syncSummary: null,
@@ -169,5 +169,7 @@ describe("getShipmentWorksheetView", () => {
     expect(response.items[0]?.primaryDecision?.status).toBe("recheck");
     expect(response.decisionCounts.recheck).toBe(1);
     expect(response.decisionPreviewGroups.recheck.count).toBe(1);
+    expect(response.coverageCreatedAtFrom).toBe("2026-04-01");
+    expect(response.coverageCreatedAtTo).toBe("2026-04-17");
   });
 });

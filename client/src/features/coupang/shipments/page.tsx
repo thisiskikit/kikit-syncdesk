@@ -309,6 +309,16 @@ const WORKSHEET_SCOPE_OPTIONS: ReadonlyArray<{
   { value: "claims", label: "예외·클레임", description: "취소·반품·교환·출고중지 등 예외 주문" },
   { value: "all", label: "전체", description: "전체 워크시트" },
 ] as const;
+const MAIN_WORKSHEET_SCOPE_OPTIONS: ReadonlyArray<{
+  value: CoupangShipmentWorksheetViewScope;
+  label: string;
+  description: string;
+}> = [
+  { value: "all", label: "전체 배송관리", description: "쿠팡 배송관리 미러 기준 전체 조회" },
+  { value: "dispatch_active", label: "내부 작업 대상", description: "발송 판단과 송장 작업을 바로 볼 주문" },
+  { value: "post_dispatch", label: "배송 이후", description: "출력 완료 후 배송 상태를 보는 주문" },
+  { value: "claims", label: "이슈·클레임", description: "취소·반품·교환·출고중지 신호가 있는 주문" },
+] as const;
 const FULFILLMENT_DECISION_OPTIONS = [
   { value: "all", label: "전체", description: "현재 화면의 주문 전체를 보여줍니다." },
   { value: "ready", label: "출고 가능", description: "즉시 출고 관련 작업을 진행할 수 있는 주문입니다." },
@@ -400,6 +410,8 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
 
 function buildWorksheetViewUrl(input: {
   storeId: string;
+  createdAtFrom: string;
+  createdAtTo: string;
   scope: CoupangShipmentWorksheetViewScope;
   decisionStatus: FilterState["decisionStatus"];
   priorityCard: FilterState["priorityCard"];
@@ -416,6 +428,8 @@ function buildWorksheetViewUrl(input: {
 }) {
   const params = new URLSearchParams({
     storeId: input.storeId,
+    createdAtFrom: input.createdAtFrom,
+    createdAtTo: input.createdAtTo,
     scope: input.scope,
     page: String(input.page),
     pageSize: String(input.pageSize),
@@ -1826,6 +1840,8 @@ export default function CoupangShipmentsPage() {
     queryKey: [
       "/api/coupang/shipments/worksheet/view",
       filters.selectedStoreId,
+      filters.createdAtFrom,
+      filters.createdAtTo,
       effectiveWorksheetScope,
       worksheetPage,
       worksheetPageSize,
@@ -1844,6 +1860,8 @@ export default function CoupangShipmentsPage() {
       getJson<CoupangShipmentWorksheetViewResponse>(
         buildWorksheetViewUrl({
           storeId: filters.selectedStoreId,
+          createdAtFrom: filters.createdAtFrom,
+          createdAtTo: filters.createdAtTo,
           scope: effectiveWorksheetScope,
           decisionStatus: filters.decisionStatus,
           priorityCard: filters.priorityCard,
@@ -2004,6 +2022,8 @@ export default function CoupangShipmentsPage() {
     setSelectedRowIds(new Set());
     setSelectedRowsById({});
   }, [
+    filters.createdAtFrom,
+    filters.createdAtTo,
     filters.selectedStoreId,
     filters.scope,
     filters.decisionStatus,
@@ -2184,7 +2204,7 @@ export default function CoupangShipmentsPage() {
   ]);
   const hasCustomWorksheetFilters =
     Boolean(deferredQuery) ||
-    effectiveWorksheetScope !== "dispatch_active" ||
+    effectiveWorksheetScope !== "all" ||
     filters.priorityCard !== "all" ||
     filters.pipelineCard !== "all" ||
     filters.issueFilter !== "all" ||
@@ -5199,7 +5219,7 @@ export default function CoupangShipmentsPage() {
         filters,
         stores,
         scopeCounts,
-        scopeOptions: WORKSHEET_SCOPE_OPTIONS,
+        scopeOptions: MAIN_WORKSHEET_SCOPE_OPTIONS,
         refreshDisabled: refreshActionDisabled,
         onPatchFilters: (patch) =>
           setFilters((current) => ({
@@ -5266,7 +5286,7 @@ export default function CoupangShipmentsPage() {
           setFilters((current) => ({
             ...current,
             query: "",
-            scope: "dispatch_active",
+            scope: "all",
             decisionStatus: "all",
             priorityCard: "all",
             pipelineCard: "all",

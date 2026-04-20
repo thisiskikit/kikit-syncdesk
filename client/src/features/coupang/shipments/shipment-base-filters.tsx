@@ -9,6 +9,47 @@ type ScopeOption = {
   description: string;
 };
 
+const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const DATE_PRESET_OPTIONS = [
+  { key: "today", label: "오늘", fromOffset: 0, toOffset: 0 },
+  { key: "last7", label: "지난 7일", fromOffset: -6, toOffset: 0 },
+  { key: "last30", label: "지난 30일", fromOffset: -29, toOffset: 0 },
+] as const;
+
+function getSeoulDateParts(date: Date) {
+  const parts = SEOUL_DATE_FORMATTER
+    .formatToParts(date)
+    .reduce<Record<string, string>>((current, part) => {
+      if (part.type !== "literal") {
+        current[part.type] = part.value;
+      }
+      return current;
+    }, {});
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+  };
+}
+
+function defaultSeoulDate(offsetDays: number) {
+  const { year, month, day } = getSeoulDateParts(new Date());
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+
+  const nextYear = date.getUTCFullYear();
+  const nextMonth = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const nextDay = String(date.getUTCDate()).padStart(2, "0");
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+}
+
 type ShipmentBaseFiltersProps = {
   activeTab: "worksheet" | "confirmed" | "archive" | "settings";
   filters: FilterState;
@@ -32,6 +73,11 @@ export default function ShipmentBaseFilters({
 }: ShipmentBaseFiltersProps) {
   const isWorksheetTab = activeTab === "worksheet";
   const isArchiveTab = activeTab === "archive";
+  const activeDatePresetKey = DATE_PRESET_OPTIONS.find(
+    (option) =>
+      filters.createdAtFrom === defaultSeoulDate(option.fromOffset) &&
+      filters.createdAtTo === defaultSeoulDate(option.toOffset),
+  )?.key;
 
   return (
     <div className="card shipment-filter-bar">
@@ -83,6 +129,36 @@ export default function ShipmentBaseFilters({
           placeholder="주문번호, 상품명, 수령인명, 송장번호 검색"
         />
       </div>
+
+      {!isArchiveTab ? (
+        <div className="shipment-filter-scope-row">
+          <div className="shipment-status-group">
+            <div className="shipment-status-group-label">조회 기간 프리셋</div>
+            <div className="shipment-status-pill-list">
+              {DATE_PRESET_OPTIONS.map((option) => {
+                const active = activeDatePresetKey === option.key;
+
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`shipment-filter-pill neutral${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    onClick={() =>
+                      onPatchFilters({
+                        createdAtFrom: defaultSeoulDate(option.fromOffset),
+                        createdAtTo: defaultSeoulDate(option.toOffset),
+                      })
+                    }
+                  >
+                    <span>{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="shipment-filter-support">
         {!isArchiveTab ? (
@@ -144,6 +220,9 @@ export default function ShipmentBaseFilters({
                   </button>
                 );
               })}
+            </div>
+            <div className="muted shipment-filter-summary-note">
+              메인 카드와 목록은 전체 배송관리 기준으로 계산되고, 이 범위 버튼은 내부 작업 보조 보기로만 사용됩니다.
             </div>
           </div>
         </div>

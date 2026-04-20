@@ -112,7 +112,7 @@ export function buildFulfillmentWorkspaceHref(input: FulfillmentWorkspaceHrefInp
   if (input.storeId) {
     params.set("storeId", input.storeId);
   }
-  if (input.scope && input.tab !== "confirmed" && input.scope !== "dispatch_active") {
+  if (input.scope && input.tab !== "confirmed" && input.scope !== "all") {
     params.set("scope", input.scope);
   }
   if (input.decisionStatus && input.decisionStatus !== "all") {

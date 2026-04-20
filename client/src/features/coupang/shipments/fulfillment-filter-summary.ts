@@ -87,7 +87,15 @@ const ORDER_STATUS_LABELS: Record<OrderStatusCardKey, string> = {
 };
 
 export function getShipmentScopeLabel(scope: CoupangShipmentWorksheetViewScope) {
-  return SCOPE_LABELS[scope];
+  return (
+    {
+      dispatch_active: "내부 작업 대상",
+      post_dispatch: "배송 이후",
+      confirmed: "구매확정",
+      claims: "이슈·클레임",
+      all: "전체 배송관리",
+    } satisfies Record<CoupangShipmentWorksheetViewScope, string>
+  )[scope];
 }
 
 export function getFulfillmentDecisionFilterLabel(value: FulfillmentDecisionFilterValue) {

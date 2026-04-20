@@ -1381,6 +1381,8 @@ export type CoupangShipmentWorksheetSortDirection = "asc" | "desc";
 
 export interface CoupangShipmentWorksheetViewQuery {
   storeId: string;
+  createdAtFrom?: string;
+  createdAtTo?: string;
   scope?: CoupangShipmentWorksheetViewScope;
   decisionStatus?: CoupangFulfillmentDecisionFilterValue;
   priorityCard?: CoupangShipmentWorksheetPriorityCardFilter;
@@ -1405,6 +1407,8 @@ export interface CoupangShipmentWorksheetViewResponse {
   message: string | null;
   source: CoupangDataSource;
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  coverageCreatedAtFrom: string | null;
+  coverageCreatedAtTo: string | null;
   scope: CoupangShipmentWorksheetViewScope;
   page: number;
   pageSize: number;

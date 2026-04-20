@@ -139,6 +139,8 @@ function resolveFallbackActiveSheet(input: {
     message: null,
     source: "live",
     syncSummary: null,
+    coverageCreatedAtFrom: null,
+    coverageCreatedAtTo: null,
     scope: input.scope,
     page: input.result.page,
     pageSize: input.pageSize,

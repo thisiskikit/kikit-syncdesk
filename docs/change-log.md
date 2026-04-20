@@ -2,6 +2,48 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-20 / 쿠팡 배송관리 메인 분모 정합 보강
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/worksheet-config.ts`
+  - `client/src/features/coupang/shipments/shipment-base-filters.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.ts`
+  - `client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
+  - `client/src/lib/ops-handoff-links.ts`
+  - `client/src/lib/ops-handoff-links.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - `worksheet/view` query에 `createdAtFrom`, `createdAtTo`를 추가하고, 서버 projection이 실제로 날짜 범위를 먼저 적용한 뒤 카드·scope·목록 집계를 계산하도록 바꿨습니다.
+  - 따라서 `totalRowCount`, `scopeCounts`, `priorityCounts`, `pipelineCounts`, `issueCounts`, `decisionCounts`가 모두 같은 기간 분모를 공유합니다.
+  - view 응답에는 `coverageCreatedAtFrom`, `coverageCreatedAtTo`를 추가해 현재 worksheet 미러가 어느 기간까지 채워져 있는지 메인 화면에서 바로 확인할 수 있게 했습니다.
+  - 메인 출고 화면의 기본 필터는 `최근 30일 + 전체 배송관리(all)`로 바꿨고, React Query key와 view URL 모두 날짜 범위를 포함하도록 맞췄습니다.
+  - 상단 기본 필터에는 `오늘 / 지난 7일 / 지난 30일` 기간 프리셋을 추가했습니다.
+  - `dispatch_active / post_dispatch / claims`는 메인 기준이 아니라 `보조 작업 보기`로만 노출하고, 기본 scope를 더 이상 `dispatch_active`에 두지 않습니다.
+  - 상단 overview에는 현재 미러 coverage를 보여 주고, 사용자가 선택한 기간이 coverage 바깥이면 전체 재동기화 필요성을 경고하도록 보강했습니다.
+  - 행동 큐는 계속 남기되 `보조 작업 큐`로 설명을 낮춰, 메인 상태 기준이 배송 처리/이슈 필터라는 점을 더 분명히 했습니다.
+- 이유:
+  - 날짜를 바꿔도 메인 숫자 분모가 그대로면 쿠팡 배송관리와 같은 기준으로 읽을 수 없고, 빠른 수집 직후 부분 집합 숫자로 오해할 여지가 컸기 때문입니다.
+  - 내부 작업 scope와 메인 배송관리 기준을 분리하지 않으면 `작업 대상` 숫자가 메인 전체 숫자처럼 읽히는 문제가 계속 남기 때문입니다.
+- 남은 점:
+  - 현재 구현은 별도 신규 미러 테이블을 만들지 않고 기존 worksheet 저장소를 `쿠팡 배송관리 미러 캐시`로 재사용합니다. 이 구조 자체가 장기적으로 충분한지는 추가 검토가 필요합니다.
+  - 브라우저에서 실제 쿠팡 화면 숫자와 샘플 50~100건을 대조하는 수동 검증은 아직 하지 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-service-view-read.test.ts client/src/lib/ops-handoff-links.test.ts client/src/features/coupang/shipments/fulfillment-filter-summary.test.ts`
+  - `npx vitest run --root . client/src/features/coupang/shipments/quick-collect-focus.test.ts client/src/features/coupang/shipments/quick-collect-focus-controller.test.ts`
+
 ## 2026-04-20 / 쿠팡 기준 정합성 재설계
 
 - 변경 유형:

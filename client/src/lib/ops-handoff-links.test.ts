@@ -97,6 +97,16 @@ describe("ops-handoff-links", () => {
     });
   });
 
+  it("omits the default all-scope from fulfillment links", () => {
+    const href = buildFulfillmentWorkspaceHref({
+      storeId: "store-1",
+      scope: "all",
+      query: "box-1",
+    });
+
+    expect(href).toBe("/fulfillment?storeId=store-1&query=box-1");
+  });
+
   it("builds and parses work-center links with full filters", () => {
     const href = buildWorkCenterWorkspaceHref({
       tab: "events",

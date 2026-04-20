@@ -182,6 +182,14 @@ export default function ShipmentWorksheetOverview({
   const pipelineCounts = activeSheet?.pipelineCounts;
   const issueCounts = activeSheet?.issueCounts;
   const decisionPreviewGroups = activeSheet?.decisionPreviewGroups;
+  const coverageRangeLabel =
+    activeSheet?.coverageCreatedAtFrom && activeSheet?.coverageCreatedAtTo
+      ? `${activeSheet.coverageCreatedAtFrom} ~ ${activeSheet.coverageCreatedAtTo}`
+      : null;
+  const isCoverageOutsideSelectedRange =
+    Boolean(coverageRangeLabel) &&
+    ((filters.createdAtFrom?.trim() ?? "").localeCompare(activeSheet?.coverageCreatedAtFrom ?? "") < 0 ||
+      (filters.createdAtTo?.trim() ?? "").localeCompare(activeSheet?.coverageCreatedAtTo ?? "") > 0);
 
   return (
     <>
@@ -212,6 +220,16 @@ export default function ShipmentWorksheetOverview({
             <div className="muted shipment-filter-summary-note">
               상단 카드는 현재 필터 전체 기준이고, 아래 원본 테이블은 같은 기준을 유지한 채 페이지 단위로 보여줍니다.
             </div>
+            {coverageRangeLabel ? (
+              <div className="muted shipment-filter-summary-meta">
+                미러 coverage {coverageRangeLabel}
+              </div>
+            ) : null}
+            {isCoverageOutsideSelectedRange ? (
+              <div className="muted shipment-filter-summary-meta">
+                선택 기간이 현재 미러 coverage를 벗어나므로 전체 재동기화가 필요할 수 있습니다.
+              </div>
+            ) : null}
             <div className="shipment-hub-quick-stats">
               <span className="shipment-hub-side-panel-chip strong">
                 필터 전체 {formatNumber(activeSheet?.filteredRowCount ?? 0)}건
@@ -282,6 +300,17 @@ export default function ShipmentWorksheetOverview({
             </div>
             <div className="muted shipment-filter-summary-note">
               배송 상태를 덮어쓰지 않고, 우선 확인이 필요한 주문만 별도 묶음으로 먼저 보여줍니다.
+            </div>
+          </div>
+        </div>
+
+        <div className="card shipment-filter-summary-card">
+          <div className="shipment-filter-summary-header">
+            <div>
+              <div className="shipment-filter-summary-label">보조 작업 큐</div>
+              <div className="muted shipment-filter-summary-note">
+                아래 액션 큐는 내부 작업 우선순위를 묶어 보여 주는 보조 정보이며, 메인 숫자의 기준은 배송 처리와 이슈 필터입니다.
+              </div>
             </div>
           </div>
         </div>

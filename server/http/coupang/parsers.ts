@@ -313,6 +313,8 @@ export function parseShipmentWorksheetInvoiceInputApplyRequest(
 
 export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipmentWorksheetViewQuery {
   const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const createdAtFrom = asOptionalString(item.createdAtFrom);
+  const createdAtTo = asOptionalString(item.createdAtTo);
   const scope = asOptionalString(item.scope);
   const decisionStatus = asOptionalString(item.decisionStatus);
   const priorityCard = asOptionalString(item.priorityCard);
@@ -327,6 +329,8 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
 
   return {
     storeId: asString(item.storeId),
+    createdAtFrom: createdAtFrom ?? undefined,
+    createdAtTo: createdAtTo ?? undefined,
     scope:
       scope === "dispatch_active" ||
       scope === "post_dispatch" ||

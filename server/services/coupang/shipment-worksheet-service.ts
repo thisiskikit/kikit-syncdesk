@@ -568,6 +568,8 @@ function buildWorksheetViewResponse(
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
     source: sheet.source,
     syncSummary: sheet.syncSummary,
+    coverageCreatedAtFrom: sheet.syncState.coveredCreatedAtFrom,
+    coverageCreatedAtTo: sheet.syncState.coveredCreatedAtTo,
     scope: view.scope,
     page: view.page,
     pageSize: view.pageSize,

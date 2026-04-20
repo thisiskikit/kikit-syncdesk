@@ -25,6 +25,8 @@ function buildRow(input: {
   availableActions?: CoupangShipmentWorksheetRow["availableActions"];
   purchaseConfirmedAt?: string | null;
   estimatedShippingDate?: string | null;
+  orderDateKey?: string;
+  orderedAtRaw?: string | null;
   shippingStage?: CoupangShipmentWorksheetRow["shippingStage"];
   issueStage?: CoupangShipmentWorksheetRow["issueStage"];
   priorityBucket?: CoupangShipmentWorksheetRow["priorityBucket"];
@@ -39,7 +41,7 @@ function buildRow(input: {
     storeId: "store-1",
     storeName: input.storeName ?? "Test Store",
     orderDateText: "04/09",
-    orderDateKey: "20260409",
+    orderDateKey: input.orderDateKey ?? "20260409",
     quantity: 1,
     productName: `Product ${input.id}`,
     optionName: "Default",
@@ -82,7 +84,7 @@ function buildRow(input: {
     customerServiceIssueBreakdown: input.customerServiceIssueBreakdown ?? [],
     customerServiceState: input.customerServiceState ?? "ready",
     customerServiceFetchedAt: input.customerServiceFetchedAt ?? "2026-04-09T09:00:00.000Z",
-    orderedAtRaw: "2026-04-09T09:00:00+09:00",
+    orderedAtRaw: input.orderedAtRaw ?? "2026-04-09T09:00:00+09:00",
     lastOrderHydratedAt: null,
     lastProductHydratedAt: null,
     estimatedShippingDate: input.estimatedShippingDate ?? null,
@@ -316,6 +318,47 @@ describe("shipment worksheet view", () => {
 
     expect(directDeliveryView.items.map((row) => row.id)).toEqual(["direct"]);
     expect(priorityView.items.map((row) => row.id)).toEqual(["same-day"]);
+  });
+
+  it("applies createdAt range to cards, scope counts, and table rows together", () => {
+    const rows = [
+      buildRow({
+        id: "in-range-ready",
+        status: "ACCEPT",
+        orderDateKey: "20260418",
+        orderedAtRaw: "2026-04-18T09:00:00+09:00",
+      }),
+      buildRow({
+        id: "in-range-delivered",
+        status: "FINAL_DELIVERY",
+        orderDateKey: "20260419",
+        orderedAtRaw: "2026-04-19T09:00:00+09:00",
+        exportedAt: "2026-04-19T12:00:00.000Z",
+      }),
+      buildRow({
+        id: "out-of-range",
+        status: "INSTRUCT",
+        orderDateKey: "20260410",
+        orderedAtRaw: "2026-04-10T09:00:00+09:00",
+      }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      createdAtFrom: "2026-04-18",
+      createdAtTo: "2026-04-19",
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(view.items.map((row) => row.id)).toEqual(["in-range-ready", "in-range-delivered"]);
+    expect(view.totalRowCount).toBe(2);
+    expect(view.scopeCounts.all).toBe(2);
+    expect(view.scopeCounts.dispatch_active).toBe(1);
+    expect(view.scopeCounts.post_dispatch).toBe(1);
+    expect(view.pipelineCounts.all).toBe(2);
+    expect(view.pipelineCounts.payment_completed).toBe(1);
+    expect(view.pipelineCounts.delivered).toBe(1);
   });
 
   it("fills mismatch reason when stored normalized fields differ from the current mapping", () => {

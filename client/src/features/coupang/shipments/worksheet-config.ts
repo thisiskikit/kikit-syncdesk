@@ -434,11 +434,11 @@ function normalizeIssueFilter(
 export function createDefaultFilters(): FilterState {
   return {
     selectedStoreId: "",
-    createdAtFrom: defaultSeoulDate(-3),
+    createdAtFrom: defaultSeoulDate(-29),
     createdAtTo: defaultSeoulDate(0),
     query: "",
     maxPerPage: 20,
-    scope: "dispatch_active",
+    scope: "all",
     decisionStatus: "all",
     priorityCard: "all",
     pipelineCard: "all",
@@ -451,14 +451,14 @@ export function createDefaultFilters(): FilterState {
 
 export function normalizeFiltersToSeoulToday(current: FilterState): FilterState {
   const today = defaultSeoulDate(0);
-  const fallbackFrom = defaultSeoulDate(-3);
+  const fallbackFrom = defaultSeoulDate(-29);
   const normalizedFrom = current.createdAtFrom.trim() || fallbackFrom;
 
   return {
     ...current,
     createdAtFrom: normalizedFrom.localeCompare(today) <= 0 ? normalizedFrom : today,
     createdAtTo: today,
-    scope: current.scope ?? "dispatch_active",
+    scope: current.scope ?? "all",
     decisionStatus: current.decisionStatus ?? "all",
     priorityCard: normalizePriorityCardFilter(current.priorityCard),
     pipelineCard: normalizePipelineCardFilter(current.pipelineCard),

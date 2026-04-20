@@ -64,10 +64,12 @@ type WorksheetResolvedItems = Pick<
 >;
 
 type NormalizedQuery = Omit<
-  Required<Omit<CoupangShipmentWorksheetViewQuery, "sortField">>,
+  Required<Omit<CoupangShipmentWorksheetViewQuery, "sortField" | "createdAtFrom" | "createdAtTo">>,
   "storeId"
 > & {
   storeId: string;
+  createdAtFrom: string | null;
+  createdAtTo: string | null;
   sortField: CoupangShipmentWorksheetSortField | null;
 };
 
@@ -163,6 +165,7 @@ const ISSUE_PRIORITY = [
   "return",
   "exchange",
 ] as const satisfies readonly CoupangCustomerServiceIssueBreakdownItem["type"][];
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function createCountRecord<TKey extends string>(keys: readonly TKey[]) {
   return keys.reduce<Record<TKey, number>>((current, key) => {
@@ -592,11 +595,83 @@ function normalizeOutputStatusCard(
     : DEFAULT_OUTPUT_STATUS_CARD;
 }
 
+function normalizeDateOnly(value: string | null | undefined) {
+  const normalized = (value ?? "").trim();
+  return DATE_ONLY_PATTERN.test(normalized) ? normalized : null;
+}
+
+function normalizeDateRange(input: {
+  createdAtFrom: string | null | undefined;
+  createdAtTo: string | null | undefined;
+}) {
+  const createdAtFrom = normalizeDateOnly(input.createdAtFrom);
+  const createdAtTo = normalizeDateOnly(input.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    return {
+      createdAtFrom: null,
+      createdAtTo: null,
+    };
+  }
+
+  if (createdAtFrom.localeCompare(createdAtTo) > 0) {
+    return {
+      createdAtFrom: createdAtTo,
+      createdAtTo: createdAtFrom,
+    };
+  }
+
+  return {
+    createdAtFrom,
+    createdAtTo,
+  };
+}
+
+function resolveWorksheetRowDateKey(row: CoupangShipmentWorksheetRow) {
+  const orderedAtDate = (row.orderedAtRaw ?? "").trim().slice(0, 10);
+  const normalizedOrderedAtDate = DATE_ONLY_PATTERN.test(orderedAtDate)
+    ? orderedAtDate.replaceAll("-", "")
+    : null;
+  const orderDateKey = (row.orderDateKey ?? "").trim();
+
+  if (normalizedOrderedAtDate?.length === 8) {
+    return normalizedOrderedAtDate;
+  }
+
+  return orderDateKey.length === 8 ? orderDateKey : null;
+}
+
+function matchesWorksheetRowDateRange(
+  row: CoupangShipmentWorksheetRow,
+  createdAtFrom: string | null,
+  createdAtTo: string | null,
+) {
+  if (!createdAtFrom || !createdAtTo) {
+    return true;
+  }
+
+  const rowDateKey = resolveWorksheetRowDateKey(row);
+  if (!rowDateKey) {
+    return false;
+  }
+
+  const fromKey = createdAtFrom.replaceAll("-", "");
+  const toKey = createdAtTo.replaceAll("-", "");
+  return rowDateKey >= fromKey && rowDateKey <= toKey;
+}
+
 export function normalizeShipmentWorksheetViewQuery(
   query: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
 ): NormalizedQuery {
+  const normalizedDateRange = normalizeDateRange({
+    createdAtFrom: query?.createdAtFrom,
+    createdAtTo: query?.createdAtTo,
+  });
+
   return {
     storeId: query?.storeId ?? "",
+    createdAtFrom: normalizedDateRange.createdAtFrom,
+    createdAtTo: normalizedDateRange.createdAtTo,
     scope: normalizeScope(query?.scope),
     decisionStatus:
       query?.decisionStatus === "ready" ||
@@ -637,7 +712,10 @@ function resolveFilteredRows(
   rows: readonly CoupangShipmentWorksheetRow[],
   query: NormalizedQuery,
 ) {
-  const scopedRows = rows.filter((row) => matchesScope(row, query.scope));
+  const datedRows = rows.filter((row) =>
+    matchesWorksheetRowDateRange(row, query.createdAtFrom, query.createdAtTo),
+  );
+  const scopedRows = datedRows.filter((row) => matchesScope(row, query.scope));
   const searchedRows = scopedRows.filter((row) => matchesShipmentWorksheetQuery(row, query.query));
   const priorityFacetRows = searchedRows.filter(
     (row) =>
@@ -680,6 +758,7 @@ function resolveFilteredRows(
   );
 
   return {
+    datedRows,
     scopedRows,
     searchedRows,
     priorityFacetRows,
@@ -707,6 +786,10 @@ export function getShipmentWorksheetRowHiddenReason(
 ): CoupangShipmentWorksheetAuditHiddenReason | null {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
 
+  if (!matchesWorksheetRowDateRange(row, query.createdAtFrom, query.createdAtTo)) {
+    return "filtered_out";
+  }
+
   if (!matchesScope(row, query.scope)) {
     return "out_of_scope";
   }
@@ -732,8 +815,12 @@ export function buildShipmentWorksheetViewData(
   rawQuery: Partial<CoupangShipmentWorksheetViewQuery> | null | undefined,
 ): WorksheetViewCounts {
   const query = normalizeShipmentWorksheetViewQuery(rawQuery);
-  const scopeCounts = countScopeRows(rows);
+  const datedRows = rows.filter((row) =>
+    matchesWorksheetRowDateRange(row, query.createdAtFrom, query.createdAtTo),
+  );
+  const scopeCounts = countScopeRows(datedRows);
   const {
+    datedRows: filteredDatedRows,
     scopedRows,
     searchedRows,
     priorityFacetRows,
@@ -859,7 +946,7 @@ export function buildShipmentWorksheetViewData(
     page,
     pageSize: query.pageSize,
     totalPages,
-    totalRowCount: rows.length,
+    totalRowCount: filteredDatedRows.length,
     scopeRowCount: scopedRows.length,
     filteredRowCount: sortedRows.length,
     invoiceReadyCount: filteredRows.filter((row) => canSendInvoiceRow(row)).length,
