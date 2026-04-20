@@ -108,6 +108,22 @@ afterEach(() => {
 });
 
 describe("shipment worksheet view", () => {
+  it("defaults to all scope when no explicit scope is provided", () => {
+    const rows = [
+      buildRow({ id: "1", status: "ACCEPT" }),
+      buildRow({ id: "2", status: "DELIVERING", exportedAt: "2026-04-09T11:00:00.000Z" }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(view.scope).toBe("all");
+    expect(view.items.map((row) => row.id)).toEqual(["1", "2"]);
+    expect(view.scopeCounts.all).toBe(2);
+  });
+
   it("returns only non-claim ACCEPT/INSTRUCT rows for dispatch_active scope", () => {
     const rows = [
       buildRow({ id: "1", status: "ACCEPT" }),

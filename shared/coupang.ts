@@ -1232,6 +1232,10 @@ export interface CoupangShipmentWorksheetResponse {
   message: string | null;
   source: CoupangDataSource;
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
+  coverageCreatedAtFrom: string | null;
+  coverageCreatedAtTo: string | null;
+  isAuthoritativeMirror: boolean;
+  lastFullSyncedAt: string | null;
   operation?: OperationLogEntry;
 }
 
@@ -1409,6 +1413,8 @@ export interface CoupangShipmentWorksheetViewResponse {
   syncSummary: CoupangShipmentWorksheetSyncSummary | null;
   coverageCreatedAtFrom: string | null;
   coverageCreatedAtTo: string | null;
+  isAuthoritativeMirror: boolean;
+  lastFullSyncedAt: string | null;
   scope: CoupangShipmentWorksheetViewScope;
   page: number;
   pageSize: number;

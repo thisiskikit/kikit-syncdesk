@@ -37,8 +37,10 @@
 - 상단 카드/필터 집계도 `priorityCounts`, `pipelineCounts`, `issueCounts`, `directDeliveryCount`, `staleSyncCount`를 별도로 받아 쿠팡 의미 체계 기준으로 계산합니다.
 - 메인 화면의 기본 기간은 이제 `최근 30일`이고, 상단 필터에는 `오늘 / 지난 7일 / 지난 30일` 프리셋과 직접 날짜 입력이 함께 있습니다.
 - `worksheet/view` 조회는 `createdAtFrom`, `createdAtTo`를 실제 서버 projection에 반영하므로, 카드·필터·목록·scope 집계가 모두 같은 기간 분모를 공유합니다.
-- view 응답의 `coverageCreatedAtFrom`, `coverageCreatedAtTo`는 누적 coverage 정보로만 남아 있고, 메인 숫자 신뢰 여부는 `syncSummary.mode === "full"` + 최신 `fetchCreatedAtFrom`, `fetchCreatedAtTo`가 현재 선택 기간을 덮는지로 판정합니다.
-- 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 최신 sync가 `빠른 수집(new_only)` 또는 `증분 수집(incremental)`이면, 화면이 부분 집계를 확정값처럼 쓰지 않고 자동으로 `full` 재동기화를 다시 시작합니다.
+- `collect` / `worksheet/view` 응답은 이제 `coverageCreatedAtFrom`, `coverageCreatedAtTo`, `isAuthoritativeMirror`, `lastFullSyncedAt`를 함께 돌려줍니다. 여기서 coverage는 누적 범위가 아니라 `마지막 성공한 쿠팡 기준 30일 재동기화` 범위를 뜻합니다.
+- `syncMode="full"`은 클라이언트가 어떤 날짜나 상태를 보내더라도 서버에서 `최근 30일 + 전체 배송 상태 + 전체 클레임/CS` 기준으로 강제 정규화합니다. 쿠팡과 메인 숫자를 다시 맞추는 책임은 이 재동기화만 가집니다.
+- `syncMode="incremental"`은 더 이상 자동으로 `full`로 승격되지 않고, 저장된 미러를 유지하기 위한 겹침 구간 `증분 갱신` 의미로만 동작합니다.
+- 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 authoritative 30일 미러가 없으면, 화면이 부분 집계를 확정값처럼 쓰지 않고 자동으로 `쿠팡 기준 재동기화`를 다시 시작합니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `우선 처리 카드 / 배송 처리 / 이슈 필터`
   - 보조 축: `전체 배송관리 / 내부 작업 대상 / 배송 이후 / 구매확정 / 이슈·클레임`
@@ -114,10 +116,10 @@
 - 누락 주문은 자동으로 포함하지 않고, 경고 상세와 audit 다이얼로그에서 별도로 안내합니다.
 - `수집 누락 audit`는 조회 범위가 7일을 넘어도 내부적으로 7일 단위로 나눠 확인합니다.
 - `결제완료 -> 상품준비중` 버튼은 조건이 맞지 않아도 바로 비활성화하지 않고, 클릭 시 현재 화면 기준으로 왜 처리 대상이 없는지 경고로 안내합니다.
-- `빠른 수집 / 전체 수집 / 증분 수집`은 1차로 `주문 목록 조회 + 클레임 병합 + worksheet 반영`까지만 완료하고 응답합니다.
+- `빠른 수집 / 쿠팡 기준 재동기화 / 증분 갱신`은 1차로 `주문 목록 조회 + 클레임 병합 + worksheet 반영`까지만 완료하고 응답합니다.
 - 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 후속 단계로 분리됐고, collect 성공 직후 클라이언트가 non-blocking으로 이어서 호출합니다.
 - collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 `지금 끝난 단계`와 `이어질 보강 단계`를 함께 기록합니다.
-- `빠른 수집(new_only)`에서 일부 주문 상태 조회만 실패해도 전체 수집을 즉시 실패로 돌리지 않고, `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 부분 실패를 남긴 뒤 화면 경고와 누락 audit로 이어집니다.
+- `빠른 수집(new_only)`에서 일부 주문 상태 조회만 실패해도 수집 작업 전체를 즉시 실패로 돌리지 않고, `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 부분 실패를 남긴 뒤 화면 경고와 누락 audit로 이어집니다.
 - `셀픽주문번호`는 이제 현재 워크시트 스냅샷이 아니라 DB의 영구 `counter + registry`에서 예약합니다.
 - 유일성 기준은 active worksheet만이 아니라 `쿠팡 출고 row + archive 전체 이력`이고, 보관함으로 이동한 뒤 다시 수집해도 과거 번호를 재사용하지 않습니다.
 - suffix는 `0001`처럼 4자리부터 시작하지만, 이제 `10000` 이상도 그대로 허용합니다.

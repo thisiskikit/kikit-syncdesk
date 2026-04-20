@@ -478,6 +478,7 @@ function buildWorksheetResponse(
   messageOverride?: string | null,
 ): CoupangShipmentWorksheetResponse {
   const rows = buildWorksheetRows(sheet);
+  const mirrorMetadata = resolveWorksheetMirrorMetadata(sheet);
   return {
     store: asStoreRef(store),
     items: rows,
@@ -487,6 +488,10 @@ function buildWorksheetResponse(
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
     source: sheet.source,
     syncSummary: sheet.syncSummary,
+    coverageCreatedAtFrom: mirrorMetadata.coverageCreatedAtFrom,
+    coverageCreatedAtTo: mirrorMetadata.coverageCreatedAtTo,
+    isAuthoritativeMirror: mirrorMetadata.isAuthoritativeMirror,
+    lastFullSyncedAt: mirrorMetadata.lastFullSyncedAt,
   };
 }
 
@@ -558,6 +563,10 @@ function buildWorksheetViewResponse(
 ): CoupangShipmentWorksheetViewResponse {
   const rows = buildWorksheetRows(sheet);
   const view = buildShipmentWorksheetViewData(rows, query);
+  const mirrorMetadata = resolveWorksheetMirrorMetadata(sheet, {
+    createdAtFrom: query?.createdAtFrom,
+    createdAtTo: query?.createdAtTo,
+  });
 
   return {
     store: asStoreRef(store),
@@ -568,8 +577,10 @@ function buildWorksheetViewResponse(
     message: normalizeLegacyWorksheetMessage(messageOverride ?? sheet.message),
     source: sheet.source,
     syncSummary: sheet.syncSummary,
-    coverageCreatedAtFrom: sheet.syncState.coveredCreatedAtFrom,
-    coverageCreatedAtTo: sheet.syncState.coveredCreatedAtTo,
+    coverageCreatedAtFrom: mirrorMetadata.coverageCreatedAtFrom,
+    coverageCreatedAtTo: mirrorMetadata.coverageCreatedAtTo,
+    isAuthoritativeMirror: mirrorMetadata.isAuthoritativeMirror,
+    lastFullSyncedAt: mirrorMetadata.lastFullSyncedAt,
     scope: view.scope,
     page: view.page,
     pageSize: view.pageSize,
@@ -593,9 +604,10 @@ function buildWorksheetViewResponse(
 }
 
 const DEFAULT_SYNC_MODE: CoupangShipmentSyncMode = "incremental";
+const AUTHORITATIVE_MIRROR_RANGE_DAYS = 30;
+const AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS = -(AUTHORITATIVE_MIRROR_RANGE_DAYS - 1);
 const CUSTOMER_SERVICE_READY_TTL_MS = 10 * 60_000;
 const INCREMENTAL_OVERLAP_HOURS = 24;
-const FULL_RECONCILE_STALE_HOURS = 12;
 const ORDER_DETAIL_REFRESH_HOURS = 6;
 const QUICK_COLLECT_REQUIRED_STATUSES = ["INSTRUCT", "ACCEPT"] as const;
 const QUICK_COLLECT_PAGE_SIZE = 50;
@@ -663,6 +675,13 @@ type ShipmentWorksheetSyncPlan = {
   fetchCreatedAtFrom: string;
   fetchCreatedAtTo: string;
   statusFilter: string | null;
+};
+
+type ShipmentWorksheetMirrorMetadata = {
+  coverageCreatedAtFrom: string | null;
+  coverageCreatedAtTo: string | null;
+  isAuthoritativeMirror: boolean;
+  lastFullSyncedAt: string | null;
 };
 
 type ShipmentWorksheetRefreshPhaseState = {
@@ -990,6 +1009,64 @@ function subtractHours(value: string, hours: number) {
   return new Date(parsed.getTime() - hours * 60 * 60 * 1000).toISOString();
 }
 
+function addDaysToDateOnly(value: string, days: number) {
+  const timestamp = parseDateOnlyTimestamp(value);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const nextTimestamp = timestamp + days * 24 * 60 * 60 * 1000;
+  return formatSeoulDateOnly(new Date(nextTimestamp));
+}
+
+function resolveAuthoritativeMirrorCoverage(lastFullSyncedAt: string | null | undefined) {
+  if (!lastFullSyncedAt) {
+    return {
+      coverageCreatedAtFrom: null,
+      coverageCreatedAtTo: null,
+      lastFullSyncedAt: null,
+    };
+  }
+
+  const coverageCreatedAtTo = formatSeoulDateOnly(new Date(lastFullSyncedAt));
+  const coverageCreatedAtFrom = addDaysToDateOnly(
+    coverageCreatedAtTo,
+    AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS,
+  );
+
+  return {
+    coverageCreatedAtFrom,
+    coverageCreatedAtTo,
+    lastFullSyncedAt,
+  };
+}
+
+function resolveWorksheetMirrorMetadata(
+  sheet: WorksheetStoreSheet,
+  input?: {
+    createdAtFrom?: string | null | undefined;
+    createdAtTo?: string | null | undefined;
+  },
+): ShipmentWorksheetMirrorMetadata {
+  const coverage = resolveAuthoritativeMirrorCoverage(sheet.syncState.lastFullCollectedAt);
+  const requestedCreatedAtFrom = normalizeCreatedAtDate(
+    input?.createdAtFrom ?? undefined,
+    AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS,
+  );
+  const requestedCreatedAtTo = normalizeCreatedAtDate(input?.createdAtTo ?? undefined, 0);
+  const isRangeCovered =
+    Boolean(coverage.coverageCreatedAtFrom && coverage.coverageCreatedAtTo) &&
+    requestedCreatedAtFrom.localeCompare(coverage.coverageCreatedAtFrom ?? "") >= 0 &&
+    requestedCreatedAtTo.localeCompare(coverage.coverageCreatedAtTo ?? "") <= 0;
+
+  return {
+    coverageCreatedAtFrom: coverage.coverageCreatedAtFrom,
+    coverageCreatedAtTo: coverage.coverageCreatedAtTo,
+    lastFullSyncedAt: coverage.lastFullSyncedAt,
+    isAuthoritativeMirror: sheet.source !== "fallback" && isRangeCovered,
+  };
+}
+
 function isTimestampOlderThanHours(
   value: string | null | undefined,
   nowIso: string,
@@ -1097,34 +1174,27 @@ function resolveSyncPlan(
   nowIso: string,
 ): ShipmentWorksheetSyncPlan {
   const currentSyncState = currentSheet.syncState ?? createEmptySyncState();
-  const requestedStatusFilter = normalizeStatusFilter(input.status);
   const requestedMode =
     input.syncMode === "full"
       ? "full"
       : input.syncMode === "new_only"
         ? "new_only"
         : DEFAULT_SYNC_MODE;
-  const selectedCreatedAtFrom = normalizeCreatedAtDate(input.createdAtFrom, -3);
-  const selectedCreatedAtTo = normalizeCreatedAtDate(input.createdAtTo, 0);
-  const isFirstSync =
-    !currentSheet.items.length || !currentSyncState.lastIncrementalCollectedAt;
-  const expandedEarlierRange =
-    Boolean(currentSyncState.coveredCreatedAtFrom) &&
-    selectedCreatedAtFrom.localeCompare(currentSyncState.coveredCreatedAtFrom ?? "") < 0;
-  const statusChanged = currentSyncState.lastStatusFilter !== requestedStatusFilter;
-  const fullSyncStale = isTimestampOlderThanHours(
-    currentSyncState.lastFullCollectedAt,
-    nowIso,
-    FULL_RECONCILE_STALE_HOURS,
+  const selectedCreatedAtFrom = normalizeCreatedAtDate(
+    input.createdAtFrom,
+    AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS,
   );
+  const selectedCreatedAtTo = normalizeCreatedAtDate(input.createdAtTo, 0);
+  const requestedStatusFilter =
+    requestedMode === "full" ? null : normalizeStatusFilter(input.status);
 
   if (requestedMode === "full") {
     return {
       mode: "full",
       autoExpanded: false,
-      fetchCreatedAtFrom: selectedCreatedAtFrom,
-      fetchCreatedAtTo: selectedCreatedAtTo,
-      statusFilter: requestedStatusFilter,
+      fetchCreatedAtFrom: normalizeCreatedAtDate(undefined, AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS),
+      fetchCreatedAtTo: formatSeoulDateOnly(new Date(nowIso)),
+      statusFilter: null,
     };
   }
 
@@ -1146,11 +1216,13 @@ function resolveSyncPlan(
       statusFilter: null,
     };
   }
+  const incrementalReferenceAt =
+    currentSyncState.lastIncrementalCollectedAt ?? currentSheet.collectedAt ?? null;
 
-  if (isFirstSync || expandedEarlierRange || statusChanged || fullSyncStale) {
+  if (!incrementalReferenceAt) {
     return {
-      mode: "full",
-      autoExpanded: true,
+      mode: "incremental",
+      autoExpanded: false,
       fetchCreatedAtFrom: selectedCreatedAtFrom,
       fetchCreatedAtTo: selectedCreatedAtTo,
       statusFilter: requestedStatusFilter,
@@ -1158,8 +1230,8 @@ function resolveSyncPlan(
   }
 
   const overlapStart = normalizeCreatedAtDate(
-    subtractHours(currentSyncState.lastIncrementalCollectedAt ?? nowIso, INCREMENTAL_OVERLAP_HOURS),
-    -1,
+    subtractHours(incrementalReferenceAt, INCREMENTAL_OVERLAP_HOURS),
+    AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS,
   );
 
   return {
@@ -1304,17 +1376,22 @@ async function fetchQuickCollectOrders(input: {
 function buildReadCustomerServiceSyncPlan(currentSheet: WorksheetStoreSheet): ShipmentWorksheetSyncPlan {
   const syncState = currentSheet.syncState ?? createEmptySyncState();
   const syncSummary = currentSheet.syncSummary;
+  const mirrorCoverage = resolveAuthoritativeMirrorCoverage(syncState.lastFullCollectedAt);
 
   return {
     mode: DEFAULT_SYNC_MODE,
     autoExpanded: false,
     fetchCreatedAtFrom:
+      mirrorCoverage.coverageCreatedAtFrom ??
       syncSummary?.fetchCreatedAtFrom ??
       syncState.coveredCreatedAtFrom ??
-      offsetSeoulDateOnly(-30),
+      offsetSeoulDateOnly(AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS),
     fetchCreatedAtTo:
-      syncSummary?.fetchCreatedAtTo ?? syncState.coveredCreatedAtTo ?? formatSeoulDateOnly(new Date()),
-    statusFilter: syncSummary?.statusFilter ?? syncState.lastStatusFilter,
+      mirrorCoverage.coverageCreatedAtTo ??
+      syncSummary?.fetchCreatedAtTo ??
+      syncState.coveredCreatedAtTo ??
+      formatSeoulDateOnly(new Date()),
+    statusFilter: null,
   };
 }
 
@@ -2499,10 +2576,16 @@ function buildNextSyncState(
   currentSyncState: CoupangShipmentWorksheetSyncState,
   plan: ShipmentWorksheetSyncPlan,
   nowIso: string,
+  options?: {
+    recordSuccessfulFull?: boolean;
+  },
 ): CoupangShipmentWorksheetSyncState {
   return {
     lastIncrementalCollectedAt: nowIso,
-    lastFullCollectedAt: plan.mode === "full" ? nowIso : currentSyncState.lastFullCollectedAt,
+    lastFullCollectedAt:
+      plan.mode === "full" && options?.recordSuccessfulFull === true
+        ? nowIso
+        : currentSyncState.lastFullCollectedAt,
     coveredCreatedAtFrom: minDate(currentSyncState.coveredCreatedAtFrom, plan.fetchCreatedAtFrom),
     coveredCreatedAtTo: maxDate(currentSyncState.coveredCreatedAtTo, plan.fetchCreatedAtTo),
     lastStatusFilter: plan.statusFilter,
@@ -2530,13 +2613,16 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
     };
   }
 
-  const createdAtFrom = minDate(input.syncPlan.fetchCreatedAtFrom, offsetSeoulDateOnly(-30));
+  const createdAtFrom = minDate(
+    input.syncPlan.fetchCreatedAtFrom,
+    offsetSeoulDateOnly(AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS),
+  );
   const createdAtTo = formatSeoulDateOnly(new Date());
 
   try {
     const response = await getOrderCustomerServiceSummary({
       storeId: input.storeId,
-      createdAtFrom: createdAtFrom ?? offsetSeoulDateOnly(-30),
+      createdAtFrom: createdAtFrom ?? offsetSeoulDateOnly(AUTHORITATIVE_MIRROR_FROM_OFFSET_DAYS),
       createdAtTo,
       forceRefresh: input.forceRefresh,
       items: input.rows.map((row) => ({
@@ -3230,7 +3316,9 @@ async function collectShipmentWorksheetNewOnly(input: {
         ]
       : []);
   const checkpointSyncState = input.currentSheet.syncState ?? createEmptySyncState();
-  const finalSyncState = buildNextSyncState(checkpointSyncState, input.syncPlan, input.nowIso);
+  const finalSyncState = buildNextSyncState(checkpointSyncState, input.syncPlan, input.nowIso, {
+    recordSuccessfulFull: false,
+  });
   const buildBaseMessage = () =>
     mergeMessages([
       input.listResponse.message,
@@ -4270,7 +4358,11 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   const syncPlan = resolveSyncPlan(input, currentSheet, now);
   const insertOnlyMode = syncPlan.mode === "new_only";
   const syncModeLabel =
-    syncPlan.mode === "full" ? "전체 재동기화" : syncPlan.mode === "incremental" ? "전체 재수집" : "빠른 수집";
+    syncPlan.mode === "full"
+      ? "쿠팡 기준 재동기화"
+      : syncPlan.mode === "incremental"
+        ? "증분 갱신"
+        : "빠른 수집";
   const listResponse = insertOnlyMode
     ? await fetchQuickCollectOrders({
         storeId: input.storeId,
@@ -4925,6 +5017,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     currentSheet.syncState ?? createEmptySyncState(),
     syncPlan,
     now,
+    {
+      recordSuccessfulFull: syncPlan.mode === "full" && listResponse.source === "live",
+    },
   );
   const phaseState = buildCollectPhaseState({
     hasCollectWarnings: Boolean(listResponse.message || platformKey.warning || claimWarnings.length),

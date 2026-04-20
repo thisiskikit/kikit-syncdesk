@@ -177,15 +177,15 @@ function buildMirrorSyncNotice(input: {
     ? ` 최근 수집 범위는 ${input.requirement.syncRangeLabel}입니다.`
     : "";
   const prefix = input.autoSyncing
-    ? "자동 전체 재동기화를 실행 중입니다."
-    : "자동 전체 재동기화를 준비 중입니다.";
+    ? "자동 쿠팡 기준 재동기화를 실행 중입니다."
+    : "자동 쿠팡 기준 재동기화를 준비 중입니다.";
 
   switch (input.requirement.reason) {
     case "fallback":
       return {
         title: input.autoSyncing
-          ? "쿠팡 배송관리 전체 재동기화 중"
-          : "쿠팡 배송관리 전체 재동기화 필요",
+          ? "쿠팡 기준 재동기화 중"
+          : "쿠팡 기준 재동기화 필요",
         message:
           `${prefix} 현재 응답이 fallback이라 메인 숫자를 확정할 수 없습니다.` +
           ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
@@ -193,8 +193,8 @@ function buildMirrorSyncNotice(input: {
     case "missing_summary":
       return {
         title: input.autoSyncing
-          ? "쿠팡 배송관리 전체 재동기화 중"
-          : "쿠팡 배송관리 전체 재동기화 필요",
+          ? "쿠팡 기준 재동기화 중"
+          : "쿠팡 기준 재동기화 필요",
         message:
           `${prefix} 현재 선택 기간의 전체 수집 이력이 없어 메인 숫자를 확정할 수 없습니다.` +
           ` 지금 보이는 ${partialCountLabel}건은 부분 미러입니다.`,
@@ -202,8 +202,8 @@ function buildMirrorSyncNotice(input: {
     case "degraded_sync":
       return {
         title: input.autoSyncing
-          ? "쿠팡 배송관리 전체 재동기화 중"
-          : "쿠팡 배송관리 전체 재동기화 필요",
+          ? "쿠팡 기준 재동기화 중"
+          : "쿠팡 기준 재동기화 필요",
         message:
           `${prefix} 최근 전체 수집이 부분 실패 상태라 메인 숫자를 확정할 수 없습니다.` +
           ` 지금 보이는 ${partialCountLabel}건은 확정값이 아닙니다.${syncRangeSuffix}`,
@@ -211,8 +211,8 @@ function buildMirrorSyncNotice(input: {
     case "range_outside_sync":
       return {
         title: input.autoSyncing
-          ? "쿠팡 배송관리 전체 재동기화 중"
-          : "쿠팡 배송관리 전체 재동기화 필요",
+          ? "쿠팡 기준 재동기화 중"
+          : "쿠팡 기준 재동기화 필요",
         message:
           `${prefix} 선택 기간이 최근 수집 범위를 벗어나 있습니다.` +
           ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
@@ -221,10 +221,10 @@ function buildMirrorSyncNotice(input: {
     default:
       return {
         title: input.autoSyncing
-          ? "쿠팡 배송관리 전체 재동기화 중"
-          : "쿠팡 배송관리 전체 재동기화 필요",
+          ? "쿠팡 기준 재동기화 중"
+          : "쿠팡 기준 재동기화 필요",
         message:
-          `${prefix} 최근 수집이 빠른 수집 또는 증분 수집이라 메인 숫자를 확정할 수 없습니다.` +
+          `${prefix} 최근 수집이 빠른 수집 또는 증분 갱신이라 메인 숫자를 확정할 수 없습니다.` +
           ` 지금 보이는 ${partialCountLabel}건은 부분 집계입니다.${syncRangeSuffix}`,
       };
   }
@@ -302,7 +302,7 @@ export default function ShipmentWorksheetOverview({
           <div>
             <div className="shipment-filter-summary-label">출고 작업 허브</div>
             <strong>
-              {!authoritativeCountsReady ? "현재 메인 숫자는 전체 재동기화가 끝난 뒤 다시 계산합니다." : selectedStoreId
+              {!authoritativeCountsReady ? "현재 메인 숫자는 쿠팡 기준 재동기화가 끝난 뒤 다시 계산합니다." : selectedStoreId
                 ? `현재 필터 전체 ${formatOverviewCount(activeSheet?.filteredRowCount ?? 0, authoritativeCountsReady)}건을 다음 액션 기준으로 다시 정리했습니다.`
                 : "스토어를 선택하면 현재 조건의 작업 큐를 바로 정리해서 보여줍니다."}
             </strong>
@@ -447,7 +447,7 @@ export default function ShipmentWorksheetOverview({
                   <div className="shipment-action-queue-preview-title">대표 주문</div>
                   {!authoritativeCountsReady ? (
                     <div className="muted shipment-action-queue-empty-note">
-                      전체 재동기화 후 대표 주문을 다시 계산합니다.
+                      쿠팡 기준 재동기화 후 대표 주문을 다시 계산합니다.
                     </div>
                   ) : previewItems.length ? (
                     <ol className="shipment-action-queue-preview-list">

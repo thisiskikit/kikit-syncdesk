@@ -27,12 +27,14 @@
 - 변경 내용:
   - `worksheet/view` query에 `createdAtFrom`, `createdAtTo`를 추가하고, 서버 projection이 실제로 날짜 범위를 먼저 적용한 뒤 카드·scope·목록 집계를 계산하도록 바꿨습니다.
   - 따라서 `totalRowCount`, `scopeCounts`, `priorityCounts`, `pipelineCounts`, `issueCounts`, `decisionCounts`가 모두 같은 기간 분모를 공유합니다.
-  - view 응답에는 `coverageCreatedAtFrom`, `coverageCreatedAtTo`를 남기되, 메인 숫자 신뢰 판정은 누적 coverage가 아니라 최신 `syncSummary.mode === "full"`과 `fetchCreatedAtFrom / fetchCreatedAtTo` 범위 기준으로만 보도록 정리했습니다.
+  - `collect` / `worksheet/view` 응답에는 `coverageCreatedAtFrom`, `coverageCreatedAtTo`, `isAuthoritativeMirror`, `lastFullSyncedAt`를 추가했고, coverage 의미를 누적 범위가 아니라 `마지막 성공한 쿠팡 기준 30일 재동기화 범위`로 고정했습니다.
   - 메인 출고 화면의 기본 필터는 `최근 30일 + 전체 배송관리(all)`로 바꿨고, React Query key와 view URL 모두 날짜 범위를 포함하도록 맞췄습니다.
   - 상단 기본 필터에는 `오늘 / 지난 7일 / 지난 30일` 기간 프리셋을 추가했습니다.
   - `dispatch_active / post_dispatch / claims`는 메인 기준이 아니라 `보조 작업 보기`로만 노출하고, 기본 scope를 더 이상 `dispatch_active`에 두지 않습니다.
-  - 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 최신 sync가 `빠른 수집` 또는 `증분 수집`이면, 상단 카드/행동 큐 숫자를 확정값처럼 쓰지 않고 자동으로 `full` 재동기화를 다시 시작하도록 바꿨습니다.
-  - 자동 전체 재동기화가 돌 때는 메인 허브에 경고 배너를 띄우고, 부분 집계 숫자는 `재동기화 중` 상태로만 보여 주도록 바꿨습니다.
+  - `syncMode="full"`은 이제 서버가 `최근 30일 + 전체 배송 상태 + 전체 클레임/CS`로 강제 정규화하는 `쿠팡 기준 재동기화` 의미만 가지도록 바꿨습니다.
+  - `syncMode="incremental"`은 더 이상 자동으로 `full`로 승격되지 않고, 30일 미러 유지용 겹침 구간 `증분 갱신` 의미로만 남겼습니다.
+  - 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 authoritative 30일 미러가 없으면, 상단 카드/행동 큐 숫자를 확정값처럼 쓰지 않고 자동으로 `쿠팡 기준 재동기화`를 다시 시작하도록 바꿨습니다.
+  - 자동 재동기화가 돌 때는 메인 허브에 경고 배너를 띄우고, 부분 집계 숫자는 `재동기화 중` 상태로만 보여 주도록 바꿨습니다.
   - 행동 큐는 계속 남기되 `보조 작업 큐`로 설명을 낮춰, 메인 상태 기준이 배송 처리/이슈 필터라는 점을 더 분명히 했습니다.
 - 이유:
   - 날짜를 바꿔도 메인 숫자 분모가 그대로면 쿠팡 배송관리와 같은 기준으로 읽을 수 없고, 빠른 수집 직후 부분 집합 숫자로 오해할 여지가 컸기 때문입니다.

@@ -141,6 +141,8 @@ function resolveFallbackActiveSheet(input: {
     syncSummary: null,
     coverageCreatedAtFrom: null,
     coverageCreatedAtTo: null,
+    isAuthoritativeMirror: false,
+    lastFullSyncedAt: null,
     scope: input.scope,
     page: input.result.page,
     pageSize: input.pageSize,

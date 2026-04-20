@@ -120,6 +120,40 @@ describe("worksheet-config column source helpers", () => {
     });
   });
 
+  it("keeps main mirror counts trusted when the server marks the view as authoritative after incremental refresh", () => {
+    expect(
+      resolveShipmentWorksheetMirrorSyncRequirement({
+        selectedStoreId: "store-1",
+        requestedCreatedAtFrom: "2026-03-22",
+        requestedCreatedAtTo: "2026-04-20",
+        source: "live",
+        syncSummary: {
+          mode: "incremental",
+          fetchedCount: 278,
+          insertedCount: 0,
+          insertedSourceKeys: [],
+          updatedCount: 278,
+          skippedHydrationCount: 0,
+          autoExpanded: false,
+          fetchCreatedAtFrom: "2026-04-19",
+          fetchCreatedAtTo: "2026-04-20",
+          statusFilter: null,
+          completedPhases: ["worksheet_collect"],
+          pendingPhases: [],
+          warningPhases: [],
+        },
+        isAuthoritativeMirror: true,
+        coverageCreatedAtFrom: "2026-03-22",
+        coverageCreatedAtTo: "2026-04-20",
+      }),
+    ).toEqual({
+      isTrusted: true,
+      requiresFullSync: false,
+      reason: "trusted",
+      syncRangeLabel: "2026-03-22 ~ 2026-04-20",
+    });
+  });
+
   it("requires a full sync again when the latest sync was quick collect only", () => {
     expect(
       resolveShipmentWorksheetMirrorSyncRequirement({

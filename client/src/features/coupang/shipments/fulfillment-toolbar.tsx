@@ -237,14 +237,14 @@ export default function FulfillmentToolbar({
                       onClick={onCollectIncremental}
                       disabled={collectActionDisabled}
                     >
-                      {busyAction === "collect-incremental" ? "재수집 중..." : "전체 재수집"}
+                      {busyAction === "collect-incremental" ? "증분 갱신 중..." : "증분 갱신"}
                     </button>
                     <button
                       className="button ghost"
                       onClick={onCollectFull}
                       disabled={collectActionDisabled}
                     >
-                      {busyAction === "collect-full" ? "재동기화 중..." : "전체 재동기화"}
+                      {busyAction === "collect-full" ? "재동기화 중..." : "쿠팡 기준 재동기화"}
                     </button>
                   </div>
                 </details>

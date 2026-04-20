@@ -2142,10 +2142,16 @@ export default function CoupangShipmentsPage() {
         requestedCreatedAtTo: filters.createdAtTo,
         source: activeSheetForSelectedStore?.source ?? null,
         syncSummary: activeSheetForSelectedStore?.syncSummary ?? null,
+        isAuthoritativeMirror: activeSheetForSelectedStore?.isAuthoritativeMirror ?? null,
+        coverageCreatedAtFrom: activeSheetForSelectedStore?.coverageCreatedAtFrom ?? null,
+        coverageCreatedAtTo: activeSheetForSelectedStore?.coverageCreatedAtTo ?? null,
       }),
     [
       activeSheetForSelectedStore?.source,
       activeSheetForSelectedStore?.syncSummary,
+      activeSheetForSelectedStore?.isAuthoritativeMirror,
+      activeSheetForSelectedStore?.coverageCreatedAtFrom,
+      activeSheetForSelectedStore?.coverageCreatedAtTo,
       filters.createdAtFrom,
       filters.createdAtTo,
       filters.selectedStoreId,
@@ -4090,9 +4096,9 @@ export default function CoupangShipmentsPage() {
           channel: "coupang",
           actionName:
             syncMode === "full"
-              ? "쿠팡 배송 시트 전체 재동기화"
+              ? "쿠팡 배송 시트 재동기화"
               : syncMode === "incremental"
-                ? "쿠팡 배송 시트 전체 재수집"
+                ? "쿠팡 배송 시트 증분 갱신"
                 : "쿠팡 배송 시트 빠른 수집",
           targetCount: 1,
         });
@@ -4193,9 +4199,9 @@ export default function CoupangShipmentsPage() {
       if (!options?.silent) {
         const modeLabel =
           response.syncSummary?.mode === "full"
-            ? "전체 재동기화"
+            ? "쿠팡 기준 재동기화"
             : response.syncSummary?.mode === "incremental"
-              ? "전체 재수집"
+              ? "증분 갱신"
               : "빠른 수집";
         const summary = response.syncSummary
           ? response.syncSummary.mode === "new_only"
@@ -4205,10 +4211,10 @@ export default function CoupangShipmentsPage() {
         setFeedback({
           type: response.message || response.source === "fallback" ? "warning" : "success",
           title:
-            modeLabel === "전체 재동기화"
+            modeLabel === "쿠팡 기준 재동기화"
               ? "배송 시트 재동기화 완료"
-              : modeLabel === "전체 재수집"
-                ? "배송 시트 전체 재수집 완료"
+              : modeLabel === "증분 갱신"
+                ? "배송 시트 증분 갱신 완료"
                 : "신규 주문 빠른 수집 완료",
           message: response.message ? `${summary} ${response.message}` : summary,
           details: [

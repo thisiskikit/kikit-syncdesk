@@ -690,11 +690,11 @@ describe("coupang shipment worksheet collection", () => {
     expect(preparedRows).toHaveLength(2);
     expect(preparedRows.every((item) => item.availableActions.includes("markPreparing"))).toBe(true);
     expect(result.syncSummary).toMatchObject({
-      mode: "full",
+      mode: "incremental",
       insertedCount: 3,
       insertedSourceKeys: [],
       updatedCount: 0,
-      autoExpanded: true,
+      autoExpanded: false,
       completedPhases: ["worksheet_collect"],
       pendingPhases: [
         "order_detail_hydration",
@@ -1210,7 +1210,7 @@ describe("coupang shipment worksheet collection", () => {
     expect(getOrderCustomerServiceSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeId: "store-1",
-        createdAtFrom: "2026-02-24",
+        createdAtFrom: "2026-02-25",
         createdAtTo: "2026-03-26",
         forceRefresh: false,
       }),
@@ -2019,7 +2019,7 @@ describe("coupang shipment worksheet collection", () => {
         maxPerPage: 20,
       }),
     ).rejects.toThrow(
-      "배송 시트 저장 중 중복 키 충돌이 발생했습니다. 제약=coupang_shipment_rows_source_key_uidx, mode=full, storeId=store-1",
+        "배송 시트 저장 중 중복 키 충돌이 발생했습니다. 제약=coupang_shipment_rows_source_key_uidx, mode=incremental, storeId=store-1",
     );
     expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2027,7 +2027,7 @@ describe("coupang shipment worksheet collection", () => {
         meta: expect.objectContaining({
           operation: "set",
           storeId: "store-1",
-          mode: "full",
+          mode: "incremental",
           dbCode: "23505",
           constraint: "coupang_shipment_rows_source_key_uidx",
         }),
@@ -2113,7 +2113,7 @@ describe("coupang shipment worksheet collection", () => {
         maxPerPage: 20,
       }),
     ).rejects.toThrow(
-      "배송 시트 저장 중 DB 쓰기 오류가 발생했습니다. rows=1, chunks=1, mode=full, storeId=store-1",
+        "배송 시트 저장 중 DB 쓰기 오류가 발생했습니다. rows=1, chunks=1, mode=incremental, storeId=store-1",
     );
     expect(recordSystemErrorEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2121,7 +2121,7 @@ describe("coupang shipment worksheet collection", () => {
         meta: expect.objectContaining({
           operation: "set",
           storeId: "store-1",
-          mode: "full",
+          mode: "incremental",
           persistRowCount: 1,
           chunkCount: 1,
         }),
@@ -2220,7 +2220,7 @@ describe("coupang shipment worksheet collection", () => {
     );
   });
 
-  it("auto expands to a full reconcile when the requested range goes further back", async () => {
+  it("keeps incremental sync as overlap refresh even when the requested range goes further back", async () => {
     getStoreSheetMock.mockResolvedValue({
       ...buildEmptySheet(),
       collectedAt: "2026-03-26T10:00:00.000Z",
@@ -2247,10 +2247,60 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.syncSummary).toMatchObject({
-      mode: "full",
-      autoExpanded: true,
-      fetchCreatedAtFrom: "2026-03-20",
+      mode: "incremental",
+      autoExpanded: false,
+      fetchCreatedAtFrom: "2026-03-25",
     });
+  });
+
+  it("forces full sync requests to the server-side recent 30-day whole-status mirror range", async () => {
+    getStoreSheetMock.mockResolvedValue({
+      ...buildEmptySheet(),
+      collectedAt: "2026-03-26T10:00:00.000Z",
+      syncState: {
+        lastIncrementalCollectedAt: "2026-03-26T10:00:00.000Z",
+        lastFullCollectedAt: "2026-03-26T10:00:00.000Z",
+        coveredCreatedAtFrom: "2026-03-01",
+        coveredCreatedAtTo: "2026-03-26",
+        lastStatusFilter: "INSTRUCT",
+      },
+    });
+    listOrdersMock.mockResolvedValue({
+      items: [],
+      source: "live",
+      message: null,
+    });
+
+    const result = await collectShipmentWorksheet({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-25",
+      createdAtTo: "2026-03-26",
+      status: "INSTRUCT",
+      maxPerPage: 20,
+      syncMode: "full",
+    });
+
+    expect(listOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        createdAtFrom: "2026-02-25",
+        createdAtTo: "2026-03-26",
+        status: undefined,
+        fetchAllPages: true,
+        includeCustomerService: false,
+      }),
+    );
+    expect(result.syncSummary).toMatchObject({
+      mode: "full",
+      autoExpanded: false,
+      fetchCreatedAtFrom: "2026-02-25",
+      fetchCreatedAtTo: "2026-03-26",
+      statusFilter: null,
+    });
+    expect(result.coverageCreatedAtFrom).toBe("2026-02-25");
+    expect(result.coverageCreatedAtTo).toBe("2026-03-26");
+    expect(result.isAuthoritativeMirror).toBe(true);
+    expect(result.lastFullSyncedAt).toBe("2026-03-26T10:30:00.000Z");
   });
 
   it("keeps already-seen ACCEPT rows pending prepare instead of retrying during collect", async () => {

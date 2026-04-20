@@ -674,17 +674,34 @@ export function resolveShipmentWorksheetMirrorSyncRequirement(input: {
   requestedCreatedAtTo: string | null | undefined;
   source: CoupangDataSource | null | undefined;
   syncSummary: CoupangShipmentWorksheetSyncSummary | null | undefined;
+  isAuthoritativeMirror?: boolean | null | undefined;
+  coverageCreatedAtFrom?: string | null | undefined;
+  coverageCreatedAtTo?: string | null | undefined;
 }): ShipmentWorksheetMirrorSyncRequirement {
   const selectedStoreId = input.selectedStoreId?.trim() ?? "";
   const requestedCreatedAtFrom = normalizeWorksheetDateValue(input.requestedCreatedAtFrom);
   const requestedCreatedAtTo = normalizeWorksheetDateValue(input.requestedCreatedAtTo);
-  const syncRangeLabel = buildShipmentWorksheetSyncRangeLabel(input.syncSummary);
+  const coverageCreatedAtFrom = normalizeWorksheetDateValue(input.coverageCreatedAtFrom);
+  const coverageCreatedAtTo = normalizeWorksheetDateValue(input.coverageCreatedAtTo);
+  const syncRangeLabel =
+    coverageCreatedAtFrom && coverageCreatedAtTo
+      ? `${coverageCreatedAtFrom} ~ ${coverageCreatedAtTo}`
+      : buildShipmentWorksheetSyncRangeLabel(input.syncSummary);
 
   if (!selectedStoreId || !requestedCreatedAtFrom || !requestedCreatedAtTo) {
     return {
       isTrusted: false,
       requiresFullSync: false,
       reason: "idle",
+      syncRangeLabel,
+    };
+  }
+
+  if (input.isAuthoritativeMirror === true) {
+    return {
+      isTrusted: true,
+      requiresFullSync: false,
+      reason: "trusted",
       syncRangeLabel,
     };
   }
@@ -765,7 +782,12 @@ export function summarizeWorksheetSync(sheet: CoupangShipmentWorksheetResponse |
     return null;
   }
 
-  const modeLabel = sheet.syncSummary.mode === "full" ? "전체 동기화" : "빠른 수집";
+  const modeLabel =
+    sheet.syncSummary.mode === "full"
+      ? "쿠팡 기준 재동기화"
+      : sheet.syncSummary.mode === "incremental"
+        ? "증분 갱신"
+        : "빠른 수집";
   const scopeLabel =
     sheet.syncSummary.fetchCreatedAtFrom && sheet.syncSummary.fetchCreatedAtTo
       ? `${sheet.syncSummary.fetchCreatedAtFrom} ~ ${sheet.syncSummary.fetchCreatedAtTo}`

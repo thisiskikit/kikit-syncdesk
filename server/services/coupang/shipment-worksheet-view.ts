@@ -73,7 +73,7 @@ type NormalizedQuery = Omit<
   sortField: CoupangShipmentWorksheetSortField | null;
 };
 
-const DEFAULT_SCOPE: CoupangShipmentWorksheetViewScope = "dispatch_active";
+const DEFAULT_SCOPE: CoupangShipmentWorksheetViewScope = "all";
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_DECISION_STATUS = "all";
