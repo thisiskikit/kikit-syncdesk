@@ -25,6 +25,7 @@ import {
   type CoupangExchangeRow,
   type CoupangInvoiceTarget,
   type CoupangPrepareTarget,
+  type ReconcileCoupangShipmentWorksheetResponse,
   type CoupangReturnDetail,
   type CoupangReturnRow,
   type CoupangShipmentArchiveRow,
@@ -143,22 +144,22 @@ import {
   resolvePrepareAcceptedOrdersPlan,
 } from "./shipment-prepare-flow";
 import {
-  buildFulfillmentDecisionCounts,
   getFulfillmentDecision,
   getFulfillmentDecisionReasonLabel,
   getFulfillmentDecisionStatusLabel,
-  matchesFulfillmentDecisionFilter,
 } from "./fulfillment-decision";
 import {
   buildShipmentFilterSummaryTokens,
   countActiveShipmentDetailFilters,
 } from "./fulfillment-filter-summary";
+import { resolveShipmentHandoffLinks } from "./fulfillment-handoff";
 import {
   buildQuickCollectFocusSignature,
   type QuickCollectFocusState,
 } from "./quick-collect-focus";
 import FulfillmentDrawerController from "./fulfillment-drawer-controller";
 import FulfillmentGridController from "./fulfillment-grid-controller";
+import ShipmentHubSidePanel from "./shipment-hub-side-panel";
 import FulfillmentSelectionController from "./fulfillment-selection-controller";
 import FulfillmentShell from "./fulfillment-shell";
 import FulfillmentSummaryBar from "./fulfillment-summary-bar";
@@ -398,6 +399,7 @@ function areFiltersEqual(left: FilterState, right: FilterState) {
 function buildWorksheetViewUrl(input: {
   storeId: string;
   scope: CoupangShipmentWorksheetViewScope;
+  decisionStatus: FilterState["decisionStatus"];
   page: number;
   pageSize: number;
   query: string;
@@ -417,6 +419,10 @@ function buildWorksheetViewUrl(input: {
     orderStatusCard: input.orderStatusCard,
     outputStatusCard: input.outputStatusCard,
   });
+
+  if (input.decisionStatus !== "all") {
+    params.set("decisionStatus", input.decisionStatus);
+  }
 
   if (input.sortField) {
     params.set("sortField", input.sortField);
@@ -1205,6 +1211,10 @@ function getShipmentArchiveReasonLabel(
     return "반품완료 자동보관";
   }
 
+  if (row.archiveReason === "not_found_in_coupang") {
+    return "쿠팡 미조회 제외";
+  }
+
   return "일반 보관";
 }
 
@@ -1776,6 +1786,7 @@ export default function CoupangShipmentsPage() {
       worksheetPage,
       worksheetPageSize,
       deferredQuery,
+      filters.decisionStatus,
       filters.invoiceStatusCard,
       filters.orderStatusCard,
       filters.outputStatusCard,
@@ -1787,6 +1798,7 @@ export default function CoupangShipmentsPage() {
         buildWorksheetViewUrl({
           storeId: filters.selectedStoreId,
           scope: effectiveWorksheetScope,
+          decisionStatus: filters.decisionStatus,
           page: worksheetPage,
           pageSize: worksheetPageSize,
           query: deferredQuery,
@@ -2043,10 +2055,8 @@ export default function CoupangShipmentsPage() {
       ),
     [activeSheet?.rawFieldCatalog, archiveSheet?.rawFieldCatalog, worksheetQuery.data?.rawFieldCatalog],
   );
-  const decisionCounts = useMemo(
-    () => buildFulfillmentDecisionCounts(effectiveDraftRows),
-    [effectiveDraftRows],
-  );
+  const decisionCounts = quickCollectFocusViewState.decisionCounts;
+  const decisionPreviewGroups = quickCollectFocusViewState.decisionPreviewGroups;
   const visibleRows = quickCollectFocusViewState.visibleRows;
   const worksheetTotalPages = activeSheet?.totalPages ?? 1;
   const archiveRows = archiveSheet?.items ?? [];
@@ -2685,6 +2695,40 @@ export default function CoupangShipmentsPage() {
   ) : (
     <span className="status-pill draft">없음</span>
   );
+  const detailOriginalStatusLabel =
+    detailRow?.secondaryStatus?.orderStatusLabel ??
+    (detailResolvedOrderStatus ? formatOrderStatusLabel(detailResolvedOrderStatus) : "-");
+  const detailCustomerServiceSignalLabels =
+    detailRow?.secondaryStatus?.customerServiceSignalLabels?.length
+      ? detailRow.secondaryStatus.customerServiceSignalLabels
+      : [
+          detailCustomerServiceLabel,
+          detailCustomerServiceSnapshot &&
+          detailCustomerServiceSnapshot.customerServiceState !== "ready"
+            ? `CS snapshot ${getCoupangCustomerServiceStateText(
+                detailCustomerServiceSnapshot.customerServiceState,
+              )}`
+            : null,
+        ].filter((value): value is string => Boolean(value));
+  const detailCustomerServiceStateLabel =
+    detailRow?.secondaryStatus?.customerServiceStateLabel ??
+    (detailCustomerServiceSnapshot
+      ? getCoupangCustomerServiceStateText(detailCustomerServiceSnapshot.customerServiceState)
+      : detailRow
+        ? getCoupangCustomerServiceStateText(detailRow.customerServiceState)
+        : null);
+  const detailRiskSummary = detailRow?.riskSummary ?? [];
+  const detailResolvedHandoffLinks = useMemo(() => {
+    if (detailRow?.nextHandoffLinks?.length) {
+      return resolveShipmentHandoffLinks({
+        links: detailRow.nextHandoffLinks,
+        storeId: filters.selectedStoreId,
+        query: detailHandoffQuery,
+      });
+    }
+
+    return detailHandoffGuide?.links ?? [];
+  }, [detailHandoffGuide, detailHandoffQuery, detailRow, filters.selectedStoreId]);
   const detailWorksheetInvoice = formatJoinedText([
     detailRow?.deliveryCompanyCode,
     detailRow?.invoiceNumber,
@@ -3026,6 +3070,7 @@ export default function CoupangShipmentsPage() {
   const selectedTransmitActionDisabled =
     !selectedReadyRows.length || isFallback || busyAction !== null;
   const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
+  const reconcileLiveActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const purchaseConfirmActionDisabled = !filters.selectedStoreId || busyAction !== null;
   const prepareActionDisabled =
     !filters.selectedStoreId ||
@@ -3053,6 +3098,7 @@ export default function CoupangShipmentsPage() {
   function buildCurrentWorksheetViewQuery() {
     return {
       scope: effectiveWorksheetScope,
+      decisionStatus: activeDecisionStatus,
       page: worksheetPage,
       pageSize: worksheetPageSize,
       query: deferredQuery,
@@ -3061,6 +3107,18 @@ export default function CoupangShipmentsPage() {
       outputStatusCard: filters.outputStatusCard,
       sortField: activeSortField,
       sortDirection: activeSortDirection,
+    };
+  }
+
+  function buildCurrentWorksheetFilterQuery() {
+    const viewQuery = buildCurrentWorksheetViewQuery();
+    return {
+      scope: viewQuery.scope,
+      decisionStatus: viewQuery.decisionStatus,
+      query: viewQuery.query,
+      invoiceStatusCard: viewQuery.invoiceStatusCard,
+      orderStatusCard: viewQuery.orderStatusCard,
+      outputStatusCard: viewQuery.outputStatusCard,
     };
   }
 
@@ -3143,6 +3201,91 @@ export default function CoupangShipmentsPage() {
         errorMessage: message,
       });
       return null;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function executeReconcileShipmentWorksheetLive() {
+    const requestFilters = normalizeFiltersToSeoulToday(filters);
+    if (!requestFilters.selectedStoreId) {
+      return;
+    }
+
+    if (!areFiltersEqual(filters, requestFilters)) {
+      setFilters(requestFilters);
+    }
+
+    const localToastId = startLocalOperation({
+      channel: "coupang",
+      actionName: "쿠팡 미조회 주문 정리 + 상태 재조회",
+      targetCount: 1,
+    });
+    setBusyAction("reconcile-live");
+    setFeedback(null);
+    setQuickCollectFocus(null);
+
+    try {
+      const response = await apiRequestJson<ReconcileCoupangShipmentWorksheetResponse>(
+        "POST",
+        "/api/coupang/shipments/worksheet/reconcile-live",
+        {
+          storeId: requestFilters.selectedStoreId,
+          createdAtFrom: requestFilters.createdAtFrom,
+          createdAtTo: requestFilters.createdAtTo,
+          viewQuery: buildCurrentWorksheetFilterQuery(),
+        },
+      );
+
+      if (response.operation) {
+        publishOperation(response.operation);
+      }
+
+      await refetchWorksheetView();
+      void archiveQuery.refetch();
+
+      const isNoop =
+        response.archivedCount === 0 &&
+        response.refreshedCount === 0 &&
+        response.warningCount === 0;
+      const hasWarning = response.warnings.length > 0 || response.source === "fallback" || isNoop;
+      const summaryMessage = isNoop
+        ? "현재 화면 필터와 조회 기간에서 정리할 주문이 없습니다."
+        : `쿠팡 미조회 ${response.archivedCount}건을 정리하고 남은 ${response.refreshedCount}건의 상태를 다시 확인했습니다.${
+            response.warningCount > 0 ? ` 경고 ${response.warningCount}건이 남았습니다.` : ""
+          }`;
+
+      setFeedback({
+        type: hasWarning ? "warning" : "success",
+        title: hasWarning ? "미조회 정리 + 상태 재조회 경고" : "미조회 정리 + 상태 재조회 완료",
+        message:
+          response.message && response.message !== summaryMessage
+            ? `${summaryMessage} ${response.message}`
+            : summaryMessage,
+        details: response.warnings.slice(0, 8),
+      });
+      finishLocalOperation(localToastId, {
+        status: hasWarning ? "warning" : "success",
+        summary: isNoop
+          ? "정리 대상 없음"
+          : `미조회 ${response.archivedCount}건 정리 / ${response.refreshedCount}건 재조회`,
+      });
+      window.setTimeout(() => removeLocalOperation(localToastId), 1_200);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? `미조회 정리 + 상태 재조회에 실패했습니다. ${error.message}`
+          : "미조회 정리 + 상태 재조회에 실패했습니다.";
+      setFeedback({
+        type: "error",
+        title: "미조회 정리 + 상태 재조회 실패",
+        message,
+        details: [],
+      });
+      finishLocalOperation(localToastId, {
+        status: "error",
+        errorMessage: message,
+      });
     } finally {
       setBusyAction(null);
     }
@@ -4911,6 +5054,7 @@ export default function CoupangShipmentsPage() {
       activeSheetSource={activeSheet?.source ?? null}
       busyAction={busyAction}
       collectActionDisabled={collectActionDisabled}
+      reconcileLiveActionDisabled={reconcileLiveActionDisabled}
       purchaseConfirmActionDisabled={purchaseConfirmActionDisabled}
       prepareActionDisabled={prepareActionDisabled}
       transmitActionDisabled={transmitActionDisabled}
@@ -4941,6 +5085,7 @@ export default function CoupangShipmentsPage() {
       }}
       onChangeTab={changeWorkspaceTab}
       onQuickCollect={() => void collectWorksheet("new_only")}
+      onReconcileLive={() => void executeReconcileShipmentWorksheetLive()}
       onSyncPurchaseConfirmed={() => void executePurchaseConfirmedSync()}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
       onTransmit={() => void executeInvoiceInputMode()}
@@ -4958,6 +5103,7 @@ export default function CoupangShipmentsPage() {
     <FulfillmentSummaryBar
       activeTab={activeTab}
       worksheetSummaryProps={{
+        selectedStoreId: filters.selectedStoreId,
         quickCollectFocusActive: isQuickCollectFocusActive,
         quickCollectFocusCount: quickCollectFocusResult?.focusedRows.length ?? 0,
         quickCollectFocusMessage:
@@ -4966,14 +5112,14 @@ export default function CoupangShipmentsPage() {
             : null,
         activeDecisionStatus,
         decisionCounts,
-        decisionOptions: FULFILLMENT_DECISION_OPTIONS,
+        decisionPreviewGroups,
         detailFilterToggleLabel: effectiveDetailFilterToggleLabel,
         detailFiltersOpen,
         activeDetailFilterCount: effectiveDetailFilterCount,
         activeFilterSummaryTokens,
         filterSummarySupportText,
         hasCustomWorksheetFilters: effectiveHasCustomWorksheetFilters,
-        pageRowCount: effectiveDraftRows.length,
+        pageRowCount: activeSheet?.filteredRowCount ?? effectiveDraftRows.length,
         visibleRowsCount: visibleRows.length,
         filters,
         activeSheet,
@@ -4983,7 +5129,6 @@ export default function CoupangShipmentsPage() {
         invoiceStatusOptions: INVOICE_STATUS_CARD_OPTIONS,
         outputStatusOptions: OUTPUT_STATUS_CARD_OPTIONS,
         orderStatusOptions: ORDER_STATUS_CARD_OPTIONS,
-        opsHandoffGuide: worksheetOpsHandoffGuide,
         onClearQuickCollectFocus: () => {
           setQuickCollectFocus(null);
           setWorksheetPage(1);
@@ -5084,7 +5229,7 @@ export default function CoupangShipmentsPage() {
     />
   );
 
-  const contentNode = (
+  const gridContentNode = (
     <FulfillmentGridController
       activeTab={activeTab}
       worksheet={{
@@ -5190,6 +5335,34 @@ export default function CoupangShipmentsPage() {
     />
   );
 
+  const contentNode =
+    activeTab === "worksheet" || activeTab === "confirmed" ? (
+      <div className="shipment-hub-layout">
+        <div className="shipment-hub-main">{gridContentNode}</div>
+        <ShipmentHubSidePanel
+          row={detailRow}
+          heroMeta={detailHeroMeta}
+          decision={detailDecisionPresentation}
+          originalStatusLabel={detailOriginalStatusLabel}
+          customerServiceSignalLabels={detailCustomerServiceSignalLabels}
+          customerServiceStateLabel={detailCustomerServiceStateLabel}
+          riskSummary={detailRiskSummary}
+          handoffLinks={detailResolvedHandoffLinks}
+          worksheetStatusValue={detailWorksheetStatusValue}
+          invoiceStatusValue={detailInvoiceStatusValue}
+          claimStatusValue={detailClaimStatusValue}
+          statusRows={detailStatusRows}
+          activityRows={detailRealtimeOrderRows}
+          isLoading={shipmentDetailQuery.isLoading}
+          errorMessage={shipmentDetailQuery.error ? (shipmentDetailQuery.error as Error).message : null}
+          onClose={closeShipmentDetailDialog}
+          onOpenFullDetail={openShipmentFullDetailDialog}
+        />
+      </div>
+    ) : (
+      gridContentNode
+    );
+
   const drawersNode = (
     <FulfillmentDrawerController
       audit={{
@@ -5198,7 +5371,7 @@ export default function CoupangShipmentsPage() {
         onClose: () => setIsAuditDialogOpen(false),
       }}
       decisionDrawer={{
-        isOpen: Boolean(detailRow && !isFullDetailDialogOpen),
+        isOpen: Boolean(detailRow && activeTab === "archive" && !isFullDetailDialogOpen),
         rowTitle: detailRow?.exposedProductName || detailRow?.productName || "",
         heroMeta: detailHeroMeta,
         decision: detailDecisionPresentation,

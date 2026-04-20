@@ -17,6 +17,7 @@ import type {
   CoupangProductQuantityUpdateTarget,
   CoupangProductSaleStatusUpdateTarget,
   CoupangShipmentWorksheetBulkResolveRequest,
+  ReconcileCoupangShipmentWorksheetInput,
   RefreshCoupangShipmentWorksheetInput,
   CoupangReturnActionTarget,
   CoupangReturnCollectionInvoiceTarget,
@@ -313,6 +314,7 @@ export function parseShipmentWorksheetInvoiceInputApplyRequest(
 export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipmentWorksheetViewQuery {
   const item = value && typeof value === "object" ? (value as JsonRecord) : {};
   const scope = asOptionalString(item.scope);
+  const decisionStatus = asOptionalString(item.decisionStatus);
   const invoiceStatusCard = asOptionalString(item.invoiceStatusCard);
   const orderStatusCard = asOptionalString(item.orderStatusCard);
   const outputStatusCard = asOptionalString(item.outputStatusCard);
@@ -329,6 +331,15 @@ export function parseShipmentWorksheetViewQuery(value: unknown): CoupangShipment
       scope === "claims" ||
       scope === "all"
         ? scope
+        : undefined,
+    decisionStatus:
+      decisionStatus === "all" ||
+      decisionStatus === "ready" ||
+      decisionStatus === "invoice_waiting" ||
+      decisionStatus === "hold" ||
+      decisionStatus === "blocked" ||
+      decisionStatus === "recheck"
+        ? decisionStatus
         : undefined,
     page: parsePositiveInteger(item.page, 1),
     pageSize: parsePositiveInteger(item.pageSize, 50),
@@ -419,6 +430,28 @@ export function parseShipmentWorksheetAuditMissingInput(
     createdAtTo: asString(item.createdAtTo),
     viewQuery: {
       scope: parsedViewQuery.scope,
+      decisionStatus: parsedViewQuery.decisionStatus,
+      query: parsedViewQuery.query,
+      invoiceStatusCard: parsedViewQuery.invoiceStatusCard,
+      orderStatusCard: parsedViewQuery.orderStatusCard,
+      outputStatusCard: parsedViewQuery.outputStatusCard,
+    },
+  };
+}
+
+export function parseReconcileShipmentWorksheetLiveInput(
+  value: unknown,
+): ReconcileCoupangShipmentWorksheetInput {
+  const item = value && typeof value === "object" ? (value as JsonRecord) : {};
+  const parsedViewQuery = parseShipmentWorksheetViewQuery(item.viewQuery);
+
+  return {
+    storeId: asString(item.storeId),
+    createdAtFrom: asString(item.createdAtFrom),
+    createdAtTo: asString(item.createdAtTo),
+    viewQuery: {
+      scope: parsedViewQuery.scope,
+      decisionStatus: parsedViewQuery.decisionStatus,
       query: parsedViewQuery.query,
       invoiceStatusCard: parsedViewQuery.invoiceStatusCard,
       orderStatusCard: parsedViewQuery.orderStatusCard,
@@ -436,8 +469,9 @@ export function parseShipmentWorksheetBulkResolveRequest(
       ? parseShipmentWorksheetViewQuery(item.viewQuery)
       : undefined;
   const viewQuery = parsedViewQuery
-    ? {
+      ? {
         scope: parsedViewQuery.scope,
+        decisionStatus: parsedViewQuery.decisionStatus,
         page: parsedViewQuery.page,
         pageSize: parsedViewQuery.pageSize,
         query: parsedViewQuery.query,

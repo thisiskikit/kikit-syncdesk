@@ -9,6 +9,7 @@ type FulfillmentToolbarProps = {
   activeSheetSource: "live" | "fallback" | null;
   busyAction: string | null;
   collectActionDisabled: boolean;
+  reconcileLiveActionDisabled: boolean;
   purchaseConfirmActionDisabled: boolean;
   prepareActionDisabled: boolean;
   transmitActionDisabled: boolean;
@@ -26,6 +27,7 @@ type FulfillmentToolbarProps = {
   filtersProps: ComponentProps<typeof ShipmentBaseFilters>;
   onChangeTab: (tab: FulfillmentActiveTab) => void;
   onQuickCollect: () => void;
+  onReconcileLive: () => void;
   onSyncPurchaseConfirmed: () => void;
   onPrepareAcceptedOrders: () => void;
   onTransmit: () => void;
@@ -77,6 +79,7 @@ export default function FulfillmentToolbar({
   activeSheetSource,
   busyAction,
   collectActionDisabled,
+  reconcileLiveActionDisabled,
   purchaseConfirmActionDisabled,
   prepareActionDisabled,
   transmitActionDisabled,
@@ -94,6 +97,7 @@ export default function FulfillmentToolbar({
   filtersProps,
   onChangeTab,
   onQuickCollect,
+  onReconcileLive,
   onSyncPurchaseConfirmed,
   onPrepareAcceptedOrders,
   onTransmit,
@@ -156,6 +160,15 @@ export default function FulfillmentToolbar({
               <div className="shipment-primary-actions">
                 <button className="button" onClick={onQuickCollect} disabled={collectActionDisabled}>
                   {busyAction === "collect-new" ? "빠른 수집 중..." : "빠른 수집"}
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={onReconcileLive}
+                  disabled={reconcileLiveActionDisabled}
+                >
+                  {busyAction === "reconcile-live"
+                    ? "미조회 정리/상태 재조회 중..."
+                    : "미조회 정리 + 상태 재조회"}
                 </button>
                 <button
                   className="button secondary"

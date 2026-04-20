@@ -2,6 +2,76 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-19 / 쿠팡 출고 허브 UI 재구성
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `shared/coupang-fulfillment.ts`
+  - `server/services/coupang/shipment-worksheet-view.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-view.test.ts`
+  - `server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/shipment-hub-side-panel.tsx`
+  - `client/src/features/coupang/shipments/worksheet-row-helpers.tsx`
+  - `client/src/features/coupang/shipments/quick-collect-focus.ts`
+  - `client/src/features/coupang/shipments/quick-collect-focus-controller.ts`
+  - `client/src/features/coupang/shipments/fulfillment-decision.ts`
+  - `client/src/features/coupang/shipments/fulfillment-handoff.ts`
+  - `client/src/features/coupang/shipments/types.ts`
+  - `client/src/index.css`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 출고 화면 상단을 `즉시 출고 / 송장 입력 / 재확인 / 보류 / 차단` 5개 행동 큐 허브로 재구성했습니다.
+  - 큐 카드의 건수와 대표 주문 미리보기는 현재 필터 전체 기준으로 계산하고, 카드를 누르면 하단 원본 테이블이 같은 `decisionStatus`로 바로 연동됩니다.
+  - 출고 판단 로직을 `shared/coupang-fulfillment.ts`로 공용화해 서버 집계, quick collect 집중 보기, 클라이언트 표시가 같은 규칙을 쓰도록 맞췄습니다.
+  - worksheet view 응답에 `decisionCounts`, `decisionPreviewGroups`, row summary(`primaryDecision`, `secondaryStatus`, `riskSummary`, `nextHandoffLinks`)를 포함하도록 확장했습니다.
+  - 작업 화면과 구매확정 탭에는 새 우측 판단 패널을 추가해 `업무 판단 상태 -> 쿠팡 원본 상태 -> CS·클레임 신호` 3층 구조와 다음 이동 링크를 한 자리에서 보여주도록 바꿨습니다.
+  - 기존 오버레이 Drawer는 기본 작업 경로가 아니라 보관함 상세 확인 중심으로만 남기고, 메인 테이블 상태 셀도 같은 3층 순서를 요약해 보여주도록 보강했습니다.
+- 이유:
+  - 운영자가 원본 상태 해석보다 “지금 무엇을 해야 하는지”를 먼저 판단할 수 있게, 출고 화면을 다음 액션 중심 허브로 바꾸려는 요구를 반영했습니다.
+  - 큐 숫자가 현재 페이지가 아니라 현재 필터 전체 기준이어야 상단 허브와 하단 작업판이 서로 다른 숫자를 말하지 않기 때문입니다.
+- 남은 점:
+  - 브라우저에서 실제 클릭으로 큐 카드 전환, 우측 판단 패널 체감, 모바일 폭까지 직접 검증한 것은 아직 아닙니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-view.test.ts server/services/coupang/shipment-worksheet-service-view-read.test.ts`
+
+## 2026-04-19 / 쿠팡 미조회 주문 정리 + 잔여 주문 상태 재조회 버튼
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/routes/coupang/shipments.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/stores/work-data-coupang-shipment-worksheet-store.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-toolbar.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 출고 작업 화면에 `미조회 정리 + 상태 재조회` 버튼을 추가했습니다.
+  - 새 `/api/coupang/shipments/worksheet/reconcile-live` 엔드포인트가 현재 스토어, 현재 화면 필터, 현재 조회 기간 기준으로 대상 worksheet row를 다시 확인합니다.
+  - 쿠팡 live 상세 조회가 성공했고 `item === null`인 주문만 `not_found_in_coupang` / `쿠팡 미조회 제외` 사유로 보관함으로 이동합니다.
+  - fallback 응답이나 API 오류는 자동 제외하지 않고 warning으로만 남기며, 남아 있는 주문은 기존 `shipment_boxes` refresh 경로로 다시 상태를 맞춥니다.
+  - 보관함 reason 라벨에 `쿠팡 미조회 제외`를 추가했고, 저장소 정규화도 새 reason을 그대로 유지하도록 맞췄습니다.
+- 이유:
+  - 플랫폼에서 이미 사라진 주문을 active worksheet에 계속 남겨 두지 않고, 작업 화면 기준으로 수동 정리한 뒤 남은 주문의 상태만 다시 맞추려는 운영 요구를 반영했습니다.
+- 남은 점:
+  - 자동 실행은 하지 않고 수동 버튼으로만 지원합니다.
+  - 네트워크 실패나 fallback은 안전하게 유지 우선으로 처리하므로, 일부 미조회 후보는 warning 후 워크시트에 남을 수 있습니다.
+- 검증:
+  - `npx tsc --noEmit --pretty false`
+  - `npx vitest run --root . server/services/coupang/shipment-worksheet-collection.test.ts`
+
 ## 2026-04-19 / 쿠팡 구매확정 수동 sync와 구매확정 탭 분리
 
 - 변경 유형:

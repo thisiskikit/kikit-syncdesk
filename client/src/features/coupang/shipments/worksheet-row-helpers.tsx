@@ -586,20 +586,79 @@ export function getWorksheetStatusPresentation(row: CoupangShipmentWorksheetRow)
   };
 }
 
+function getRowDecisionPresentation(row: CoupangShipmentWorksheetRow) {
+  return row.primaryDecision ?? getFulfillmentDecision(row);
+}
+
+function getRowSecondaryStatusSummary(row: CoupangShipmentWorksheetRow) {
+  if (row.secondaryStatus) {
+    return row.secondaryStatus;
+  }
+
+  const resolvedOrderStatus = resolveWorksheetOrderStatus(row);
+  const signalLabels = [
+    formatShipmentWorksheetCustomerServiceLabel({
+      summary: row.customerServiceIssueSummary,
+      count: row.customerServiceIssueCount,
+      state: row.customerServiceState,
+      breakdown: row.customerServiceIssueBreakdown,
+    }),
+    row.customerServiceState !== "ready"
+      ? `CS snapshot ${getCoupangCustomerServiceStateText(row.customerServiceState)}`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return {
+    orderStatusCode: resolvedOrderStatus,
+    orderStatusLabel: formatOrderStatusLabel(resolvedOrderStatus),
+    customerServiceSignalLabels: signalLabels,
+    customerServiceState: row.customerServiceState,
+    customerServiceStateLabel: getCoupangCustomerServiceStateText(row.customerServiceState),
+  };
+}
+
 export function renderOrderStatusCell(row: CoupangShipmentWorksheetRow) {
   const presentation = getWorksheetStatusPresentation(row);
+  const decision = getRowDecisionPresentation(row);
+  const secondaryStatus = getRowSecondaryStatusSummary(row);
+  const customerServiceSignalLabels =
+    secondaryStatus.customerServiceSignalLabels.length > 0
+      ? secondaryStatus.customerServiceSignalLabels
+      : presentation.customerServiceLabel
+        ? [presentation.customerServiceLabel]
+        : [];
+  const title = [
+    decision.statusLabel,
+    decision.reasonLabel,
+    secondaryStatus.orderStatusLabel,
+    ...customerServiceSignalLabels,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="shipment-cell shipment-status-cell" title={presentation.title}>
-      <div className="shipment-status-badges">
-        <span className={`status-pill ${presentation.orderToneClassName}`}>
-          {presentation.orderLabel}
-        </span>
-        {presentation.customerServiceLabel ? (
-          <span className={`status-pill ${presentation.customerServiceToneClass}`}>
-            {presentation.customerServiceLabel}
+    <div className="shipment-cell shipment-status-cell" title={title || presentation.title}>
+      <div className="shipment-status-stack">
+        <div className="shipment-status-summary">
+          <span className={decision.toneClassName}>{decision.statusLabel}</span>
+          <span className="shipment-decision-reason-pill">{decision.reasonLabel}</span>
+        </div>
+        <div className="shipment-status-subrow">
+          <span className={`status-pill ${presentation.orderToneClassName}`}>
+            {secondaryStatus.orderStatusLabel}
           </span>
-        ) : null}
+        </div>
+        <div className="shipment-status-subrow">
+          {customerServiceSignalLabels.length ? (
+            customerServiceSignalLabels.slice(0, 2).map((label) => (
+              <span key={label} className="shipment-status-chip">
+                {label}
+              </span>
+            ))
+          ) : (
+            <span className="shipment-status-muted">CS 신호 없음</span>
+          )}
+        </div>
       </div>
     </div>
   );

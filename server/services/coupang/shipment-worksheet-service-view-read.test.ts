@@ -166,5 +166,8 @@ describe("getShipmentWorksheetView", () => {
     expect(response.items).toHaveLength(1);
     expect(response.items[0]?.customerServiceState).toBe("stale");
     expect(response.items[0]?.id).toBe("1");
+    expect(response.items[0]?.primaryDecision?.status).toBe("recheck");
+    expect(response.decisionCounts.recheck).toBe(1);
+    expect(response.decisionPreviewGroups.recheck.count).toBe(1);
   });
 });

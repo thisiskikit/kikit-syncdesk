@@ -248,6 +248,7 @@ describe("quick collect focus view state", () => {
     expect(state.activeSheet?.scopeCounts).toEqual({
       dispatch_active: 0,
       post_dispatch: 0,
+      confirmed: 0,
       claims: 0,
       all: 0,
     });

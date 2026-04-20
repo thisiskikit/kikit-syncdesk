@@ -654,6 +654,311 @@ textarea {
   margin-top: 0.35rem;
 }
 
+.shipment-hub-board {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.shipment-hub-board-intro {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.shipment-action-queue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.9rem;
+}
+
+.shipment-action-queue-card {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+  min-height: 100%;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.shipment-action-queue-card.active {
+  border-color: #8bb0f2;
+  box-shadow: 0 16px 32px rgba(63, 104, 180, 0.12);
+}
+
+.shipment-action-queue-card:hover {
+  transform: translateY(-1px);
+  border-color: #bfd0e4;
+}
+
+.shipment-action-queue-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.shipment-action-queue-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.shipment-action-queue-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #5c6a7d;
+  letter-spacing: 0.04em;
+}
+
+.shipment-action-queue-active {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: #152033;
+  color: white;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.shipment-action-queue-count-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.shipment-action-queue-count {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #152033;
+  line-height: 1;
+}
+
+.shipment-action-queue-count-note {
+  font-size: 0.82rem;
+}
+
+.shipment-action-queue-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.shipment-action-queue-reason-pill,
+.shipment-status-chip,
+.shipment-hub-side-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.36rem 0.68rem;
+  border-radius: 999px;
+  border: 1px solid #dbe4ee;
+  background: #f7fafc;
+  color: #415163;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.shipment-hub-side-panel-chip.strong {
+  background: #152033;
+  border-color: #152033;
+  color: white;
+}
+
+.shipment-action-queue-preview {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.shipment-action-queue-preview-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #344155;
+}
+
+.shipment-action-queue-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.shipment-action-queue-preview-item {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid #e2eaf2;
+  background: #fbfdff;
+}
+
+.shipment-action-queue-preview-meta,
+.shipment-action-queue-empty-note {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.shipment-action-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+
+.shipment-hub-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.shipment-hub-main {
+  min-width: 0;
+}
+
+.shipment-hub-side-panel {
+  position: sticky;
+  top: calc(var(--workspace-sidebar-offset) + 16px);
+  display: grid;
+  gap: 0.95rem;
+  align-self: start;
+}
+
+.shipment-hub-side-panel-empty {
+  min-height: 320px;
+  align-content: center;
+}
+
+.shipment-hub-side-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.shipment-hub-side-panel-header h3 {
+  margin: 0.2rem 0 0;
+  font-size: 1.08rem;
+}
+
+.shipment-hub-side-panel-meta,
+.shipment-hub-side-panel-summary {
+  line-height: 1.55;
+}
+
+.shipment-hub-side-panel-hero {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid #e3eaf2;
+  background: #fbfdff;
+}
+
+.shipment-hub-side-panel-section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.shipment-hub-side-panel-section-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #415163;
+  letter-spacing: 0.04em;
+}
+
+.shipment-hub-side-panel-status-list,
+.shipment-hub-side-panel-info-grid {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.shipment-hub-side-panel-status-item,
+.shipment-hub-side-panel-info-row {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.8rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid #e1e8f0;
+  background: #fbfdff;
+}
+
+.shipment-hub-side-panel-status-name,
+.shipment-hub-side-panel-info-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #5c6a7d;
+}
+
+.shipment-hub-side-panel-status-value,
+.shipment-hub-side-panel-status-stack,
+.shipment-hub-side-panel-info-value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.shipment-hub-side-panel-status-stack {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.shipment-hub-side-panel-chip-row,
+.shipment-status-subrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.shipment-hub-side-panel-muted,
+.shipment-status-muted {
+  color: #677689;
+  font-size: 0.82rem;
+}
+
+.shipment-hub-side-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.shipment-hub-side-panel-foldout {
+  border: 1px solid #dde6ef;
+  border-radius: 16px;
+  background: #fbfdff;
+  padding: 0.9rem 1rem;
+}
+
+.shipment-hub-side-panel-foldout summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #152033;
+}
+
+.shipment-hub-side-panel-foldout-body {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.9rem;
+}
+
+.shipment-status-stack {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.shipment-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
 .shipment-view-preset-group {
   display: grid;
   gap: 0.35rem;
@@ -3801,6 +4106,24 @@ textarea {
   }
 
   .dashboard-ops-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .shipment-hub-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .shipment-hub-side-panel {
+    position: static;
+  }
+
+  .shipment-hub-board-intro,
+  .shipment-action-queue-header,
+  .shipment-hub-side-panel-header {
+    flex-direction: column;
+  }
+
+  .shipment-action-queue-grid {
     grid-template-columns: 1fr;
   }
 

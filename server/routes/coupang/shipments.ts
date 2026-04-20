@@ -9,6 +9,7 @@ import {
   getShipmentWorksheetHandler,
   getShipmentWorksheetViewHandler,
   patchShipmentWorksheetHandler,
+  reconcileShipmentWorksheetLiveHandler,
   refreshShipmentWorksheetHandler,
   resolveShipmentWorksheetBulkRowsHandler,
   updateInvoiceHandler,
@@ -24,6 +25,7 @@ router.get("/archive/view", getShipmentArchiveViewHandler);
 router.get("/archive/detail", getShipmentArchiveDetailHandler);
 router.post("/collect", collectShipmentWorksheetHandler);
 router.post("/worksheet/refresh", refreshShipmentWorksheetHandler);
+router.post("/worksheet/reconcile-live", reconcileShipmentWorksheetLiveHandler);
 router.patch("/worksheet", patchShipmentWorksheetHandler);
 router.post("/worksheet/invoice-input/apply", applyShipmentWorksheetInvoiceInputHandler);
 router.post("/worksheet/audit-missing", auditShipmentWorksheetMissingHandler);

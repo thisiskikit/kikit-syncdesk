@@ -234,7 +234,9 @@ function normalizeArchiveRow(value: CoupangShipmentArchiveRow): CoupangShipmentA
     ...row,
     archivedAt: typeof value.archivedAt === "string" ? value.archivedAt : new Date().toISOString(),
     archiveReason:
-      value.archiveReason === "cancel_completed" || value.archiveReason === "return_completed"
+      value.archiveReason === "cancel_completed" ||
+      value.archiveReason === "return_completed" ||
+      value.archiveReason === "not_found_in_coupang"
         ? value.archiveReason
         : "retention_post_dispatch",
   };
@@ -1142,7 +1144,8 @@ export class CoupangShipmentWorksheetStore {
               archiveReason:
                 "archiveReason" in item &&
                 (item.archiveReason === "cancel_completed" ||
-                  item.archiveReason === "return_completed")
+                  item.archiveReason === "return_completed" ||
+                  item.archiveReason === "not_found_in_coupang")
                   ? item.archiveReason
                   : "retention_post_dispatch",
             }),

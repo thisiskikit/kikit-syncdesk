@@ -79,6 +79,7 @@ vi.mock("../logs/service", () => ({
 import {
   collectShipmentWorksheet,
   getShipmentWorksheet,
+  reconcileShipmentWorksheetLive,
   refreshShipmentWorksheet,
 } from "./shipment-worksheet-service";
 
@@ -383,6 +384,64 @@ function buildSettlementRow(
     status: "FINALIZED",
     settledAt: "2026-03-31T00:00:00+09:00",
     ...overrides,
+  };
+}
+
+function buildOrderDetailResponse(input: {
+  shipmentBoxId: string;
+  orderId: string;
+  vendorItemId: string;
+  status?: string;
+  productName?: string;
+  optionName?: string | null;
+}) {
+  return {
+    item: {
+      shipmentBoxId: input.shipmentBoxId,
+      orderId: input.orderId,
+      orderedAt: "2026-03-26T09:00:00+09:00",
+      paidAt: "2026-03-26T09:00:00+09:00",
+      status: input.status ?? "INSTRUCT",
+      orderer: {
+        name: "Kim",
+        email: null,
+        safeNumber: "050-1111-2222",
+        ordererNumber: "010-1111-2222",
+      },
+      receiver: {
+        name: "Lee",
+        safeNumber: "050-1111-2222",
+        receiverNumber: "010-1111-2222",
+        addr1: "Seoul",
+        addr2: "101",
+        postCode: "12345",
+      },
+      deliveryCompanyName: null,
+      deliveryCompanyCode: null,
+      invoiceNumber: null,
+      inTransitDateTime: null,
+      deliveredDate: null,
+      parcelPrintMessage: null,
+      shipmentType: null,
+      splitShipping: false,
+      ableSplitShipping: false,
+      items: [
+        buildOrderRow({
+          id: `${input.shipmentBoxId}:${input.vendorItemId}`,
+          shipmentBoxId: input.shipmentBoxId,
+          orderId: input.orderId,
+          vendorItemId: input.vendorItemId,
+          status: input.status ?? "INSTRUCT",
+          productName: input.productName ?? "Detailed Product",
+          optionName: input.optionName ?? "Detailed Option",
+          availableActions: ["uploadInvoice"],
+        }),
+      ],
+      relatedReturnRequests: [],
+      relatedExchangeRequests: [],
+    },
+    source: "live" as const,
+    message: null,
   };
 }
 
@@ -2636,6 +2695,226 @@ describe("coupang shipment worksheet collection", () => {
     });
 
     expect(result.items).toEqual([]);
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [],
+      }),
+    );
+  });
+
+  it("archives live not-found rows and refreshes only the remaining worksheet rows", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "930",
+          orderId: "O-930",
+          vendorItemId: "V-930",
+          status: "INSTRUCT",
+          productName: "Missing In Coupang",
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "931",
+          orderId: "O-931",
+          vendorItemId: "V-931",
+          status: "INSTRUCT",
+          productName: "Still Active",
+        }),
+      ]),
+    );
+    getOrderDetailMock.mockImplementation(async (input: { shipmentBoxId?: string }) => {
+      if (input.shipmentBoxId === "930") {
+        return {
+          item: null,
+          source: "live" as const,
+          message: null,
+        };
+      }
+
+      return buildOrderDetailResponse({
+        shipmentBoxId: "931",
+        orderId: "O-931",
+        vendorItemId: "V-931",
+        status: "INSTRUCT",
+        productName: "Still Active",
+      });
+    });
+
+    const result = await reconcileShipmentWorksheetLive({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      viewQuery: {
+        scope: "all",
+      },
+    });
+
+    expect(result.archivedCount).toBe(1);
+    expect(result.refreshedCount).toBe(1);
+    expect(result.warningCount).toBe(0);
+    expect(archiveRowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:930:V-930",
+            archiveReason: "not_found_in_coupang",
+          }),
+        ],
+      }),
+    );
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ sourceKey: "store-1:931:V-931" })],
+      }),
+    );
+    expect(getProductDetailMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps fallback or error rows in the worksheet and reports them as warnings", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "932",
+          orderId: "O-932",
+          vendorItemId: "V-932",
+          status: "INSTRUCT",
+          productName: "Fallback Row",
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "933",
+          orderId: "O-933",
+          vendorItemId: "V-933",
+          status: "INSTRUCT",
+          productName: "Error Row",
+        }),
+      ]),
+    );
+    getOrderDetailMock.mockImplementation(async (input: { shipmentBoxId?: string }) => {
+      if (input.shipmentBoxId === "932") {
+        return {
+          item: null,
+          source: "fallback" as const,
+          message: "live unavailable",
+        };
+      }
+
+      throw new Error("timeout");
+    });
+
+    const result = await reconcileShipmentWorksheetLive({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      viewQuery: {
+        scope: "all",
+      },
+    });
+
+    expect(result.archivedCount).toBe(0);
+    expect(result.refreshedCount).toBe(2);
+    expect(result.warningCount).toBe(2);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("live unavailable"),
+        expect.stringContaining("timeout"),
+      ]),
+    );
+    expect(archiveRowsMock).not.toHaveBeenCalled();
+    expect(setStoreSheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({ sourceKey: "store-1:932:V-932" }),
+          expect.objectContaining({ sourceKey: "store-1:933:V-933" }),
+        ]),
+      }),
+    );
+  });
+
+  it("keeps completed claim auto-archive behavior after live reconcile refresh", async () => {
+    getStoreSheetMock.mockResolvedValue(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "934",
+          orderId: "O-934",
+          vendorItemId: "V-934",
+          status: "INSTRUCT",
+          productName: "Missing Before Refresh",
+        }),
+        buildWorksheetRow({
+          shipmentBoxId: "935",
+          orderId: "O-935",
+          vendorItemId: "V-935",
+          status: "INSTRUCT",
+          productName: "Completed Return After Refresh",
+        }),
+      ]),
+    );
+    getOrderDetailMock.mockImplementation(async (input: { shipmentBoxId?: string }) => {
+      if (input.shipmentBoxId === "934") {
+        return {
+          item: null,
+          source: "live" as const,
+          message: null,
+        };
+      }
+
+      return buildOrderDetailResponse({
+        shipmentBoxId: "935",
+        orderId: "O-935",
+        vendorItemId: "V-935",
+        status: "INSTRUCT",
+        productName: "Completed Return After Refresh",
+      });
+    });
+    getOrderCustomerServiceSummaryMock.mockResolvedValue({
+      items: [
+        {
+          rowKey: "935:V-935",
+          customerServiceIssueCount: 1,
+          customerServiceIssueSummary: "반품 1건",
+          customerServiceIssueBreakdown: [{ type: "return", count: 1, label: "반품 1건" }],
+          customerServiceTerminalStatus: "return_completed",
+          customerServiceState: "ready",
+          customerServiceFetchedAt: "2026-03-26T10:30:00.000Z",
+        },
+      ],
+      source: "live",
+      message: null,
+    });
+
+    const result = await reconcileShipmentWorksheetLive({
+      storeId: "store-1",
+      createdAtFrom: "2026-03-26",
+      createdAtTo: "2026-03-26",
+      viewQuery: {
+        scope: "all",
+      },
+    });
+
+    expect(result.archivedCount).toBe(1);
+    expect(result.refreshedCount).toBe(1);
+    expect(archiveRowsMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:934:V-934",
+            archiveReason: "not_found_in_coupang",
+          }),
+        ],
+      }),
+    );
+    expect(archiveRowsMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceKey: "store-1:935:V-935",
+            archiveReason: "return_completed",
+          }),
+        ],
+      }),
+    );
     expect(setStoreSheetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         items: [],

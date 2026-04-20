@@ -43,6 +43,8 @@ export type QuickCollectFocusViewState = {
   activeSheet: CoupangShipmentWorksheetViewResponse | null;
   effectiveDraftRows: CoupangShipmentWorksheetRow[];
   visibleRows: CoupangShipmentWorksheetRow[];
+  decisionCounts: CoupangShipmentWorksheetViewResponse["decisionCounts"];
+  decisionPreviewGroups: CoupangShipmentWorksheetViewResponse["decisionPreviewGroups"];
   scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
 };
 
@@ -145,6 +147,8 @@ function resolveFallbackActiveSheet(input: {
     scopeRowCount: input.result.focusedRows.length,
     filteredRowCount: input.result.focusedRows.length,
     invoiceReadyCount: input.result.invoiceReadyCount,
+    decisionCounts: input.result.decisionCounts,
+    decisionPreviewGroups: input.result.decisionPreviewGroups,
     rawFieldCatalog: buildQuickCollectRawFieldCatalog(input.result.focusedRows),
     scopeCounts: { ...EMPTY_SCOPE_COUNTS },
     invoiceCounts: { ...EMPTY_INVOICE_COUNTS },
@@ -170,6 +174,56 @@ export function resolveQuickCollectFocusViewState(
       visibleRows: input.draftRows.filter((row) =>
         matchesFulfillmentDecisionFilter(row, input.decisionStatus),
       ),
+      decisionCounts: input.baseActiveSheet?.decisionCounts ?? {
+        all: 0,
+        ready: 0,
+        invoice_waiting: 0,
+        hold: 0,
+        blocked: 0,
+        recheck: 0,
+      },
+      decisionPreviewGroups: input.baseActiveSheet?.decisionPreviewGroups ?? {
+        ready: {
+          status: "ready",
+          statusLabel: "즉시 출고",
+          count: 0,
+          topReasonLabels: [],
+          previewItems: [],
+          nextHandoffLinks: [],
+        },
+        invoice_waiting: {
+          status: "invoice_waiting",
+          statusLabel: "송장 입력",
+          count: 0,
+          topReasonLabels: [],
+          previewItems: [],
+          nextHandoffLinks: [],
+        },
+        hold: {
+          status: "hold",
+          statusLabel: "보류",
+          count: 0,
+          topReasonLabels: [],
+          previewItems: [],
+          nextHandoffLinks: [],
+        },
+        blocked: {
+          status: "blocked",
+          statusLabel: "차단",
+          count: 0,
+          topReasonLabels: [],
+          previewItems: [],
+          nextHandoffLinks: [],
+        },
+        recheck: {
+          status: "recheck",
+          statusLabel: "재확인",
+          count: 0,
+          topReasonLabels: [],
+          previewItems: [],
+          nextHandoffLinks: [],
+        },
+      },
       scopeCounts: input.baseActiveSheet?.scopeCounts ?? { ...EMPTY_SCOPE_COUNTS },
     };
   }
@@ -192,6 +246,8 @@ export function resolveQuickCollectFocusViewState(
         scopeRowCount: result.focusedRows.length,
         filteredRowCount: result.focusedRows.length,
         invoiceReadyCount: result.invoiceReadyCount,
+        decisionCounts: result.decisionCounts,
+        decisionPreviewGroups: result.decisionPreviewGroups,
         invoiceCounts: result.invoiceCounts,
         orderCounts: result.orderCounts,
         outputCounts: result.outputCounts,
@@ -209,6 +265,8 @@ export function resolveQuickCollectFocusViewState(
     activeSheet,
     effectiveDraftRows: result.pageRows,
     visibleRows: result.visibleRows,
+    decisionCounts: result.decisionCounts,
+    decisionPreviewGroups: result.decisionPreviewGroups,
     scopeCounts: input.baseActiveSheet?.scopeCounts ?? { ...EMPTY_SCOPE_COUNTS },
   };
 }

@@ -11,6 +11,7 @@ import {
   getShipmentWorksheetView,
   getShipmentWorksheetDetail,
   patchShipmentWorksheet,
+  reconcileShipmentWorksheetLive,
   refreshShipmentWorksheet,
   resolveShipmentWorksheetBulkRows,
   runShipmentArchive,
@@ -28,6 +29,7 @@ import {
   asString,
   parseCollectShipmentInput,
   parseInvoiceTargets,
+  parseReconcileShipmentWorksheetLiveInput,
   parseRunShipmentArchiveInput,
   parseRefreshShipmentWorksheetInput,
   parseShipmentArchiveViewQuery,
@@ -163,6 +165,24 @@ function buildRefreshResultSummary(
       completedPhases: response.completedPhases,
       pendingPhases: response.pendingPhases,
       warningPhases: response.warningPhases,
+      source: response.source,
+    },
+    preview: response.message ?? headline,
+  });
+}
+
+function buildReconcileLiveResultSummary(
+  response: Awaited<ReturnType<typeof reconcileShipmentWorksheetLive>>,
+) {
+  const headline = `미조회 ${response.archivedCount}건 정리 / ${response.refreshedCount}건 상태 재조회`;
+
+  return summarizeResult({
+    headline,
+    detail: response.message,
+    stats: {
+      archivedCount: response.archivedCount,
+      refreshedCount: response.refreshedCount,
+      warningCount: response.warningCount,
       source: response.source,
     },
     preview: response.message ?? headline,
@@ -445,6 +465,58 @@ export const refreshShipmentWorksheetHandler: RequestHandler = async (req, res) 
         error instanceof Error
           ? error.message
           : "Failed to refresh Coupang shipment worksheet.",
+    });
+  }
+};
+
+export const reconcileShipmentWorksheetLiveHandler: RequestHandler = async (req, res) => {
+  try {
+    const input = parseReconcileShipmentWorksheetLiveInput(req.body);
+    if (!ensureStoreId(res, input.storeId)) {
+      return;
+    }
+    const normalizedPayload = { ...input } as Record<string, unknown>;
+    const requestPayload =
+      req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : null;
+
+    const tracked = await runTrackedOperation({
+      channel: "coupang",
+      menuKey: COUPANG_SHIPMENTS_MENU_KEY,
+      actionKey: "reconcile-live-worksheet",
+      mode: "foreground",
+      targetType: "store",
+      targetCount: 1,
+      targetIds: [input.storeId],
+      requestPayload,
+      normalizedPayload,
+      retryable: false,
+      execute: async () => {
+        const data = await reconcileShipmentWorksheetLive(input);
+        const hasWarnings =
+          data.warnings.length > 0 ||
+          data.source === "fallback" ||
+          (data.archivedCount === 0 && data.refreshedCount === 0);
+
+        return {
+          data,
+          status: hasWarnings ? "warning" : "success",
+          normalizedPayload,
+          resultSummary: buildReconcileLiveResultSummary(data),
+        };
+      },
+    });
+
+    sendData(res, {
+      ...tracked.data,
+      operation: tracked.operation,
+    });
+  } catch (error) {
+    sendError(res, 400, {
+      code: "COUPANG_SHIPMENT_RECONCILE_LIVE_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to reconcile Coupang shipment worksheet live rows.",
     });
   }
 };

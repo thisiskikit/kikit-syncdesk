@@ -34,17 +34,20 @@
   - 메인 축: `출고 판단`
   - 보조 축: `작업 대상 / 배송 이후 / 예외·클레임 / 전체`
   - 세부 축: `송장 상태 / 출력 상태 / 주문 상태`
-- 상단은 `기본 필터`, `출고 판단 요약`, `현재 적용 조건`, `세부 필터`, `선택 일괄 작업 바` 순서로 읽히도록 정리돼 있습니다.
-- 기본 `출고 판단` 상태는 `출고 가능`, `송장 대기`, `보류`, `차단`, `재확인 필요`입니다.
-- 상세는 메인 표가 아니라 우측 Drawer에서 먼저 확인합니다.
-- `보류 / 차단 / 재확인 필요` 상태에서는 요약 영역과 Drawer에서 다음 이동 경로를 `CS 허브` 또는 `작업센터` 기준으로 함께 안내합니다.
+- 상단은 `행동 큐 허브`, `현재 적용 조건`, `세부 필터`, `선택 일괄 작업 바` 순서로 읽히도록 정리돼 있습니다.
+- 행동 큐 허브는 `즉시 출고 / 송장 입력 / 재확인 / 보류 / 차단` 5개 카드로 나뉘고, 건수와 대표 주문 미리보기를 현재 필터 전체 기준으로 계산합니다.
+- 큐 카드를 누르면 하단 원본 테이블이 같은 판단 기준으로 바로 연동됩니다. 즉 큐 숫자는 페이지 기준이 아니라 현재 필터 전체 기준입니다.
+- 메인 테이블의 상태 셀과 우측 판단 패널은 모두 `업무 판단 상태 -> 쿠팡 원본 상태 -> CS·클레임 신호` 순서로 같은 3층 구조를 사용합니다.
+- 상세는 오버레이 Drawer가 아니라 우측 판단 패널에서 먼저 확인합니다. Drawer는 보관함 중심 상세 확인 경로로만 남아 있습니다.
+- `보류 / 차단 / 재확인` 상태에서는 큐 카드와 우측 판단 패널에서 다음 이동 경로를 `CS 허브` 또는 `작업센터` 기준으로 함께 안내합니다.
 
 ### 출고 coordinator 분해 상태
 - 렌더 shell은 `fulfillment-shell.tsx`로 이동했습니다.
 - 헤더, 1차 액션, 기본 필터는 `fulfillment-toolbar.tsx`로 이동했습니다.
-- 출고 판단 요약과 보관함 메트릭은 `fulfillment-summary-bar.tsx`로 이동했습니다.
+- 행동 큐 허브와 보관함 메트릭은 `fulfillment-summary-bar.tsx` / `shipment-worksheet-overview.tsx`로 이동했습니다.
 - 선택 일괄 작업 bar는 `fulfillment-selection-controller.tsx`로 이동했습니다.
 - 작업 화면/보관함/화면 설정 전환과 grid wiring은 `fulfillment-grid-controller.tsx`로 이동했습니다.
+- 우측 판단 패널은 `shipment-hub-side-panel.tsx`로 분리됐고, 작업 화면/구매확정 탭에서 메인 grid 옆에 고정 배치됩니다.
 - Drawer/상세/dialog lazy mounting은 `fulfillment-drawer-controller.tsx`로 이동했습니다.
 - 빠른 수집 집중 보기의 시트 재구성 로직은 `quick-collect-focus-controller.ts`로 이동했습니다.
 - 따라서 `page.tsx`는 여전히 큰 coordinator이지만, 화면 조립과 빠른 수집 view state 계산이 한 파일에 섞여 있지는 않습니다.
@@ -106,6 +109,10 @@
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
 - 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
 - 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
+- 작업 화면에는 `미조회 정리 + 상태 재조회` 버튼이 따로 있으며, 현재 스토어 + 현재 화면 필터 + 현재 조회 기간 기준으로 대상 worksheet row를 한 번 더 live 상세 확인합니다.
+- live 상세가 성공(`source === "live"`)했고 `item === null`인 주문만 `쿠팡 미조회 제외` 사유로 보관함으로 이동합니다.
+- fallback 응답이나 API 오류는 `쿠팡 미조회`로 단정하지 않고 워크시트에 남긴 채 경고로만 집계합니다.
+- 미조회 정리 뒤에는 남아 있는 대상 행만 `shipment_boxes` refresh로 다시 맞추고, 이 경량 재조회에서도 상품 상세 hydrate는 다시 수행하지 않습니다.
 - `구매확정 sync`는 `/api/coupang/shipments/worksheet/refresh`의 `purchase_confirmed` scope를 사용합니다.
 - 구매확정 sync 대상은 현재 스토어 + 현재 조회 기간 안의 미보관 worksheet row 중 `DEPARTURE / DELIVERING / FINAL_DELIVERY / NONE_TRACKING` 상태이면서 아직 구매확정되지 않은 행입니다.
 - 정산 row는 `saleType === "SALE"`만 구매확정 후보로 인정하고, 기본 매칭 키는 `orderId + vendorItemId`입니다.
@@ -137,7 +144,8 @@
 - `출력 완료 후 30일이 지난 일반 배송 주문`은 기존처럼 수동 archive 정리 대상입니다.
 - 구매확정된 행도 기존 30일 archive 정책이 지나면 `보관함`으로 이동합니다.
 - `취소완료`, `반품완료`가 플랫폼 응답으로 확인된 주문은 다음 collect 또는 refresh 시점에 active worksheet에서 빠지고 같은 보관함으로 자동 이동합니다.
-- 보관함 row는 `일반 보관`, `취소완료 자동보관`, `반품완료 자동보관` 이유를 구분해서 보여줍니다.
+- `쿠팡 live` 상세에서 더 이상 조회되지 않는 주문도 수동 `미조회 정리 + 상태 재조회` 실행 시 `쿠팡 미조회 제외` 사유로 같은 보관함으로 이동합니다.
+- 보관함 row는 `일반 보관`, `취소완료 자동보관`, `반품완료 자동보관`, `쿠팡 미조회 제외` 이유를 구분해서 보여줍니다.
 
 ### CS / 채널 / 설정
 - `CS`는 통합 실행 화면이 아니라 허브입니다.

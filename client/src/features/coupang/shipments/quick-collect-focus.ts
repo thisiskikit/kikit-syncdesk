@@ -1,4 +1,8 @@
 import type { CoupangShipmentWorksheetRow } from "@shared/coupang";
+import {
+  buildCoupangShipmentDecisionPreviewGroups,
+  type CoupangFulfillmentDecisionCounts,
+} from "@shared/coupang-fulfillment";
 import { buildShipmentQuickFilterResult } from "@/lib/coupang-shipment-quick-filters";
 import {
   buildFulfillmentDecisionCounts,
@@ -7,7 +11,6 @@ import {
 import type {
   FilterState,
   FulfillmentDecisionFilterValue,
-  FulfillmentDecisionStatus,
 } from "./types";
 
 export type QuickCollectFocusState = {
@@ -44,7 +47,8 @@ export type QuickCollectFocusRowsResult = {
   visibleRows: CoupangShipmentWorksheetRow[];
   totalPages: number;
   page: number;
-  decisionCounts: Record<"all" | FulfillmentDecisionStatus, number>;
+  decisionCounts: CoupangFulfillmentDecisionCounts;
+  decisionPreviewGroups: ReturnType<typeof buildCoupangShipmentDecisionPreviewGroups>;
   invoiceReadyCount: number;
   invoiceCounts: ReturnType<typeof buildShipmentQuickFilterResult>["invoiceCounts"];
   orderCounts: ReturnType<typeof buildShipmentQuickFilterResult>["orderCounts"];
@@ -89,7 +93,8 @@ export function resolveQuickCollectFocusRows(
     visibleRows,
     totalPages,
     page,
-    decisionCounts: buildFulfillmentDecisionCounts(pageRows),
+    decisionCounts: buildFulfillmentDecisionCounts(focusedRows),
+    decisionPreviewGroups: buildCoupangShipmentDecisionPreviewGroups(focusedRows),
     invoiceReadyCount: quickFilterResult.invoiceReadyRows.length,
     invoiceCounts: quickFilterResult.invoiceCounts,
     orderCounts: quickFilterResult.orderCounts,

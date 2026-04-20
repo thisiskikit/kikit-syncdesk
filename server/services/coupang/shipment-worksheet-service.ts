@@ -23,6 +23,8 @@ import type {
   CoupangShipmentArchiveReason,
   CoupangShipmentArchiveViewQuery,
   CoupangShipmentArchiveViewResponse,
+  ReconcileCoupangShipmentWorksheetInput,
+  ReconcileCoupangShipmentWorksheetResponse,
   CoupangShipmentWorksheetResponse,
   CoupangShipmentWorksheetRow,
   CoupangShipmentWorksheetSyncSummary,
@@ -570,6 +572,8 @@ function buildWorksheetViewResponse(
     scopeRowCount: view.scopeRowCount,
     filteredRowCount: view.filteredRowCount,
     invoiceReadyCount: view.invoiceReadyCount,
+    decisionCounts: view.decisionCounts,
+    decisionPreviewGroups: view.decisionPreviewGroups,
     scopeCounts: view.scopeCounts,
     invoiceCounts: view.invoiceCounts,
     orderCounts: view.orderCounts,
@@ -786,20 +790,20 @@ function buildPurchaseConfirmVendorItemKey(
   return `${normalizedOrderId}::${normalizedVendorItemId}`;
 }
 
-function resolvePurchaseConfirmRowDateKey(row: CoupangShipmentWorksheetRow) {
+function resolveWorksheetRowDateKey(row: CoupangShipmentWorksheetRow) {
   const fromOrderedAt = normalizeWhitespace(row.orderedAtRaw)?.slice(0, 10);
   const orderDate = fromOrderedAt?.replaceAll("-", "") ?? row.orderDateKey;
   return orderDate && orderDate.length === 8 ? orderDate : null;
 }
 
-function matchesPurchaseConfirmDateRange(
+function matchesWorksheetRowDateRange(
   row: CoupangShipmentWorksheetRow,
   createdAtFrom: string,
   createdAtTo: string,
 ) {
   validateDateOnlyRange(createdAtFrom, createdAtTo);
 
-  const rowDateKey = resolvePurchaseConfirmRowDateKey(row);
+  const rowDateKey = resolveWorksheetRowDateKey(row);
   if (!rowDateKey) {
     return false;
   }
@@ -1335,9 +1339,28 @@ function resolvePurchaseConfirmRefreshTargetRows(input: {
     return (
       PURCHASE_CONFIRM_TARGET_STATUSES.has(status) &&
       !row.purchaseConfirmedAt &&
-      matchesPurchaseConfirmDateRange(row, createdAtFrom, createdAtTo)
+      matchesWorksheetRowDateRange(row, createdAtFrom, createdAtTo)
     );
   });
+}
+
+function resolveReconcileShipmentWorksheetTargetRows(input: {
+  storeId: string;
+  rows: CoupangShipmentWorksheetRow[];
+  createdAtFrom: string;
+  createdAtTo: string;
+  viewQuery?: ReconcileCoupangShipmentWorksheetInput["viewQuery"];
+}) {
+  validateDateOnlyRange(input.createdAtFrom, input.createdAtTo);
+
+  const { filteredRows } = resolveShipmentWorksheetFilteredRows(input.rows, {
+    ...input.viewQuery,
+    storeId: input.storeId,
+  });
+
+  return filteredRows.filter((row) =>
+    matchesWorksheetRowDateRange(row, input.createdAtFrom, input.createdAtTo),
+  );
 }
 
 function resolveShipmentWorksheetRefreshTargets(input: {
@@ -1425,6 +1448,29 @@ function buildShipmentWorksheetRefreshResponse(
     completedPhases: input.completedPhases,
     pendingPhases: input.pendingPhases,
     warningPhases: input.warningPhases,
+  };
+}
+
+function buildReconcileShipmentWorksheetResponse(
+  store: StoredCoupangStore,
+  sheet: WorksheetStoreSheet,
+  input: {
+    archivedCount: number;
+    refreshedCount: number;
+    warningCount: number;
+    warnings: string[];
+    message: string | null;
+  },
+): ReconcileCoupangShipmentWorksheetResponse {
+  return {
+    store: asStoreRef(store),
+    archivedCount: input.archivedCount,
+    refreshedCount: input.refreshedCount,
+    warningCount: input.warningCount,
+    warnings: input.warnings,
+    fetchedAt: new Date().toISOString(),
+    message: normalizeLegacyWorksheetMessage(input.message ?? sheet.message),
+    source: sheet.source,
   };
 }
 
@@ -1983,6 +2029,208 @@ export async function refreshShipmentWorksheet(
   input: RefreshCoupangShipmentWorksheetInput,
 ): Promise<CoupangShipmentWorksheetRefreshResponse> {
   return refreshShipmentWorksheetRows(input);
+}
+
+export async function reconcileShipmentWorksheetLive(
+  input: ReconcileCoupangShipmentWorksheetInput,
+): Promise<ReconcileCoupangShipmentWorksheetResponse> {
+  const store = await getStoreOrThrow(input.storeId);
+  const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+  const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
+  const createdAtTo = normalizeWhitespace(input.createdAtTo);
+
+  if (!createdAtFrom || !createdAtTo) {
+    throw new Error("미조회 정리는 현재 조회 시작일과 종료일이 모두 필요합니다.");
+  }
+
+  const worksheetRows = buildWorksheetRows(currentSheet);
+  const targetRows = resolveReconcileShipmentWorksheetTargetRows({
+    storeId: input.storeId,
+    rows: worksheetRows,
+    createdAtFrom,
+    createdAtTo,
+    viewQuery: input.viewQuery,
+  });
+
+  if (!targetRows.length) {
+    return buildReconcileShipmentWorksheetResponse(store, currentSheet, {
+      archivedCount: 0,
+      refreshedCount: 0,
+      warningCount: 0,
+      warnings: [],
+      message: "현재 화면 필터와 조회 기간에서 정리할 주문이 없습니다.",
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const warningMessages: string[] = [];
+  const warningSourceKeys = new Set<string>();
+  const liveMissingRows: CoupangShipmentWorksheetRow[] = [];
+
+  const liveCheckResults = await mapWithConcurrency(targetRows, 4, async (row) => {
+    try {
+      const response = await getOrderDetail({
+        storeId: input.storeId,
+        shipmentBoxId: row.shipmentBoxId,
+        includeCustomerService: false,
+      });
+
+      if (response.source === "live" && !response.item) {
+        return {
+          row,
+          shouldArchive: true,
+          warning: null,
+        };
+      }
+
+      if (response.source !== "live") {
+        return {
+          row,
+          shouldArchive: false,
+          warning:
+            response.message ??
+            `${row.shipmentBoxId}: 쿠팡 live 상세 조회가 fallback으로 내려와 제외하지 않았습니다.`,
+        };
+      }
+
+      return {
+        row,
+        shouldArchive: false,
+        warning: null,
+      };
+    } catch (error) {
+      return {
+        row,
+        shouldArchive: false,
+        warning:
+          error instanceof Error
+            ? `${row.shipmentBoxId}: ${error.message}`
+            : `${row.shipmentBoxId}: 쿠팡 live 상세 조회에 실패해 제외하지 않았습니다.`,
+      };
+    }
+  });
+
+  for (const result of liveCheckResults) {
+    if (result.shouldArchive) {
+      liveMissingRows.push(result.row);
+      continue;
+    }
+
+    if (result.warning) {
+      warningSourceKeys.add(result.row.sourceKey);
+      pushUniqueWorksheetWarning(warningMessages, result.warning);
+    }
+  }
+
+  let archivedCount = 0;
+  let archivedSourceKeys = new Set<string>();
+  let workingRows = worksheetRows;
+
+  if (liveMissingRows.length) {
+    const archiveRows = buildShipmentWorksheetArchiveRows(liveMissingRows, {
+      archivedAt: nowIso,
+      reasonResolver: () => "not_found_in_coupang",
+    });
+
+    try {
+      const archiveResult = await coupangShipmentWorksheetStore.archiveRows({
+        storeId: input.storeId,
+        items: archiveRows,
+        archivedAt: nowIso,
+      });
+      archivedCount = archiveResult.archivedCount;
+      archivedSourceKeys = new Set(archiveResult.archivedSourceKeys);
+      workingRows = worksheetRows.filter((row) => !archivedSourceKeys.has(row.sourceKey));
+
+      const unresolvedRows = liveMissingRows.filter(
+        (row) => !archivedSourceKeys.has(row.sourceKey),
+      );
+      if (unresolvedRows.length) {
+        for (const row of unresolvedRows) {
+          warningSourceKeys.add(row.sourceKey);
+        }
+        pushUniqueWorksheetWarning(
+          warningMessages,
+          `쿠팡 live 미조회 ${unresolvedRows.length}건은 보관함으로 옮기지 못해 워크시트에 남겼습니다.`,
+        );
+      }
+    } catch (error) {
+      for (const row of liveMissingRows) {
+        warningSourceKeys.add(row.sourceKey);
+      }
+      pushUniqueWorksheetWarning(
+        warningMessages,
+        error instanceof Error
+          ? `쿠팡 live 미조회 ${liveMissingRows.length}건을 보관함으로 이동하지 못했습니다. ${error.message}`
+          : `쿠팡 live 미조회 ${liveMissingRows.length}건을 보관함으로 이동하지 못했습니다.`,
+      );
+    }
+  }
+
+  const baseMessage = mergeMessages([
+    currentSheet.message,
+    archivedCount > 0
+      ? `쿠팡 live 상세에서 조회되지 않은 ${archivedCount}건을 보관함으로 이동했습니다.`
+      : null,
+    warningSourceKeys.size > 0
+      ? `제외하지 못한 경고 ${warningSourceKeys.size}건이 있어 워크시트에 유지했습니다.`
+      : null,
+  ]);
+
+  const remainingShipmentBoxIds = Array.from(
+    new Set(
+      targetRows
+        .filter((row) => !archivedSourceKeys.has(row.sourceKey))
+        .map((row) => normalizeWhitespace(row.shipmentBoxId))
+        .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
+    ),
+  );
+
+  if (!remainingShipmentBoxIds.length) {
+    const nextSheet = await coupangShipmentWorksheetStore.setStoreSheet({
+      storeId: input.storeId,
+      items: workingRows,
+      collectedAt: currentSheet.collectedAt,
+      source: currentSheet.source,
+      message: baseMessage,
+      syncState: currentSheet.syncState ?? createEmptySyncState(),
+      syncSummary: currentSheet.syncSummary,
+    });
+
+    return buildReconcileShipmentWorksheetResponse(store, nextSheet, {
+      archivedCount,
+      refreshedCount: 0,
+      warningCount: warningSourceKeys.size,
+      warnings: warningMessages,
+      message: baseMessage,
+    });
+  }
+
+  const refreshResult = await refreshShipmentWorksheetRows({
+    storeId: input.storeId,
+    scope: "shipment_boxes",
+    shipmentBoxIds: remainingShipmentBoxIds,
+    currentSheet: {
+      ...currentSheet,
+      items: workingRows,
+      message: baseMessage,
+      updatedAt: nowIso,
+    },
+    persistToStore: true,
+    skipProductDetailHydration: true,
+  });
+  if (refreshResult.warningPhases.length > 0 && refreshResult.message) {
+    pushUniqueWorksheetWarning(warningMessages, refreshResult.message);
+  }
+  const nextSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
+
+  return buildReconcileShipmentWorksheetResponse(store, nextSheet, {
+    archivedCount,
+    refreshedCount: refreshResult.refreshedCount,
+    warningCount: warningSourceKeys.size,
+    warnings: warningMessages,
+    message: refreshResult.message,
+  });
 }
 
 function shouldHydrateOrderRow(

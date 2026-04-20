@@ -1,5 +1,13 @@
 import type { ApiCacheState } from "./api";
 import type { ConnectionTestResult } from "./channel-settings";
+import type {
+  CoupangFulfillmentDecisionCounts,
+  CoupangFulfillmentDecisionFilterValue,
+  CoupangFulfillmentDecisionPresentation,
+  CoupangFulfillmentNextHandoffLink,
+  CoupangFulfillmentSecondaryStatusSummary,
+  CoupangShipmentDecisionPreviewGroup,
+} from "./coupang-fulfillment";
 import type { OperationLogEntry } from "./operations";
 
 export const COUPANG_DEFAULT_BASE_URL = "https://api-gateway.coupang.com";
@@ -575,7 +583,8 @@ export type CoupangCustomerServiceTerminalStatus = "cancel_completed" | "return_
 export type CoupangShipmentArchiveReason =
   | "retention_post_dispatch"
   | "cancel_completed"
-  | "return_completed";
+  | "return_completed"
+  | "not_found_in_coupang";
 
 export interface CoupangCustomerServiceIssueBreakdownItem {
   type: CoupangCustomerServiceIssueType;
@@ -1086,6 +1095,10 @@ export interface CoupangShipmentWorksheetRow {
   invoiceTransmissionAt: string | null;
   exportedAt: string | null;
   invoiceAppliedAt: string | null;
+  primaryDecision?: CoupangFulfillmentDecisionPresentation;
+  secondaryStatus?: CoupangFulfillmentSecondaryStatusSummary;
+  riskSummary?: string[];
+  nextHandoffLinks?: CoupangFulfillmentNextHandoffLink[];
   createdAt: string;
   updatedAt: string;
   rawFields?: CoupangShipmentWorksheetRawFields;
@@ -1292,6 +1305,7 @@ export type CoupangShipmentWorksheetSortDirection = "asc" | "desc";
 export interface CoupangShipmentWorksheetViewQuery {
   storeId: string;
   scope?: CoupangShipmentWorksheetViewScope;
+  decisionStatus?: CoupangFulfillmentDecisionFilterValue;
   page?: number;
   pageSize?: number;
   query?: string;
@@ -1319,6 +1333,11 @@ export interface CoupangShipmentWorksheetViewResponse {
   scopeRowCount: number;
   filteredRowCount: number;
   invoiceReadyCount: number;
+  decisionCounts: CoupangFulfillmentDecisionCounts;
+  decisionPreviewGroups: Record<
+    Exclude<CoupangFulfillmentDecisionFilterValue, "all">,
+    CoupangShipmentDecisionPreviewGroup
+  >;
   scopeCounts: Record<CoupangShipmentWorksheetViewScope, number>;
   invoiceCounts: Record<CoupangShipmentWorksheetInvoiceStatusCard, number>;
   orderCounts: Record<CoupangShipmentWorksheetOrderStatusCard, number>;
@@ -1391,6 +1410,28 @@ export interface CoupangShipmentWorksheetAuditMissingResponse {
   missingItems: CoupangShipmentWorksheetAuditMissingItem[];
   hiddenItems: CoupangShipmentWorksheetAuditHiddenItem[];
   message: string | null;
+}
+
+export interface ReconcileCoupangShipmentWorksheetInput {
+  storeId: string;
+  createdAtFrom: string;
+  createdAtTo: string;
+  viewQuery?: Omit<
+    CoupangShipmentWorksheetViewQuery,
+    "storeId" | "page" | "pageSize" | "sortField" | "sortDirection"
+  >;
+}
+
+export interface ReconcileCoupangShipmentWorksheetResponse {
+  store: CoupangStoreRef;
+  archivedCount: number;
+  refreshedCount: number;
+  warningCount: number;
+  warnings: string[];
+  fetchedAt: string;
+  message: string | null;
+  source: CoupangDataSource;
+  operation?: OperationLogEntry;
 }
 
 export type CoupangShipmentWorksheetBulkResolveMode =

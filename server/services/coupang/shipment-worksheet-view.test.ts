@@ -380,4 +380,72 @@ describe("shipment worksheet view", () => {
       }),
     ).toBe("out_of_scope");
   });
+
+  it("applies decisionStatus to table rows while keeping queue counts on the full filtered set", () => {
+    const rows = [
+      buildRow({
+        id: "ready-1",
+        status: "ACCEPT",
+        availableActions: ["markPreparing"],
+      }),
+      buildRow({
+        id: "ready-2",
+        status: "ACCEPT",
+        availableActions: ["markPreparing"],
+      }),
+      buildRow({
+        id: "invoice",
+        status: "INSTRUCT",
+        availableActions: ["uploadInvoice"],
+      }),
+      buildRow({
+        id: "recheck",
+        status: "INSTRUCT",
+        invoiceTransmissionStatus: "failed",
+        availableActions: ["uploadInvoice"],
+      }),
+    ];
+
+    const view = buildShipmentWorksheetViewData(rows, {
+      scope: "all",
+      decisionStatus: "ready",
+      page: 1,
+      pageSize: 1,
+    });
+
+    expect(view.items.map((row) => row.id)).toEqual(["ready-1"]);
+    expect(view.filteredRowCount).toBe(2);
+    expect(view.totalPages).toBe(2);
+    expect(view.decisionCounts).toEqual({
+      all: 4,
+      ready: 2,
+      invoice_waiting: 1,
+      hold: 0,
+      blocked: 0,
+      recheck: 1,
+    });
+    expect(view.decisionPreviewGroups.ready.count).toBe(2);
+    expect(view.decisionPreviewGroups.ready.previewItems.map((item) => item.rowId)).toEqual([
+      "ready-1",
+      "ready-2",
+    ]);
+    expect(view.items[0]?.primaryDecision?.status).toBe("ready");
+    expect(view.items[0]?.secondaryStatus?.orderStatusLabel).toBe("주문접수");
+    expect(view.items[0]?.nextHandoffLinks?.[0]?.decisionStatus).toBe("ready");
+  });
+
+  it("treats decisionStatus mismatch as filtered_out", () => {
+    const invoiceRow = buildRow({
+      id: "invoice",
+      status: "INSTRUCT",
+      availableActions: ["uploadInvoice"],
+    });
+
+    expect(
+      getShipmentWorksheetRowHiddenReason(invoiceRow, {
+        scope: "all",
+        decisionStatus: "ready",
+      }),
+    ).toBe("filtered_out");
+  });
 });
