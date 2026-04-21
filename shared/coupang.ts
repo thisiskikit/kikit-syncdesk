@@ -1693,7 +1693,8 @@ export interface PatchCoupangShipmentWorksheetInput {
 }
 
 export interface CoupangShipmentWorksheetInvoiceInputApplyRow {
-  selpickOrderNumber: string;
+  selpickOrderNumber?: string;
+  productOrderNumber?: string;
   deliveryCompanyCode: string;
   invoiceNumber: string;
 }

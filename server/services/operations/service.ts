@@ -7,6 +7,12 @@ import type {
   OperationStatus,
   OperationTargetType,
 } from "@shared/operations";
+import {
+  isOperationCancellable,
+  isOperationCancellationPending,
+  operationCancelledErrorCode,
+  operationCancelledMessage,
+} from "@shared/operations";
 import { operationStore } from "./store";
 import { ApiRouteError } from "../shared/api-response";
 
@@ -19,8 +25,6 @@ type RetryHandler = (input: {
 const STALE_OPERATION_THRESHOLD_MS = 15 * 60_000;
 const STALE_OPERATION_SCAN_LIMIT = 500;
 const ACTIVE_OPERATION_LOOKUP_LIMIT = 200;
-const OPERATION_CANCELLED_ERROR_CODE = "OPERATION_CANCELLED";
-const OPERATION_CANCELLED_MESSAGE = "사용자 요청으로 작업을 취소했습니다.";
 const ACTIVE_OPERATION_STATUSES = new Set<OperationStatus>(["queued", "running"]);
 
 type TrackedOperationResult<T> = {
@@ -47,6 +51,23 @@ type BaseOperationInput = {
 const retryHandlers = new Map<string, RetryHandler>();
 const inFlightRetries = new Map<string, Promise<OperationExecutionResponse<unknown>>>();
 const requestedOperationCancellations = new Set<string>();
+
+export class OperationCancellationRequestedError<T = unknown> extends Error {
+  readonly code = operationCancelledErrorCode;
+  readonly data: T | undefined;
+
+  constructor(input?: { message?: string; data?: T }) {
+    super(input?.message ?? operationCancelledMessage);
+    this.name = "OperationCancellationRequestedError";
+    this.data = input?.data;
+  }
+}
+
+export function isOperationCancellationRequestedError(
+  error: unknown,
+): error is OperationCancellationRequestedError<unknown> {
+  return error instanceof OperationCancellationRequestedError;
+}
 
 export function summarizeResult(input: {
   headline?: string | null;
@@ -142,7 +163,7 @@ function getOperationSyncMode(
 
 async function getProtectedCancelledOperation(operationId: string) {
   const current = await operationStore.getById(operationId);
-  if (current?.errorCode === OPERATION_CANCELLED_ERROR_CODE) {
+  if (current?.errorCode === operationCancelledErrorCode) {
     return current;
   }
 
@@ -201,25 +222,41 @@ export async function requestOperationCancellation(id: string) {
     }>;
   }
 
-  requestedOperationCancellations.add(id);
+  if (!isOperationCancellable(operation)) {
+    throw new ApiRouteError({
+      code: "OPERATION_CANCEL_NOT_ALLOWED",
+      message: "This operation does not support cooperative cancellation.",
+      status: 400,
+    });
+  }
 
-  const cancelledOperation = await operationStore.update(id, {
-    status: "warning",
-    normalizedPayload: operation.normalizedPayload,
-    resultSummary:
-      operation.resultSummary ??
-      summarizeResult({
-        headline: "작업 취소",
-        detail: OPERATION_CANCELLED_MESSAGE,
-      }),
-    errorCode: OPERATION_CANCELLED_ERROR_CODE,
-    errorMessage: OPERATION_CANCELLED_MESSAGE,
-    finishedAt: new Date().toISOString(),
-    retryable: false,
+  if (isOperationCancellationPending(operation)) {
+    requestedOperationCancellations.add(id);
+    return {
+      operation,
+      data: {
+        cancelled: true,
+        alreadyFinished: false,
+      },
+    } satisfies OperationExecutionResponse<{
+      cancelled: boolean;
+      alreadyFinished: boolean;
+    }>;
+  }
+
+  requestedOperationCancellations.add(id);
+  const cancelRequestedAt = new Date().toISOString();
+  const requestedOperation = await operationStore.update(id, {
+    cancelRequestedAt,
   });
 
   return {
-    operation: cancelledOperation ?? operation,
+    operation:
+      requestedOperation ??
+      {
+        ...operation,
+        cancelRequestedAt,
+      },
     data: {
       cancelled: true,
       alreadyFinished: false,
@@ -254,6 +291,7 @@ export async function startOperation(
     errorMessage: input.errorMessage ?? null,
     retryable: input.retryable ?? false,
     retryOfOperationId: input.retryOfOperationId ?? null,
+    cancelRequestedAt: null,
   });
 }
 
@@ -337,6 +375,7 @@ export async function updateManualOperation(
       | "resultSummary"
       | "errorCode"
       | "errorMessage"
+      | "cancelRequestedAt"
       | "finishedAt"
       | "retryable"
     >
@@ -422,6 +461,23 @@ export async function runTrackedOperation<T>(
       data: result.data,
     } satisfies OperationExecutionResponse<T>;
   } catch (error) {
+    if (isOperationCancellationRequestedError(error)) {
+      const finalOperation = await warnOperation(created.id, {
+        normalizedPayload: input.normalizedPayload ?? null,
+        errorCode: error.code,
+        errorMessage: error.message,
+        resultSummary: summarizeResult({
+          headline: "작업 중단",
+          detail: operationCancelledMessage,
+        }),
+      });
+
+      return {
+        operation: finalOperation ?? running ?? created,
+        data: (error.data ?? null) as T,
+      } satisfies OperationExecutionResponse<T>;
+    }
+
     const message =
       error instanceof Error ? error.message : "Background operation failed.";
 

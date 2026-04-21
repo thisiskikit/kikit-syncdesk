@@ -80,11 +80,51 @@ describe("worksheet invoice clipboard", () => {
     });
     const { updates, issues } = parseInvoiceClipboardRows(
       "1\tO20260403K0001\tCJ대한통운\t123456789",
-      new Map([[row.selpickOrderNumber, row]]),
+      {
+        rowBySelpickOrderNumber: new Map([[row.selpickOrderNumber, row]]),
+        rowByProductOrderNumber: new Map([[row.productOrderNumber, row]]),
+      },
     );
 
     expect(issues).toEqual([]);
     expect(updates.get("row-1")).toMatchObject({
+      deliveryCompanyCode: "CJ대한통운",
+      invoiceNumber: "123456789",
+    });
+  });
+
+  it("detects product-order-number headers", () => {
+    expect(looksLikeInvoiceClipboard("상품주문번호\t택배사\t운송장번호")).toBe(true);
+  });
+
+  it("detects product-order-first rows when the product order number exists in the worksheet", () => {
+    const row = buildRow({
+      id: "1234567890",
+      sourceKey: "source-1",
+      selpickOrderNumber: "O20260403K0001",
+    });
+
+    expect(
+      looksLikeInvoiceClipboard(
+        "1234567890\tCJ대한통운\t123456789",
+        new Map([[row.productOrderNumber, row]]),
+      ),
+    ).toBe(true);
+  });
+
+  it("parses product-order-first rows", () => {
+    const row = buildRow({
+      id: "1234567890",
+      sourceKey: "source-1",
+      selpickOrderNumber: "O20260403K0001",
+    });
+    const { updates, issues } = parseInvoiceClipboardRows("1234567890\tCJ대한통운\t123456789", {
+      rowBySelpickOrderNumber: new Map([[row.selpickOrderNumber, row]]),
+      rowByProductOrderNumber: new Map([[row.productOrderNumber, row]]),
+    });
+
+    expect(issues).toEqual([]);
+    expect(updates.get("1234567890")).toMatchObject({
       deliveryCompanyCode: "CJ대한통운",
       invoiceNumber: "123456789",
     });

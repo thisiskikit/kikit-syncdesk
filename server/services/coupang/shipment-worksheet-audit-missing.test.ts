@@ -5,6 +5,7 @@ import type {
   CoupangShipmentArchiveRow,
   CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { OperationCancellationRequestedError } from "../operations/service";
 import type { CoupangShipmentWorksheetStoreSheet } from "./shipment-worksheet-store";
 
 const {
@@ -431,6 +432,16 @@ describe("auditShipmentWorksheetMissing", () => {
     });
 
     expect(listOrdersMock).toHaveBeenCalledTimes(2);
+    expect(listOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedulerPriority: "foreground",
+      }),
+    );
+    expect(getOrderDetailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedulerPriority: "foreground",
+      }),
+    );
     expect(materializeSelpickOrderNumbersMock).toHaveBeenCalledTimes(1);
     expect(setStoreSheetMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
@@ -632,5 +643,19 @@ describe("auditShipmentWorksheetMissing", () => {
       { status: "ACCEPT", createdAtFrom: "2026-04-01", createdAtTo: "2026-04-07" },
       { status: "ACCEPT", createdAtFrom: "2026-04-08", createdAtTo: "2026-04-12" },
     ]);
+  });
+
+  it("throws a cooperative cancellation error when audit is cancelled at a safe checkpoint", async () => {
+    await expect(
+      auditShipmentWorksheetMissing({
+        storeId: "store-1",
+        createdAtFrom: "2026-04-08",
+        createdAtTo: "2026-04-12",
+        viewQuery: {
+          scope: "dispatch_active",
+        },
+        isCancellationRequested: () => true,
+      }),
+    ).rejects.toBeInstanceOf(OperationCancellationRequestedError);
   });
 });

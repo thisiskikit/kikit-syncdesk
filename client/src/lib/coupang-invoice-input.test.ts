@@ -80,6 +80,40 @@ describe("parseCoupangInvoicePopupInput", () => {
     });
   });
 
+  it("supports product-order-first rows without a header when the product order number is known", () => {
+    expect(
+      parseCoupangInvoicePopupInput("1234567890\tCJGLS\t123456789", {
+        knownProductOrderNumbers: new Set(["1234567890"]),
+      }),
+    ).toEqual({
+      rows: [
+        {
+          productOrderNumber: "1234567890",
+          deliveryCompanyCode: "CJGLS",
+          invoiceNumber: "123456789",
+        },
+      ],
+      issues: [],
+    });
+  });
+
+  it("supports a header row with 상품주문번호", () => {
+    expect(
+      parseCoupangInvoicePopupInput(
+        "상품주문번호\t택배사\t운송장번호\n1234567890\tCJGLS\t123456789",
+      ),
+    ).toEqual({
+      rows: [
+        {
+          productOrderNumber: "1234567890",
+          deliveryCompanyCode: "CJGLS",
+          invoiceNumber: "123456789",
+        },
+      ],
+      issues: [],
+    });
+  });
+
   it("supports four-column rows copied from worksheet-like exports", () => {
     expect(
       parseCoupangInvoicePopupInput(
@@ -151,7 +185,7 @@ describe("parseCoupangInvoicePopupInput", () => {
       parseCoupangInvoicePopupInput("택배사\t운송장번호\t셀픽주문번호\nCJGLS\t123456789\t"),
     ).toEqual({
       rows: [],
-      issues: ["1행에 셀픽주문번호가 없습니다."],
+      issues: ["1행에 셀픽주문번호 또는 상품주문번호가 없습니다."],
     });
   });
 });

@@ -48,6 +48,7 @@ export type OperationToast = {
   summary: string | null;
   errorMessage: string | null;
   startedAt: string;
+  cancelRequestedAt: string | null;
   finishedAt: string | null;
 };
 
@@ -139,16 +140,23 @@ function mapOperationToToast(operation: OperationLogEntry): OperationToast {
     summary: getOperationResultSummaryText(operation.resultSummary),
     errorMessage: getOperationErrorSummary(operation),
     startedAt: operation.startedAt,
+    cancelRequestedAt: operation.cancelRequestedAt,
     finishedAt: operation.finishedAt,
   };
 }
 
-function getToastVisibilityKey(toast: Pick<OperationToast, "status" | "summary" | "errorMessage" | "startedAt" | "finishedAt">) {
+function getToastVisibilityKey(
+  toast: Pick<
+    OperationToast,
+    "status" | "summary" | "errorMessage" | "startedAt" | "cancelRequestedAt" | "finishedAt"
+  >,
+) {
   return [
     toast.status,
     toast.summary ?? "",
     toast.errorMessage ?? "",
     toast.startedAt,
+    toast.cancelRequestedAt ?? "",
     toast.finishedAt ?? "",
   ].join("|");
 }
@@ -726,6 +734,7 @@ export function OperationProvider(props: { children: ReactNode }) {
       summary: toast.summary,
       errorMessage: toast.errorMessage,
       startedAt: toast.startedAt,
+      cancelRequestedAt: null,
       finishedAt: toast.finishedAt,
     }));
 

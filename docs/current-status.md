@@ -1,6 +1,6 @@
 ﻿# Current Status
 
-- 스냅샷 날짜: 2026-04-20
+- 스냅샷 날짜: 2026-04-21
 - 목적: 현재 구현된 KIKIT SyncDesk 운영 데스크 구조와 출고/작업센터 동작을 기준으로 실제 상태를 기록합니다.
 
 ## 확인한 범위
@@ -42,10 +42,10 @@
 - `syncMode="full"`은 클라이언트가 어떤 날짜나 상태를 보내더라도 서버에서 `최근 30일 + 전체 배송 상태 + 전체 클레임/CS` 기준으로 강제 정규화합니다. 쿠팡과 메인 숫자를 다시 맞추는 책임은 이 재동기화만 가집니다.
 - `syncMode="full"`은 기존 active worksheet에만 남아 있고 쿠팡 live 기준 최근 30일 authoritative mirror에는 없는 주문을 다시 검증합니다. live 상세가 성공했고 `item === null`이면 `쿠팡 미조회` 예외로 보관함으로 이동시키고, archive 실패 시에는 row에 `missingInCoupang` 메타를 남긴 채 경고로 유지합니다.
 - `syncMode="incremental"`은 더 이상 자동으로 `full`로 승격되지 않고, 저장된 미러를 유지하기 위한 겹침 구간 `증분 갱신` 의미로만 동작합니다.
-- 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 authoritative 30일 미러가 없으면, 화면이 부분 집계를 확정값처럼 쓰지 않고 자동으로 `쿠팡 기준 재동기화`를 다시 시작합니다.
+- 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 authoritative 30일 미러가 없으면, 화면은 부분 집계를 확정값처럼 쓰지 않고 `쿠팡 기준 재동기화 필요` 안내를 보여줍니다. 재동기화는 사용자가 직접 버튼을 눌러야만 실행됩니다.
 - 같은 스토어의 `쿠팡 기준 재동기화(full)`가 이미 `queued/running`이면 서버가 추가 full 재동기화와 `빠른 수집(new_only)`, `증분 갱신(incremental)`을 함께 막아 중복 수집을 방지합니다.
-- 출고 툴바는 서버 operation 목록에서 `선택 스토어의 active full sync`를 감지하고, `재동기화 취소` 버튼과 함께 왜 `빠른 수집`이 막혔는지 바로 안내합니다.
-- `POST /api/operations/:id/cancel` 경로와 collect 내부 취소 체크포인트가 연결돼 있어, full 재동기화 취소 요청 후에는 다음 status/page/보강 단계부터 추가 진행을 멈추고 현재 worksheet 스냅샷으로 돌아옵니다.
+- 왜 `빠른 수집`과 `증분 갱신`이 막혔는지는 출고 툴바의 안내 문구로만 보여주고, 실제 중단 요청 버튼은 상단 `작업 상태` 패널과 `작업센터`에만 노출합니다.
+- `POST /api/operations/:id/cancel`은 이제 즉시 종료가 아니라 `cancelRequestedAt`만 남기는 cooperative cancel 경로입니다. collect / refresh / reconcile-live / audit-missing는 현재 단계가 끝난 뒤 다음 안전 지점에서 `OPERATION_CANCELLED` warning으로 멈춥니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `우선 처리 카드 / 배송 처리 / 이슈 필터`
   - 보조 축: `전체 배송관리 / 내부 작업 대상 / 배송 이후 / 구매확정 / 이슈·클레임`
@@ -100,7 +100,7 @@
 
 ### 빠른 수집 직후 신규 주문 우선 보기
 - `빠른 수집(new_only)` 응답은 `insertedSourceKeys`를 반환합니다.
-- `빠른 수집(new_only)`는 이제 마지막 수집 시점 기준 최근 24시간 겹침 구간만 다시 조회하고, 신규 row 저장만 먼저 끝낸 뒤 상세/상품/CS 보강은 `pending_after_collect` 백그라운드 refresh로 넘깁니다.
+- `빠른 수집(new_only)`는 마지막 수집 시점 기준 최근 24시간 겹침 구간만 다시 조회하고, 자동 후속 refresh 없이 1차 반영 결과만 먼저 반환합니다.
 - 같은 `빠른 수집(new_only)`는 상태 배치 종료 또는 신규 100행 누적 시점마다 `source_key` 기준 checkpoint upsert를 수행해, 중간에 작업이 끊겨도 앞에서 받은 신규 주문이 워크시트에 남도록 바뀌었습니다.
 - collect 저장 경로는 `delete -> 단일 대량 insert` 대신 200행 단위 청크 쓰기를 사용하고, 같은 스토어에 대한 저장 트랜잭션은 advisory lock으로 직렬화합니다.
 - collect 저장 실패 메시지는 이제 `중복 키(23505)`, `필수 컬럼 null(23502)`, 일반 DB 쓰기 실패를 구분해 남기며, 시스템 로그에도 `rowCount / chunkCount / mode / storeId / constraint / column` 메타를 함께 기록합니다.
@@ -128,8 +128,8 @@
 - `수집 누락 audit`는 조회 범위가 7일을 넘어도 내부적으로 7일 단위로 나눠 확인합니다.
 - `결제완료 -> 상품준비중` 버튼은 조건이 맞지 않아도 바로 비활성화하지 않고, 클릭 시 현재 화면 기준으로 왜 처리 대상이 없는지 경고로 안내합니다.
 - `빠른 수집 / 쿠팡 기준 재동기화 / 증분 갱신`은 1차로 `주문 목록 조회 + 클레임 병합 + worksheet 반영`까지만 완료하고 응답합니다.
-- 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 후속 단계로 분리됐고, collect 성공 직후 클라이언트가 non-blocking으로 이어서 호출합니다.
-- collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 `지금 끝난 단계`와 `이어질 보강 단계`를 함께 기록합니다.
+- 주문 상세, 상품 상세, CS 상태 보강은 `/api/coupang/shipments/worksheet/refresh` 수동 액션으로만 실행합니다. collect 성공 뒤 자동 후속 refresh는 더 이상 붙지 않습니다.
+- collect 응답의 `syncSummary.completedPhases / pendingPhases / warningPhases`는 남은 보강 단계가 있더라도 자동 실행하지 않고, 사용자가 다음 수동 sync/refresh를 눌렀을 때 다시 맞춰야 한다는 뜻으로만 남깁니다.
 - `빠른 수집(new_only)`에서 일부 주문 상태 조회만 실패해도 수집 작업 전체를 즉시 실패로 돌리지 않고, `syncSummary.degraded / failedStatuses / autoAuditRecommended`로 부분 실패를 남긴 뒤 화면 경고와 누락 audit로 이어집니다.
 - `셀픽주문번호`는 이제 현재 워크시트 스냅샷이 아니라 DB의 영구 `counter + registry`에서 예약합니다.
 - 유일성 기준은 active worksheet만이 아니라 `쿠팡 출고 row + archive 전체 이력`이고, 보관함으로 이동한 뒤 다시 수집해도 과거 번호를 재사용하지 않습니다.
@@ -143,8 +143,8 @@
 - synthetic `rawFields`와 refresh fallback도 이 규칙을 따르도록 맞춰, worksheet의 `상품명`을 다시 `sellerProductName`처럼 재주입해 값이 뒤틀리는 경로를 막았습니다.
 - 구형 CS summary 문자열만 남아 있는 row도 `shipment_stop_requested`, `shipment_stop_resolved` 같은 이슈 축으로 다시 정규화되며, handled 계열 legacy 표현은 fallback summary 파서로 흡수합니다.
 - `결제완료 -> 상품준비중` 성공 후에는 `incremental collect`를 다시 기다리지 않고, 성공한 `shipmentBoxId` 행을 먼저 `INSTRUCT`로 낙관 반영합니다.
-- 낙관 반영 뒤에는 성공한 `shipmentBoxId`만 대상으로 `/api/coupang/shipments/worksheet/refresh`를 비동기로 호출해 상세/행 액션을 다시 맞춥니다.
-- 후속 보강이 경고 또는 실패로 끝나도 선행 collect / prepare 성공 자체를 되돌리지는 않고, 작업센터 operation과 화면 경고에서 별도로 남깁니다.
+- 낙관 반영 뒤에는 자동 live refresh를 붙이지 않고, 화면에 `수동 동기화 필요` 상태를 남겨 다음 수동 sync 전까지 쿠팡 재확인 전임을 드러냅니다.
+- 쓰기 액션 뒤 상태 재확인은 `빠른 수집 / 증분 갱신 / 재동기화 / 누락 검수 / 미조회 정리 + 상태 재조회 / 구매확정 sync` 같은 수동 버튼 경로에서만 수행합니다.
 - 작업 화면에는 `미조회 정리 + 상태 재조회` 버튼이 따로 있으며, 현재 스토어 + 현재 화면 필터 + 현재 조회 기간 기준으로 대상 worksheet row를 한 번 더 live 상세 확인합니다.
 - live 상세가 성공(`source === "live"`)했고 `item === null`인 주문만 `쿠팡 미조회 제외` 사유로 보관함으로 이동합니다.
 - fallback 응답이나 API 오류는 `쿠팡 미조회`로 단정하지 않고 워크시트에 남긴 채 경고로만 집계합니다.
@@ -157,6 +157,7 @@
 - `dispatch_active`와 `post_dispatch` 범위에서는 `purchaseConfirmedAt`이 있는 행을 제외하고, 새 `confirmed` 범위에서만 claim 없는 구매확정 행을 보여줍니다.
 - claim이 있는 구매확정 행은 구매확정 탭으로 이동하지 않고 계속 `claims` 범위에 남습니다.
 - `구매확정` 탭은 기존 worksheet grid와 상세 패널을 재사용하지만 읽기 전용입니다. 송장 입력, 송장 전송, 상품준비중 처리, 저장은 이 탭에서 비활성화됩니다.
+- `송장 입력하기` 팝업과 작업 화면 grid `Ctrl+V` 붙여넣기는 이제 `셀픽주문번호 / 택배사 / 송장번호`뿐 아니라 `상품주문번호 / 택배사 / 송장번호` 형식도 함께 지원합니다.
 - 송장 업로드/수정은 서버가 worksheet 전송 상태를 `pending -> succeeded/failed`로 직접 기록하고, 클라이언트는 로컬 pending 표시 후 재조회만 수행합니다.
 - 송장 batch 응답에서 일부 `shipmentBoxId` 결과가 누락되면 서버가 해당 건만 개별 재시도해 결과를 보정합니다.
 - `invoice_ready` / `prepare_ready` bulk resolve는 전송·처리 직전에 후보 `shipmentBoxId`를 `shipment_boxes` refresh로 다시 맞춰 stale `orderStatus`/`vendorItemId` 때문에 정상 건이 빠지지 않게 합니다.
@@ -200,6 +201,7 @@
 - `tab / channel / status / level / q / slowOnly / logId` deep-link를 읽고, 현재 필터 상태를 `/work-center` URL에 다시 반영합니다.
 - 메인 목록은 `즉시 재시도 / 원인 확인 / 진행 관찰 / 완료` 순서로 읽히도록 recovery-first 우선순위를 적용합니다.
 - 동일 성격 실패는 상단 `복구 묶음`으로 먼저 요약합니다.
+- 배송 동기화성 작업(`collect-worksheet`, `refresh-worksheet`, `reconcile-live-worksheet`, `audit-missing`)이 `queued/running`이면 목록과 상세 패널에서만 `중단` 버튼을 노출하고, 요청 직후에는 `중단 요청` lane으로 내려 추적합니다.
 - 리스트에서는 재시도 가능 여부와 영향 범위를 제목보다 먼저 판단할 수 있게 정리했습니다.
 - 상세 패널은 `지금 할 일`, `영향 범위`, `작업 티켓 상세`, `요청 / 결과 요약`, payload 순서로 읽히게 정리했습니다.
 - 쿠팡 operation 상세에서는 payload에서 추출한 주문 식별자와 storeId를 기준으로 `관련 출고 보기`, `CS 허브 열기`로 바로 이어집니다.
@@ -223,7 +225,8 @@
 - Vitest 실행 또는 `FORCE_MEMORY_STORAGE=true`일 때만 이 저장소는 in-memory fallback을 유지해 테스트가 실DB를 건드리지 않도록 막습니다.
 - 배포 후 smoke check와 rollback 포인트는 `docs/deployment/cloud-run-smoke-check.md`에 정리돼 있습니다.
 - 작업 상태 패널과 작업센터 주요 레이블은 현재 한국어로 정리돼 있습니다.
-- 작업 상태 패널은 진행 중 작업 외에도 쿠팡 API 런타임 카드로 `현재 동시 실행`, `대기열`, `기본 요청 간격`, `backoff 남은 시간`을 함께 보여줍니다.
+- 작업 상태 패널은 진행 중 작업 외에도 쿠팡 API 런타임 카드로 `현재 동시 실행`, `대기열`, `기본 요청 간격`, `backoff 남은 시간`을 함께 보여줍니다. 출고 화면에서는 자동 background sync를 더 이상 돌리지 않으므로, 이 수치는 사용자가 직접 누른 수동 동기화/검수 요청이 있을 때만 의미 있게 변합니다.
+- 작업 상태 패널의 active server operation 카드도 같은 cancellable shipment sync에만 `중단` 버튼을 보여 주며, 요청 직후에는 `중단 요청됨. 현재 단계가 끝나면 멈춥니다.` 문구로 바뀝니다.
 
 ### 운영 회귀 문서
 - 출고 수동 회귀 시나리오는 `docs/qa/manual-fulfillment-regression.md`에 정리돼 있습니다.

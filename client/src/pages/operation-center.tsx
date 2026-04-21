@@ -15,6 +15,10 @@ import {
 import {
   getOperationActionLabel,
   getOperationMenuLabel,
+  isOperationCancellable,
+  isOperationCancellationPending,
+  operationCancelRequestedLabel,
+  operationCancelRequestedMessage,
   type OperationStatus,
 } from "@shared/operations";
 import { StatusBadge } from "@/components/status-badge";
@@ -112,6 +116,26 @@ function formatOperationStatusLabel(status: OperationStatus) {
   }
 }
 
+function getEntryStatusLabel(entry: LogEntry) {
+  if (entry.kind === "operation" && isOperationCancellationPending(entry.operation)) {
+    return operationCancelRequestedLabel;
+  }
+
+  return formatOperationStatusLabel(entry.status);
+}
+
+function getEntryStatusTone(entry: LogEntry) {
+  if (entry.kind === "operation" && isOperationCancellationPending(entry.operation)) {
+    return "warning";
+  }
+
+  return entry.status;
+}
+
+function isEntryCancellable(entry: LogEntry) {
+  return entry.kind === "operation" && isOperationCancellable(entry.operation);
+}
+
 function formatLogLevelLabel(level: LogLevel) {
   switch (level) {
     case "info":
@@ -171,6 +195,7 @@ export default function OperationCenterPage() {
   const search = useSearch();
   const {
     retryOperation,
+    cancelOperation,
     startLocalOperation,
     finishLocalOperation,
     removeLocalOperation,
@@ -402,6 +427,42 @@ export default function OperationCenterPage() {
       finishLocalOperation(localId, {
         status: "error",
         errorMessage: error instanceof Error ? error.message : "재시도에 실패했습니다.",
+      });
+    }
+  };
+
+  const handleCancel = async (entry: LogEntry) => {
+    if (entry.kind !== "operation") {
+      return;
+    }
+
+    if (!isOperationCancellable(entry.operation) || isOperationCancellationPending(entry.operation)) {
+      return;
+    }
+
+    const operation = entry.operation;
+
+    const localId = startLocalOperation({
+      channel: operation.channel,
+      actionName: `${getOperationActionLabel(operation.actionKey)} 중단`,
+      targetCount: operation.targetCount,
+    });
+
+    try {
+      await cancelOperation(operation.id);
+      finishLocalOperation(localId, {
+        status: "success",
+        summary: operationCancelRequestedMessage,
+      });
+      window.setTimeout(() => removeLocalOperation(localId), 1_200);
+      await refreshLogs();
+      if (selectedLogId) {
+        await refreshSelectedLog();
+      }
+    } catch (error) {
+      finishLocalOperation(localId, {
+        status: "error",
+        errorMessage: error instanceof Error ? error.message : "중단 요청에 실패했습니다.",
       });
     }
   };
@@ -648,8 +709,8 @@ export default function OperationCenterPage() {
                     <td>{getLogChannelLabel(entry.channel)}</td>
                     <td>
                       <div className="table-cell-stack">
-                        <span className={`status-pill ${entry.status}`}>
-                          {formatOperationStatusLabel(entry.status)}
+                        <span className={`status-pill ${getEntryStatusTone(entry)}`}>
+                          {getEntryStatusLabel(entry)}
                         </span>
                         <span className={`status-pill ${entry.level === "info" ? "queued" : entry.level}`}>
                           {formatLogLevelLabel(entry.level)}
@@ -683,16 +744,30 @@ export default function OperationCenterPage() {
                           상세
                         </button>
                         {entry.kind === "operation" ? (
-                          <button
-                            className="button secondary"
-                            disabled={!entry.operation.retryable}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleRetry(entry);
-                            }}
-                          >
-                            재시도
-                          </button>
+                          <>
+                            {isEntryCancellable(entry) ? (
+                              <button
+                                className="button ghost"
+                                disabled={isOperationCancellationPending(entry.operation)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleCancel(entry);
+                                }}
+                              >
+                                {isOperationCancellationPending(entry.operation) ? "중단 요청됨" : "중단"}
+                              </button>
+                            ) : null}
+                            <button
+                              className="button secondary"
+                              disabled={!entry.operation.retryable}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRetry(entry);
+                              }}
+                            >
+                              재시도
+                            </button>
+                          </>
                         ) : null}
                       </div>
                     </td>
@@ -719,7 +794,9 @@ export default function OperationCenterPage() {
                 </div>
               </div>
               <div className="table-inline-actions">
-                <span className={`status-pill ${selectedLog.status}`}>{formatOperationStatusLabel(selectedLog.status)}</span>
+                <span className={`status-pill ${getEntryStatusTone(selectedLog)}`}>
+                  {getEntryStatusLabel(selectedLog)}
+                </span>
                 <button className="button ghost" onClick={() => navigate(buildWorkCenterHref(filters))}>
                   닫기
                 </button>
@@ -732,7 +809,7 @@ export default function OperationCenterPage() {
                 <p>구분: {selectedLog.kind === "operation" ? "작업 로그" : getLogEventTypeLabel(selectedLog.eventType)}</p>
                 <p>채널: {getLogChannelLabel(selectedLog.channel)}</p>
                 <p>레벨: {formatLogLevelLabel(selectedLog.level)}</p>
-                <p>상태: {formatOperationStatusLabel(selectedLog.status)}</p>
+                <p>상태: {getEntryStatusLabel(selectedLog)}</p>
                 <p>시간: {formatTimeRange(selectedLog.startedAt, selectedLog.finishedAt)}</p>
                 <p>소요: {formatDuration(selectedLog.durationMs)}</p>
               </div>
@@ -750,6 +827,15 @@ export default function OperationCenterPage() {
                     <p>요약: {selectedRecoveryDescriptor.summary ?? "요약 정보 없음"}</p>
                     {selectedLog.kind === "operation" ? (
                       <div className="table-inline-actions">
+                        {isEntryCancellable(selectedLog) ? (
+                          <button
+                            className="button ghost"
+                            disabled={isOperationCancellationPending(selectedLog.operation)}
+                            onClick={() => void handleCancel(selectedLog)}
+                          >
+                            {isOperationCancellationPending(selectedLog.operation) ? "중단 요청됨" : "중단"}
+                          </button>
+                        ) : null}
                         <button
                           className="button secondary"
                           disabled={!selectedLog.operation.retryable}
@@ -758,9 +844,13 @@ export default function OperationCenterPage() {
                           재시도
                         </button>
                         <span className="muted">
-                          {selectedLog.operation.retryable
-                            ? "재시도 요청을 바로 등록할 수 있습니다."
-                            : "재시도 전 payload와 오류 원인을 먼저 확인하세요."}
+                          {isOperationCancellationPending(selectedLog.operation)
+                            ? operationCancelRequestedMessage
+                            : isEntryCancellable(selectedLog)
+                              ? "현재 단계가 끝나면 안전 지점에서 멈추도록 요청할 수 있습니다."
+                              : selectedLog.operation.retryable
+                                ? "재시도 요청을 바로 등록할 수 있습니다."
+                                : "재시도 전 payload와 오류 원인을 먼저 확인하세요."}
                         </span>
                       </div>
                     ) : null}

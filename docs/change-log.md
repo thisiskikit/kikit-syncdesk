@@ -2,6 +2,112 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-21 / 쿠팡 배송 동기화 중단 요청(cooperative cancel) 정리
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/operations.ts`
+  - `shared/schema.ts`
+  - `server/services/shared/work-data-db.ts`
+  - `server/interfaces/log-store.ts`
+  - `server/stores/file-log-store.ts`
+  - `server/stores/work-data-log-store.ts`
+  - `server/services/operations/service.ts`
+  - `server/services/operations/service.test.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/http/handlers/coupang/shipments.test.ts`
+  - `client/src/components/operation-provider.tsx`
+  - `client/src/components/operation-toaster.tsx`
+  - `client/src/pages/operation-center.tsx`
+  - `client/src/pages/operation-center-recovery.ts`
+  - `client/src/pages/operation-center-recovery.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-toolbar.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - operation 모델에 `cancelRequestedAt`을 추가하고, `POST /api/operations/:id/cancel`이 더 이상 즉시 finished 처리하지 않고 `중단 요청`만 기록하도록 바꿨습니다.
+  - 실제 중단 완료는 `warning + OPERATION_CANCELLED`로만 마무리하고, 현재 진행 중인 단일 쿠팡 HTTP 호출은 끊지 않은 채 다음 안전 지점에서 cooperative cancel 하도록 고정했습니다.
+  - 취소 대상은 shipment sync 계열(`collect-worksheet`, `refresh-worksheet`, `reconcile-live-worksheet`, `audit-missing`)로만 제한했고, `상품준비중 처리`, `송장 업로드/수정` 같은 쓰기 작업은 계속 non-cancellable로 유지했습니다.
+  - `refresh-worksheet`, `reconcile-live-worksheet`, `audit-missing`도 tracked foreground operation으로 통일하고, collect와 같은 `isCancellationRequested / assertNotCancelled` 체크포인트를 넣었습니다.
+  - 작업 상태 패널과 작업센터 목록/상세에만 `중단` 버튼을 노출하도록 정리했고, 출고 툴바의 예전 `재동기화 취소` 버튼은 제거했습니다.
+  - UI 상태 문구는 `중단 요청됨. 현재 단계가 끝나면 멈춥니다.`와 `사용자 요청으로 작업을 중단했습니다.`로 고정했습니다.
+- 이유:
+  - 장시간 배송 동기화 작업을 운영자가 멈추고 싶을 때 프로세스를 강제 종료하지 않으면서도, 현재 단계 경계를 지켜 안전하게 중단할 수 있어야 했습니다.
+  - 동시에 취소 버튼이 출고 툴바, 작업 상태 패널, 작업센터에 중복 노출되던 흐름을 한 군데 기준으로 정리할 필요가 있었습니다.
+- 남은 점:
+  - cooperative cancel이므로 이미 시작된 개별 쿠팡 HTTP 호출 1건은 응답 완료 전까지 잠시 남을 수 있습니다.
+  - 브라우저에서 실제 장시간 동기화 작업을 띄운 뒤 `중단` 버튼을 눌러 패널/작업센터 상태 전이가 자연스럽게 보이는지 end-to-end로는 아직 확인하지 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npm run check -- --pretty false`
+  - `npx vitest run --root . server/services/operations/service.test.ts server/http/handlers/coupang/shipments.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-audit-missing.test.ts client/src/pages/operation-center-recovery.test.ts`
+
+## 2026-04-21 / 쿠팡 배송 동기화 완전 수동 전환
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.tsx`
+  - `client/src/features/coupang/shipments/shipment-worksheet-overview.test.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-collection.test.ts`
+  - `server/services/coupang/shipment-worksheet-audit-missing.test.ts`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 출고 화면의 유휴 30초 자동 full sync effect를 제거해, 더 이상 사용자가 아무 것도 누르지 않았는데 쿠팡 재동기화가 백그라운드에서 시작되지 않게 했습니다.
+  - `빠른 수집(new_only)` 성공 뒤 자동으로 붙던 `pending_after_collect` 후속 refresh와 auto audit를 없애고, collect 응답은 1차 반영 결과와 남은 phase 안내만 남기도록 정리했습니다.
+  - `상품준비중 처리`, `송장 전송` 같은 쓰기 액션 뒤에는 낙관 반영은 유지하되 자동 live refresh를 붙이지 않고, 화면에 `수동 동기화 필요` 안내를 남기도록 고정했습니다.
+  - 수동 `refresh`, `누락 검수`, `미조회 정리+상태 재조회`, `구매확정 sync`가 성공하면 위 안내를 해제하도록 클라이언트 후속 상태 정리를 맞췄습니다.
+  - shipment workspace의 live 쿠팡 호출은 더 이상 background priority를 쓰지 않고 foreground priority로만 실행되게 바꿨습니다.
+  - overview 안내 문구도 자동 재동기화 전제를 걷어내고, 사용자가 직접 재동기화를 눌러야 한다는 현재 동작으로 갱신했습니다.
+- 이유:
+  - 출고 화면 뒤에서 예기치 않게 계속 도는 쿠팡 요청을 없애고, 수집/준비중 처리/송장 전송 같은 직접 액션의 예측 가능성과 체감 속도를 우선 회복해야 했습니다.
+- 남은 점:
+  - 브라우저에서 API 런타임 패널이 유휴 상태에서는 정말 조용하고, 수동 버튼을 누를 때만 숫자가 변하는지 end-to-end로 확인한 것은 아직 아닙니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npm run check -- --pretty false`
+  - `npx vitest run --root . client/src/features/coupang/shipments/shipment-worksheet-overview.test.ts server/services/coupang/shipment-worksheet-collection.test.ts server/services/coupang/shipment-worksheet-audit-missing.test.ts`
+
+## 2026-04-21 / 쿠팡 송장 입력에 상품주문번호 기준 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `shared/coupang.ts`
+  - `server/http/coupang/parsers.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/services/coupang/shipment-worksheet-invoice-input.test.ts`
+  - `client/src/lib/coupang-invoice-input.ts`
+  - `client/src/lib/coupang-invoice-input.test.ts`
+  - `client/src/features/coupang/shipments/worksheet-clipboard.ts`
+  - `client/src/features/coupang/shipments/worksheet-clipboard.test.ts`
+  - `client/src/features/coupang/shipments/invoice-input-apply.ts`
+  - `client/src/features/coupang/shipments/invoice-input-apply.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/shipment-invoice-input-dialog.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 송장 입력 apply row 타입과 서버 request parser를 `셀픽주문번호`뿐 아니라 `상품주문번호`도 받을 수 있게 확장했습니다.
+  - 팝업 `송장 입력하기`는 이제 `택배사 / 운송장번호 / 셀픽주문번호` 외에 `상품주문번호 / 택배사 / 운송장번호` 형식도 해석합니다.
+  - 그리드 `Ctrl+V` 붙여넣기 역시 현재 worksheet에 있는 `상품주문번호`를 기준으로 자동 매칭할 수 있게 보강했습니다.
+  - 서버 apply 경로는 입력 row마다 `셀픽주문번호` 우선, 없으면 `상품주문번호` 기준으로 row를 찾아 같은 patch 흐름에 태웁니다.
+  - 현재 worksheet에 `상품주문번호`가 중복된 경우에는 잘못된 행에 송장이 들어가지 않도록 해당 식별자 반영을 명시적으로 건너뜁니다.
+  - 출고 화면의 안내 문구와 팝업 예시는 두 입력 형식을 모두 설명하도록 갱신했습니다.
+- 이유:
+  - 운영자가 외부 시트에서 바로 복사해 오는 식별자가 항상 `셀픽주문번호`만 있는 것은 아니어서, `상품주문번호`만으로도 같은 송장 반영 흐름을 타야 했습니다.
+- 남은 점:
+  - 브라우저에서 실제 팝업과 grid 붙여넣기로 `상품주문번호` 샘플을 end-to-end 확인한 것은 아직 아닙니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npm run check -- --pretty false`
+  - `npx vitest run --root . client/src/lib/coupang-invoice-input.test.ts client/src/features/coupang/shipments/worksheet-clipboard.test.ts client/src/features/coupang/shipments/invoice-input-apply.test.ts server/services/coupang/shipment-worksheet-invoice-input.test.ts`
+
 ## 2026-04-21 / 쿠팡 출고 full 재동기화 중복 방지와 취소 경로 추가
 
 - 변경 유형:

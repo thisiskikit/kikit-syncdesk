@@ -33,6 +33,7 @@ export type CreateOperationInput = {
   retryable?: boolean;
   retryOfOperationId?: string | null;
   startedAt?: string;
+  cancelRequestedAt?: string | null;
   finishedAt?: string | null;
 };
 
@@ -44,6 +45,7 @@ export type UpdateOperationInput = Partial<
     | "resultSummary"
     | "errorCode"
     | "errorMessage"
+    | "cancelRequestedAt"
     | "finishedAt"
     | "retryable"
   >

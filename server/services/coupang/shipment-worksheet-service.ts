@@ -37,6 +37,7 @@ import type {
   PatchCoupangShipmentWorksheetInput,
   PatchCoupangShipmentWorksheetItemInput,
 } from "@shared/coupang";
+import { operationCancelledMessage } from "@shared/operations";
 import {
   getExchangeDetail,
   getOrderCustomerServiceSummary,
@@ -56,6 +57,7 @@ import {
   type CoupangShipmentWorksheetSyncState,
 } from "./shipment-worksheet-store";
 import { recordSystemErrorEvent } from "../logs/service";
+import { OperationCancellationRequestedError } from "../operations/service";
 import {
   buildShipmentWorksheetViewData,
   getShipmentWorksheetRowHiddenReason,
@@ -79,7 +81,9 @@ import {
 } from "./shipment-worksheet-raw-fields";
 
 type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsStore.getStore>>>;
-const BACKGROUND_SCHEDULER_PRIORITY = "background" as const;
+// Shipment sync/refresh/audit is manual-only now, so every live Coupang call in this
+// workspace should compete as a foreground request instead of hiding behind background priority.
+const MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY = "foreground" as const;
 
 function asStoreRef(store: StoredCoupangStore) {
   return {
@@ -1160,15 +1164,20 @@ function clearWorksheetRowMissingInCoupang(row: CoupangShipmentWorksheetRow) {
   });
 }
 
-class ShipmentWorksheetCollectCancelledError extends Error {
-  constructor() {
-    super("Shipment worksheet collect cancelled.");
-    this.name = "ShipmentWorksheetCollectCancelledError";
-  }
+function throwShipmentWorksheetCancellation<T>(data?: T): never {
+  throw new OperationCancellationRequestedError({
+    data,
+    message: operationCancelledMessage,
+  });
 }
 
-function isShipmentWorksheetCollectCancelledError(error: unknown) {
-  return error instanceof ShipmentWorksheetCollectCancelledError;
+async function assertShipmentWorksheetSyncNotCancelled<T>(input: {
+  isCancellationRequested?: (() => boolean) | undefined;
+  buildCancelledData?: (() => T) | undefined;
+}) {
+  if (input.isCancellationRequested?.()) {
+    throwShipmentWorksheetCancellation(input.buildCancelledData?.());
+  }
 }
 
 async function verifyMissingInCoupangRows(input: {
@@ -1193,7 +1202,7 @@ async function verifyMissingInCoupangRows(input: {
         storeId: input.storeId,
         shipmentBoxId: row.shipmentBoxId,
         includeCustomerService: false,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
       });
 
       if (response.source === "live" && !response.item) {
@@ -1765,7 +1774,7 @@ async function fetchQuickCollectOrders(input: {
         fetchAllPages: true,
         maxPages: QUICK_COLLECT_MAX_PAGES,
         includeCustomerService: false,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
       });
 
       if (response.source !== "live") {
@@ -2140,6 +2149,7 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
   currentSheet: WorksheetStoreSheet;
   request: RefreshCoupangShipmentWorksheetInput & {
     persistToStore?: boolean;
+    isCancellationRequested?: (() => boolean) | undefined;
   };
   refreshTargets: {
     rows: CoupangShipmentWorksheetRow[];
@@ -2174,8 +2184,25 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
     dateTo: today,
     maxRangeDays: PURCHASE_CONFIRM_MAX_RANGE_DAYS,
   });
+  const assertNotCancelled = async () => {
+    await assertShipmentWorksheetSyncNotCancelled({
+      isCancellationRequested: input.request.isCancellationRequested,
+      buildCancelledData: () =>
+        buildShipmentWorksheetRefreshResponse(input.store, input.currentSheet, {
+          scope: input.request.scope,
+          updatedRows: [],
+          refreshedCount: 0,
+          updatedCount: 0,
+          completedPhases: [],
+          pendingPhases: [],
+          warningPhases: [],
+          message: operationCancelledMessage,
+        }),
+    });
+  };
 
   for (const range of recognitionRanges) {
+    await assertNotCancelled();
     if (matchedRowIds.size >= targetRows.length) {
       break;
     }
@@ -2186,7 +2213,7 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
       recognitionDateTo: range.createdAtTo,
       maxPerPage: PURCHASE_CONFIRM_PAGE_SIZE,
       maxPageCount: PURCHASE_CONFIRM_SAFE_PAGE_CAP,
-      schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+      schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
     });
 
     pushUniqueWorksheetWarning(warnings, response.message);
@@ -2232,6 +2259,8 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
     }
   }
 
+  await assertNotCancelled();
+
   const mergedRows = mergeWorksheetRowsBySourceKey(
     input.currentSheet.items,
     Array.from(updatedRowsBySourceKey.values()),
@@ -2251,6 +2280,7 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
     archivedAt: input.nowIso,
     persistToStore: input.request.persistToStore !== false,
   });
+  await assertNotCancelled();
   const persistedSheet =
     input.request.persistToStore === false
       ? {
@@ -2299,6 +2329,7 @@ async function refreshShipmentWorksheetRows(
     currentSheet?: WorksheetStoreSheet;
     persistToStore?: boolean;
     skipProductDetailHydration?: boolean;
+    isCancellationRequested?: (() => boolean) | undefined;
   },
 ) {
   const store = await getStoreOrThrow(input.storeId);
@@ -2310,6 +2341,23 @@ async function refreshShipmentWorksheetRows(
   const currentSheet =
     input.currentSheet ?? (await coupangShipmentWorksheetStore.getStoreSheet(input.storeId));
   const now = new Date().toISOString();
+  const assertNotCancelled = async () => {
+    await assertShipmentWorksheetSyncNotCancelled({
+      isCancellationRequested: input.isCancellationRequested,
+      buildCancelledData: () =>
+        buildShipmentWorksheetRefreshResponse(store, currentSheet, {
+          scope: input.scope,
+          updatedRows: [],
+          refreshedCount: 0,
+          updatedCount: 0,
+          completedPhases: [],
+          pendingPhases: [],
+          warningPhases: [],
+          message: operationCancelledMessage,
+        }),
+    });
+  };
+  await assertNotCancelled();
   const syncPlan = buildReadCustomerServiceSyncPlan(currentSheet);
   const refreshTargets = resolveShipmentWorksheetRefreshTargets({
     rows: currentSheet.items.map(normalizeWorksheetRow),
@@ -2388,7 +2436,7 @@ async function refreshShipmentWorksheetRows(
           storeId: input.storeId,
           shipmentBoxId,
           includeCustomerService: false,
-          schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+          schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
         });
 
         if (response.source !== "live") {
@@ -2425,6 +2473,10 @@ async function refreshShipmentWorksheetRows(
           preserveCustomerService: true,
         };
       }
+    }, {
+      beforeEach: async () => {
+        await assertNotCancelled();
+      },
     });
 
     for (const result of detailResults) {
@@ -2502,8 +2554,13 @@ async function refreshShipmentWorksheetRows(
       productDetail,
       selpickOrderNumber: currentRow.selpickOrderNumber,
     });
+  }, {
+    beforeEach: async () => {
+      await assertNotCancelled();
+    },
   });
 
+  await assertNotCancelled();
   const customerServiceRefresh =
     phaseSet.has("customer_service_refresh")
       ? await refreshWorksheetCustomerServiceStatuses({
@@ -2517,6 +2574,7 @@ async function refreshShipmentWorksheetRows(
           message: null,
         };
 
+  await assertNotCancelled();
   const finalRows = customerServiceRefresh.rows;
   const updatedCount = finalRows.filter((row, index) =>
     hasWorksheetRowChanged(refreshTargets.rows[index], row),
@@ -2571,6 +2629,7 @@ async function refreshShipmentWorksheetRows(
     archivedAt: now,
     persistToStore: input.persistToStore !== false,
   });
+  await assertNotCancelled();
   const updatedRows = finalRows.filter(
     (row) => !autoArchiveResult.removedSourceKeys.has(row.sourceKey),
   );
@@ -2617,13 +2676,17 @@ async function refreshShipmentWorksheetRows(
 }
 
 export async function refreshShipmentWorksheet(
-  input: RefreshCoupangShipmentWorksheetInput,
+  input: RefreshCoupangShipmentWorksheetInput & {
+    isCancellationRequested?: (() => boolean) | undefined;
+  },
 ): Promise<CoupangShipmentWorksheetRefreshResponse> {
   return refreshShipmentWorksheetRows(input);
 }
 
 export async function reconcileShipmentWorksheetLive(
-  input: ReconcileCoupangShipmentWorksheetInput,
+  input: ReconcileCoupangShipmentWorksheetInput & {
+    isCancellationRequested?: (() => boolean) | undefined;
+  },
 ): Promise<ReconcileCoupangShipmentWorksheetResponse> {
   const store = await getStoreOrThrow(input.storeId);
   const platformKey = resolvePlatformKey(store);
@@ -2634,11 +2697,26 @@ export async function reconcileShipmentWorksheetLive(
   const currentSheet = await coupangShipmentWorksheetStore.getStoreSheet(input.storeId);
   const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
   const createdAtTo = normalizeWhitespace(input.createdAtTo);
+  const buildCancelledResponse = () =>
+    buildReconcileShipmentWorksheetResponse(store, currentSheet, {
+      archivedCount: 0,
+      refreshedCount: 0,
+      warningCount: 0,
+      warnings: [],
+      message: operationCancelledMessage,
+    });
+  const assertNotCancelled = async () => {
+    await assertShipmentWorksheetSyncNotCancelled({
+      isCancellationRequested: input.isCancellationRequested,
+      buildCancelledData: buildCancelledResponse,
+    });
+  };
 
   if (!createdAtFrom || !createdAtTo) {
     throw new Error("미조회 정리는 현재 조회 시작일과 종료일이 모두 필요합니다.");
   }
 
+  await assertNotCancelled();
   const worksheetRows = buildWorksheetRows(currentSheet);
   const targetRows = resolveReconcileShipmentWorksheetTargetRows({
     storeId: input.storeId,
@@ -2663,6 +2741,7 @@ export async function reconcileShipmentWorksheetLive(
   const missingVerification = await verifyMissingInCoupangRows({
     storeId: input.storeId,
     rows: targetRows,
+    assertNotCancelled,
   });
   for (const warning of missingVerification.warningMessages) {
     pushUniqueWorksheetWarning(warningMessages, warning);
@@ -2675,6 +2754,7 @@ export async function reconcileShipmentWorksheetLive(
     detectedAt: nowIso,
     detectionSource: "reconcile_live",
   });
+  await assertNotCancelled();
   for (const warning of missingArchiveResult.warningMessages) {
     pushUniqueWorksheetWarning(warningMessages, warning);
   }
@@ -2712,6 +2792,7 @@ export async function reconcileShipmentWorksheetLive(
   );
 
   if (!remainingShipmentBoxIds.length) {
+    await assertNotCancelled();
     const nextSheet = await coupangShipmentWorksheetStore.setStoreSheet({
       storeId: input.storeId,
       items: workingRows,
@@ -2745,7 +2826,9 @@ export async function reconcileShipmentWorksheetLive(
     },
     persistToStore: true,
     skipProductDetailHydration: true,
+    isCancellationRequested: input.isCancellationRequested,
   });
+  await assertNotCancelled();
   if (refreshResult.warningPhases.length > 0 && refreshResult.message) {
     pushUniqueWorksheetWarning(warningMessages, refreshResult.message);
   }
@@ -3067,7 +3150,7 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
         vendorItemId: row.vendorItemId,
         sellerProductId: row.sellerProductId,
       })),
-      schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+      schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
     });
 
     if (response.source !== "live") {
@@ -3434,7 +3517,7 @@ async function buildCollectedWorksheetRows(input: {
             storeId: input.store.id,
             shipmentBoxId,
             includeCustomerService: false,
-            schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+            schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
           });
 
           return response.source === "live" ? response.item : null;
@@ -4459,7 +4542,9 @@ export async function runShipmentArchive(
 }
 
 async function auditShipmentWorksheetMissingV2(
-  input: AuditCoupangShipmentWorksheetMissingInput,
+  input: AuditCoupangShipmentWorksheetMissingInput & {
+    isCancellationRequested?: (() => boolean) | undefined;
+  },
 ): Promise<CoupangShipmentWorksheetAuditMissingResponse> {
   const createdAtFrom = normalizeWhitespace(input.createdAtFrom);
   const createdAtTo = normalizeWhitespace(input.createdAtTo);
@@ -4485,6 +4570,25 @@ async function auditShipmentWorksheetMissingV2(
     storeId: input.storeId,
     createdAtFrom,
     createdAtTo,
+  };
+  const buildCancelledResponse = (): CoupangShipmentWorksheetAuditMissingResponse => ({
+    auditedStatuses: [...WORKSHEET_AUDIT_STATUSES],
+    liveCount: 0,
+    worksheetMatchedCount: 0,
+    autoAppliedCount: 0,
+    restoredCount: 0,
+    exceptionCount: 0,
+    hiddenInfoCount: 0,
+    autoAppliedItems: [],
+    exceptionItems: [],
+    hiddenItems: [],
+    message: operationCancelledMessage,
+  });
+  const assertNotCancelled = async () => {
+    await assertShipmentWorksheetSyncNotCancelled({
+      isCancellationRequested: input.isCancellationRequested,
+      buildCancelledData: buildCancelledResponse,
+    });
   };
   const getStatusPriority = (status: string | null | undefined) =>
     normalizeStatusFilter(status) === "INSTRUCT" ? 2 : normalizeStatusFilter(status) === "ACCEPT" ? 1 : 0;
@@ -4512,6 +4616,7 @@ async function auditShipmentWorksheetMissingV2(
 
   for (const status of WORKSHEET_AUDIT_STATUSES) {
     for (const auditRange of auditRanges) {
+      await assertNotCancelled();
       const response = await listOrders({
         storeId: input.storeId,
         createdAtFrom: auditRange.createdAtFrom,
@@ -4520,7 +4625,7 @@ async function auditShipmentWorksheetMissingV2(
         maxPerPage: WORKSHEET_AUDIT_PAGE_SIZE,
         fetchAllPages: true,
         includeCustomerService: false,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
       });
 
       if (response.source !== "live") {
@@ -4598,6 +4703,7 @@ async function auditShipmentWorksheetMissingV2(
   const missingVerification = await verifyMissingInCoupangRows({
     storeId: input.storeId,
     rows: missingVerificationTargets,
+    assertNotCancelled,
   });
   for (const warning of missingVerification.warningMessages) {
     pushUniqueWorksheetWarning(warningMessages, warning);
@@ -4610,6 +4716,7 @@ async function auditShipmentWorksheetMissingV2(
     detectedAt: new Date().toISOString(),
     detectionSource: "reconcile_live",
   });
+  await assertNotCancelled();
   for (const warning of missingArchiveResult.warningMessages) {
     pushUniqueWorksheetWarning(warningMessages, warning);
   }
@@ -4733,7 +4840,7 @@ async function auditShipmentWorksheetMissingV2(
             storeId: input.storeId,
             shipmentBoxId: candidate.row.shipmentBoxId,
             includeCustomerService: false,
-            schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+            schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
           });
           if (detailResponse.source !== "live" || !detailResponse.item) {
             return {
@@ -4839,8 +4946,14 @@ async function auditShipmentWorksheetMissingV2(
         };
       }
     },
+    {
+      beforeEach: async () => {
+        await assertNotCancelled();
+      },
+    },
   );
 
+  await assertNotCancelled();
   for (const result of hydratedAutoUpsertResults) {
     if ("exception" in result && result.exception) {
       pushException(result.exception);
@@ -4881,6 +4994,8 @@ async function auditShipmentWorksheetMissingV2(
       materializedAutoUpsertRows = [];
     }
   }
+
+  await assertNotCancelled();
 
   const materializedRowBySourceKey = new Map(
     materializedAutoUpsertRows.map((row) => [row.sourceKey, row] as const),
@@ -4986,6 +5101,7 @@ async function auditShipmentWorksheetMissingV2(
     );
 
   if (didWorksheetRowsChange) {
+    await assertNotCancelled();
     await setWorksheetStoreSheetWithDiagnostics(
       {
         storeId: input.storeId,
@@ -5036,7 +5152,9 @@ async function auditShipmentWorksheetMissingV2(
 }
 
 export async function auditShipmentWorksheetMissing(
-  input: AuditCoupangShipmentWorksheetMissingInput,
+  input: AuditCoupangShipmentWorksheetMissingInput & {
+    isCancellationRequested?: (() => boolean) | undefined;
+  },
 ): Promise<CoupangShipmentWorksheetAuditMissingResponse> {
   return auditShipmentWorksheetMissingV2(input);
 /*
@@ -5429,9 +5547,10 @@ export async function collectShipmentWorksheet(
       "사용자 요청으로 쿠팡 기준 재동기화를 취소했습니다.",
     );
   const assertNotCancelled = async () => {
-    if (input.isCancellationRequested?.()) {
-      throw new ShipmentWorksheetCollectCancelledError();
-    }
+    await assertShipmentWorksheetSyncNotCancelled({
+      isCancellationRequested: input.isCancellationRequested,
+      buildCancelledData: buildCancelledResponse,
+    });
   };
   try {
     await assertNotCancelled();
@@ -5459,7 +5578,7 @@ export async function collectShipmentWorksheet(
         maxPerPage: input.maxPerPage,
         fetchAllPages: true,
         includeCustomerService: false,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
         assertNotCancelled,
       });
 
@@ -5550,14 +5669,14 @@ export async function collectShipmentWorksheet(
         cancelType: "ALL",
         createdAtFrom: syncPlan.fetchCreatedAtFrom,
         createdAtTo: syncPlan.fetchCreatedAtTo,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
       }),
       listExchanges({
         storeId: input.storeId,
         createdAtFrom: syncPlan.fetchCreatedAtFrom,
         createdAtTo: syncPlan.fetchCreatedAtTo,
         maxPerPage: 50,
-        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        schedulerPriority: MANUAL_SHIPMENT_SYNC_SCHEDULER_PRIORITY,
       }),
     ]);
   }
@@ -6257,10 +6376,6 @@ export async function collectShipmentWorksheet(
 
   return buildWorksheetResponse(store, sheet);
   } catch (error) {
-    if (isShipmentWorksheetCollectCancelledError(error)) {
-      return buildCancelledResponse();
-    }
-
     throw error;
   }
 }
@@ -6379,6 +6494,52 @@ function buildInvoiceInputApplyMessage(input: {
   return null;
 }
 
+function normalizeInvoiceInputApplyIdentifier(
+  row: Pick<
+    ApplyCoupangShipmentWorksheetInvoiceInput["rows"][number],
+    "selpickOrderNumber" | "productOrderNumber"
+  >,
+) {
+  const selpickOrderNumber = normalizeWhitespace(row.selpickOrderNumber);
+  if (selpickOrderNumber) {
+    return {
+      key: `selpick:${selpickOrderNumber}`,
+      label: `셀픽주문번호 ${selpickOrderNumber}`,
+      selpickOrderNumber,
+    } as const;
+  }
+
+  const productOrderNumber = normalizeWhitespace(row.productOrderNumber);
+  if (productOrderNumber) {
+    return {
+      key: `product:${productOrderNumber}`,
+      label: `상품주문번호 ${productOrderNumber}`,
+      productOrderNumber,
+    } as const;
+  }
+
+  return null;
+}
+
+function findDuplicateWorksheetProductOrderNumbers(rows: readonly CoupangShipmentWorksheetRow[]) {
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    const productOrderNumber = normalizeWhitespace(row.productOrderNumber);
+    if (!productOrderNumber) {
+      continue;
+    }
+
+    counts.set(productOrderNumber, (counts.get(productOrderNumber) ?? 0) + 1);
+  }
+
+  return new Set(
+    Array.from(counts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([productOrderNumber]) => productOrderNumber),
+  );
+}
+
 export async function applyShipmentWorksheetInvoiceInput(
   input: ApplyCoupangShipmentWorksheetInvoiceInput,
 ): Promise<CoupangShipmentWorksheetInvoiceInputApplyResponse> {
@@ -6397,21 +6558,41 @@ export async function applyShipmentWorksheetInvoiceInput(
     currentSheet.items,
     "운영 사용 이력이 있는 셀픽주문번호 중복이 있어 자동 복구 없이 송장 반영을 진행할 수 없습니다.",
   );
-  const rowBySelpickOrderNumber = new Map(
-    currentSheet.items.map((row) => [row.selpickOrderNumber, row] as const),
-  );
-  const latestInputBySelpickOrderNumber = new Map<
+  const rowBySelpickOrderNumber = new Map<string, CoupangShipmentWorksheetRow>();
+  const duplicateProductOrderNumbers = findDuplicateWorksheetProductOrderNumbers(currentSheet.items);
+  const rowByProductOrderNumber = new Map<string, CoupangShipmentWorksheetRow>();
+
+  for (const row of currentSheet.items) {
+    const selpickOrderNumber = normalizeWhitespace(row.selpickOrderNumber);
+    if (selpickOrderNumber) {
+      rowBySelpickOrderNumber.set(selpickOrderNumber, row);
+    }
+
+    const productOrderNumber = normalizeWhitespace(row.productOrderNumber);
+    if (productOrderNumber && !duplicateProductOrderNumbers.has(productOrderNumber)) {
+      rowByProductOrderNumber.set(productOrderNumber, row);
+    }
+  }
+
+  const latestInputByIdentifier = new Map<
     string,
-    { deliveryCompanyCode: string; invoiceNumber: string }
+    {
+      label: string;
+      selpickOrderNumber?: string;
+      productOrderNumber?: string;
+      deliveryCompanyCode: string;
+      invoiceNumber: string;
+    }
   >();
 
   for (const row of input.rows) {
-    const selpickOrderNumber = normalizeWhitespace(row.selpickOrderNumber);
-    if (!selpickOrderNumber) {
+    const normalizedIdentifier = normalizeInvoiceInputApplyIdentifier(row);
+    if (!normalizedIdentifier) {
       continue;
     }
 
-    latestInputBySelpickOrderNumber.set(selpickOrderNumber, {
+    latestInputByIdentifier.set(normalizedIdentifier.key, {
+      ...normalizedIdentifier,
       deliveryCompanyCode: normalizeDeliveryCode(row.deliveryCompanyCode),
       invoiceNumber: normalizeInvoiceNumber(row.invoiceNumber),
     });
@@ -6421,12 +6602,24 @@ export async function applyShipmentWorksheetInvoiceInput(
   const normalizedItems: PatchCoupangShipmentWorksheetItemInput[] = [];
   let matchedCount = 0;
 
-  latestInputBySelpickOrderNumber.forEach((invoiceInput, selpickOrderNumber) => {
-    const row = rowBySelpickOrderNumber.get(selpickOrderNumber);
-    if (!row) {
+  latestInputByIdentifier.forEach((invoiceInput) => {
+    if (
+      invoiceInput.productOrderNumber &&
+      duplicateProductOrderNumbers.has(invoiceInput.productOrderNumber)
+    ) {
       issues.push(
-        `\uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC5D0 \uC5C6\uB294 \uC140\uD53D\uC8FC\uBB38\uBC88\uD638\uC785\uB2C8\uB2E4: ${selpickOrderNumber}`,
+        `현재 워크시트에 중복 상품주문번호가 있어 자동 반영할 수 없습니다: ${invoiceInput.productOrderNumber}`,
       );
+      return;
+    }
+
+    const row = invoiceInput.selpickOrderNumber
+      ? rowBySelpickOrderNumber.get(invoiceInput.selpickOrderNumber)
+      : invoiceInput.productOrderNumber
+        ? rowByProductOrderNumber.get(invoiceInput.productOrderNumber)
+        : null;
+    if (!row) {
+      issues.push(`현재 워크시트에 없는 ${invoiceInput.label}입니다.`);
       return;
     }
 
@@ -6442,7 +6635,7 @@ export async function applyShipmentWorksheetInvoiceInput(
     normalizedItems.push(
       normalizePatchAgainstRow(row, {
         sourceKey: row.sourceKey,
-        selpickOrderNumber,
+        selpickOrderNumber: row.selpickOrderNumber,
         deliveryCompanyCode: invoiceInput.deliveryCompanyCode,
         invoiceNumber: invoiceInput.invoiceNumber,
       }),

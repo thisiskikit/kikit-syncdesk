@@ -3,25 +3,47 @@ import type {
   CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
 
+function normalizeInvoiceInputIdentifier(
+  row: Readonly<Pick<CoupangShipmentWorksheetInvoiceInputApplyRow, "selpickOrderNumber" | "productOrderNumber">>,
+) {
+  const selpickOrderNumber = row.selpickOrderNumber?.trim();
+  if (selpickOrderNumber) {
+    return {
+      key: `selpick:${selpickOrderNumber}`,
+      identifier: { selpickOrderNumber },
+    } as const;
+  }
+
+  const productOrderNumber = row.productOrderNumber?.trim();
+  if (productOrderNumber) {
+    return {
+      key: `product:${productOrderNumber}`,
+      identifier: { productOrderNumber },
+    } as const;
+  }
+
+  return null;
+}
+
 export function dedupeInvoiceInputApplyRows(
   rows: readonly CoupangShipmentWorksheetInvoiceInputApplyRow[],
 ) {
-  const latestRowBySelpickOrderNumber = new Map<string, CoupangShipmentWorksheetInvoiceInputApplyRow>();
+  const latestRowByIdentifier = new Map<string, CoupangShipmentWorksheetInvoiceInputApplyRow>();
 
   for (const row of rows) {
-    const selpickOrderNumber = row.selpickOrderNumber.trim();
-    if (!selpickOrderNumber) {
+    const normalizedIdentifier = normalizeInvoiceInputIdentifier(row);
+    if (!normalizedIdentifier) {
       continue;
     }
 
-    latestRowBySelpickOrderNumber.set(selpickOrderNumber, {
-      selpickOrderNumber,
+    latestRowByIdentifier.set(normalizedIdentifier.key, {
+      ...normalizedIdentifier.identifier,
       deliveryCompanyCode: row.deliveryCompanyCode.trim(),
       invoiceNumber: row.invoiceNumber.trim(),
     });
   }
 
-  return Array.from(latestRowBySelpickOrderNumber.values());
+  return Array.from(latestRowByIdentifier.values());
 }
 
 export function resolveSourceKeysForTouchedRowIds(

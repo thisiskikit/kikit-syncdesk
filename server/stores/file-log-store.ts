@@ -80,6 +80,7 @@ export type CreateOperationInput = {
   retryable?: boolean;
   retryOfOperationId?: string | null;
   startedAt?: string;
+  cancelRequestedAt?: string | null;
   finishedAt?: string | null;
 };
 
@@ -91,6 +92,7 @@ export type UpdateOperationInput = Partial<
     | "resultSummary"
     | "errorCode"
     | "errorMessage"
+    | "cancelRequestedAt"
     | "finishedAt"
     | "retryable"
   >
@@ -407,6 +409,8 @@ export function normalizeOperationEntry(entry: Partial<OperationLogEntry>): Oper
     retryOfOperationId:
       typeof entry.retryOfOperationId === "string" ? entry.retryOfOperationId : null,
     startedAt: typeof entry.startedAt === "string" ? entry.startedAt : timestamp,
+    cancelRequestedAt:
+      typeof entry.cancelRequestedAt === "string" ? entry.cancelRequestedAt : null,
     finishedAt: typeof entry.finishedAt === "string" ? entry.finishedAt : null,
     createdAt: typeof entry.createdAt === "string" ? entry.createdAt : timestamp,
     updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : timestamp,
@@ -442,6 +446,7 @@ function buildOperationRecord(operation: OperationLogEntry): OperationLogRecord 
         targetIds: operation.targetIds.slice(0, 10),
         retryable: operation.retryable,
         retryOfOperationId: operation.retryOfOperationId,
+        cancelRequestedAt: operation.cancelRequestedAt,
       },
       {
         maxEntries: 10,
@@ -589,6 +594,7 @@ function mapDbOperationRow(row: typeof operationLogs.$inferSelect): OperationLog
     retryable: row.retryable,
     retryOfOperationId: row.retryOfOperationId,
     startedAt: toIsoString(row.startedAt) ?? new Date().toISOString(),
+    cancelRequestedAt: toIsoString(row.cancelRequestedAt),
     finishedAt: toIsoString(row.finishedAt),
     createdAt: toIsoString(row.createdAt) ?? new Date().toISOString(),
     updatedAt: toIsoString(row.updatedAt) ?? new Date().toISOString(),
@@ -929,6 +935,7 @@ export class LogStore {
       retryable: input.retryable ?? false,
       retryOfOperationId: input.retryOfOperationId ?? null,
       startedAt: input.startedAt ?? timestamp,
+      cancelRequestedAt: input.cancelRequestedAt ?? null,
       finishedAt: input.finishedAt ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,

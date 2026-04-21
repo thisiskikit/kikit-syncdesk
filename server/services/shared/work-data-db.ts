@@ -408,10 +408,15 @@ const createTableStatements = [
       retryable boolean NOT NULL DEFAULT false,
       retry_of_operation_id text,
       started_at timestamptz NOT NULL,
+      cancel_requested_at timestamptz,
       finished_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )
+  `,
+  `
+    ALTER TABLE operation_logs
+    ADD COLUMN IF NOT EXISTS cancel_requested_at timestamptz
   `,
   `
     CREATE TABLE IF NOT EXISTS event_logs (

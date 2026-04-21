@@ -616,6 +616,7 @@ export const operationLogs = pgTable("operation_logs", {
   retryable: pgBoolean("retryable").notNull().default(false),
   retryOfOperationId: text("retry_of_operation_id"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

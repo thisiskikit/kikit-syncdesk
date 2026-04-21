@@ -101,6 +101,29 @@ describe("invoice-input-apply helpers", () => {
     ]);
   });
 
+  it("dedupes invoice rows by product order number with last value winning", () => {
+    const result = dedupeInvoiceInputApplyRows([
+      {
+        productOrderNumber: "1234567890",
+        deliveryCompanyCode: " 한진택배 ",
+        invoiceNumber: " 111111 ",
+      },
+      {
+        productOrderNumber: "1234567890",
+        deliveryCompanyCode: "롯데택배",
+        invoiceNumber: "222222",
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        productOrderNumber: "1234567890",
+        deliveryCompanyCode: "롯데택배",
+        invoiceNumber: "222222",
+      },
+    ]);
+  });
+
   it("maps touched row ids back to unique source keys across row collections", () => {
     const first = buildRow({
       id: "row-1",

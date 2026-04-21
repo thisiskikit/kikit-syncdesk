@@ -46,7 +46,9 @@ function buildOperation(input: Partial<OperationLogEntry>): OperationLogEntry {
     retryable: input.retryable ?? true,
     retryOfOperationId: input.retryOfOperationId ?? null,
     startedAt: input.startedAt ?? "2026-04-13T10:00:00+09:00",
-    finishedAt: input.finishedAt ?? "2026-04-13T10:00:05+09:00",
+    cancelRequestedAt: input.cancelRequestedAt ?? null,
+    finishedAt:
+      input.finishedAt !== undefined ? input.finishedAt : "2026-04-13T10:00:05+09:00",
     createdAt: input.createdAt ?? "2026-04-13T10:00:00+09:00",
     updatedAt: input.updatedAt ?? "2026-04-13T10:00:05+09:00",
   };
@@ -62,6 +64,8 @@ function buildOperationEntry(input: {
   errorMessage?: string | null;
   startedAt?: string;
   resultSummary?: OperationResultSummary | null;
+  cancelRequestedAt?: string | null;
+  finishedAt?: string | null;
 }): OperationLogRecord {
   const operation = buildOperation({
     id: input.id,
@@ -72,6 +76,8 @@ function buildOperationEntry(input: {
     errorMessage: input.errorMessage,
     startedAt: input.startedAt,
     resultSummary: input.resultSummary,
+    cancelRequestedAt: input.cancelRequestedAt,
+    finishedAt: input.finishedAt,
   });
 
   return {
@@ -246,6 +252,26 @@ describe("operation center recovery helpers", () => {
       error: 1,
       skipped: 1,
       actionable: 2,
+    });
+  });
+
+  it("중단 요청된 활성 작업을 별도 모니터링 대상으로 분류한다", () => {
+    const entry = buildOperationEntry({
+      id: "cancel-requested",
+      status: "running",
+      level: "warning",
+      retryable: false,
+      cancelRequestedAt: "2026-04-13T10:01:00+09:00",
+      finishedAt: null,
+      errorCode: null,
+      errorMessage: null,
+    });
+
+    expect(buildRecoveryDescriptor(entry)).toMatchObject({
+      lane: "monitor",
+      label: "중단 요청",
+      hint: "중단 요청됨. 현재 단계가 끝나면 멈춥니다.",
+      retryable: false,
     });
   });
 });

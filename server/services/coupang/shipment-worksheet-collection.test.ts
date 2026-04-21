@@ -6,6 +6,7 @@ import type {
   CoupangSettlementRow,
   CoupangShipmentWorksheetRow,
 } from "@shared/coupang";
+import { OperationCancellationRequestedError } from "../operations/service";
 
 const {
   getStoreMock,
@@ -695,6 +696,7 @@ describe("coupang shipment worksheet collection", () => {
         storeId: "store-1",
         fetchAllPages: true,
         includeCustomerService: false,
+        schedulerPriority: "foreground",
       }),
     );
     expect(getOrderDetailMock).toHaveBeenCalledTimes(2);
@@ -900,6 +902,7 @@ describe("coupang shipment worksheet collection", () => {
       cancelType: "ALL",
       createdAtFrom: "2026-03-25",
       createdAtTo: "2026-03-26",
+      schedulerPriority: "foreground",
     });
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({
@@ -2872,6 +2875,7 @@ describe("coupang shipment worksheet collection", () => {
         storeId: "store-1",
         recognitionDateFrom: "2026-03-26",
         recognitionDateTo: "2026-03-26",
+        schedulerPriority: "foreground",
       }),
     );
     expect(result.refreshedCount).toBe(1);
@@ -3193,6 +3197,11 @@ describe("coupang shipment worksheet collection", () => {
     expect(result.archivedCount).toBe(1);
     expect(result.refreshedCount).toBe(1);
     expect(result.warningCount).toBe(0);
+    expect(getOrderDetailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schedulerPriority: "foreground",
+      }),
+    );
     expect(archiveRowsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeId: "store-1",
@@ -3498,6 +3507,39 @@ describe("coupang shipment worksheet collection", () => {
         items: [expect.objectContaining({ sourceKey: "store-1:941:V-941" })],
       }),
     );
+  });
+
+  it("throws a cooperative cancellation error before refresh phases continue", async () => {
+    await expect(
+      refreshShipmentWorksheet({
+        storeId: "store-1",
+        scope: "customer_service",
+        isCancellationRequested: () => true,
+      }),
+    ).rejects.toBeInstanceOf(OperationCancellationRequestedError);
+  });
+
+  it("throws a cooperative cancellation error for purchase-confirm refresh as well", async () => {
+    getStoreSheetMock.mockResolvedValueOnce(
+      buildEmptySheet([
+        buildWorksheetRow({
+          shipmentBoxId: "950",
+          orderId: "O-950",
+          vendorItemId: "V-950",
+          status: "FINAL_DELIVERY",
+        }),
+      ]),
+    );
+
+    await expect(
+      refreshShipmentWorksheet({
+        storeId: "store-1",
+        scope: "purchase_confirmed",
+        createdAtFrom: "2026-03-01",
+        createdAtTo: "2026-03-26",
+        isCancellationRequested: () => true,
+      }),
+    ).rejects.toBeInstanceOf(OperationCancellationRequestedError);
   });
 });
 

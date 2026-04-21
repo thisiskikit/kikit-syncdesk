@@ -7,6 +7,11 @@ export type OperationStatus = (typeof operationStatuses)[number];
 export const operationModes = ["foreground", "background", "system", "retry"] as const;
 export type OperationMode = (typeof operationModes)[number];
 
+export const operationCancelledErrorCode = "OPERATION_CANCELLED";
+export const operationCancelRequestedLabel = "중단 요청";
+export const operationCancelRequestedMessage = "중단 요청됨. 현재 단계가 끝나면 멈춥니다.";
+export const operationCancelledMessage = "사용자 요청으로 작업을 중단했습니다.";
+
 export const operationTargetTypes = [
   "store",
   "product",
@@ -79,6 +84,7 @@ export interface OperationLogEntry {
   retryable: boolean;
   retryOfOperationId: string | null;
   startedAt: string;
+  cancelRequestedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -267,6 +273,41 @@ export function getOperationResultSummaryText(summary: OperationResultSummary | 
   }
 
   return summary.headline ?? summary.preview ?? summary.detail ?? null;
+}
+
+export function isOperationActive(
+  operation: Pick<OperationLogEntry, "status" | "finishedAt">,
+) {
+  return (
+    !operation.finishedAt &&
+    (operation.status === "queued" || operation.status === "running")
+  );
+}
+
+export function isOperationCancellationPending(
+  operation: Pick<OperationLogEntry, "cancelRequestedAt" | "finishedAt">,
+) {
+  return Boolean(operation.cancelRequestedAt && !operation.finishedAt);
+}
+
+export function isOperationCancellable(
+  operation: Pick<
+    OperationLogEntry,
+    "channel" | "menuKey" | "actionKey" | "status" | "finishedAt"
+  >,
+) {
+  if (!isOperationActive(operation)) {
+    return false;
+  }
+
+  return (
+    operation.channel === "coupang" &&
+    operation.menuKey === "coupang.shipments" &&
+    (operation.actionKey === "collect-worksheet" ||
+      operation.actionKey === "refresh-worksheet" ||
+      operation.actionKey === "reconcile-live-worksheet" ||
+      operation.actionKey === "audit-missing")
+  );
 }
 
 export function getOperationTicketDetailState(

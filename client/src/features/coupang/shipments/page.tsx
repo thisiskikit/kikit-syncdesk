@@ -1,7 +1,6 @@
 import {
   useDeferredValue,
   useEffect,
-  useEffectEvent,
   useMemo,
   useState,
   type ReactNode,
@@ -363,8 +362,6 @@ const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 });
-const AUTHORITATIVE_FULL_SYNC_IDLE_MS = 30_000;
-
 function getSeoulDateParts(date: Date) {
   const parts = SEOUL_DATE_FORMATTER
     .formatToParts(date)
@@ -518,9 +515,9 @@ function makeColumnId() {
   return `shipment-column-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function dedupeShipmentRowsBySourceKey<
-  Row extends Pick<CoupangShipmentWorksheetRow, "sourceKey" | "selpickOrderNumber">,
->(rows: readonly Row[]) {
+function dedupeShipmentRowsBySourceKey<Row extends Pick<CoupangShipmentWorksheetRow, "sourceKey">>(
+  rows: readonly Row[],
+) {
   const rowBySourceKey = new Map<string, Row>();
   for (const row of rows) {
     rowBySourceKey.set(row.sourceKey, row);
@@ -546,6 +543,55 @@ function findDuplicateShipmentSelpickOrderNumbers<
     .filter(([, count]) => count > 1)
     .map(([selpickOrderNumber]) => selpickOrderNumber)
     .sort((left, right) => left.localeCompare(right));
+}
+
+function findDuplicateShipmentProductOrderNumbers<
+  Row extends Pick<CoupangShipmentWorksheetRow, "sourceKey" | "productOrderNumber">,
+>(rows: readonly Row[]) {
+  const counts = new Map<string, number>();
+  for (const row of dedupeShipmentRowsBySourceKey(rows)) {
+    const productOrderNumber = row.productOrderNumber?.trim();
+    if (!productOrderNumber) {
+      continue;
+    }
+
+    counts.set(productOrderNumber, (counts.get(productOrderNumber) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([productOrderNumber]) => productOrderNumber)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function buildInvoiceLookupMaps(rows: readonly CoupangShipmentWorksheetRow[]) {
+  const dedupedRows = dedupeShipmentRowsBySourceKey(rows);
+  const duplicateSelpickOrderNumbers = findDuplicateShipmentSelpickOrderNumbers(dedupedRows);
+  const duplicateProductOrderNumbers = findDuplicateShipmentProductOrderNumbers(dedupedRows);
+  const duplicateProductOrderNumberSet = new Set(duplicateProductOrderNumbers);
+  const rowBySelpickOrderNumber = new Map<string, CoupangShipmentWorksheetRow>();
+  const rowByProductOrderNumber = new Map<string, CoupangShipmentWorksheetRow>();
+
+  for (const row of dedupedRows) {
+    const selpickOrderNumber = row.selpickOrderNumber?.trim();
+    if (selpickOrderNumber) {
+      rowBySelpickOrderNumber.set(selpickOrderNumber, row);
+    }
+
+    const productOrderNumber = row.productOrderNumber?.trim();
+    if (productOrderNumber && !duplicateProductOrderNumberSet.has(productOrderNumber)) {
+      rowByProductOrderNumber.set(productOrderNumber, row);
+    }
+  }
+
+  return {
+    dedupedRows,
+    duplicateSelpickOrderNumbers,
+    duplicateProductOrderNumbers,
+    duplicateProductOrderNumberSet,
+    rowBySelpickOrderNumber,
+    rowByProductOrderNumber,
+  };
 }
 
 function createBuiltinShipmentColumnSource(
@@ -1622,7 +1668,6 @@ export default function CoupangShipmentsPage() {
     finishLocalOperation,
     removeLocalOperation,
     publishOperation,
-    cancelOperation,
   } = useOperations();
   const defaultFilters = useMemo(() => createDefaultFilters(), []);
   const { state: filters, setState: setFilters, isLoaded: isFiltersLoaded } = useServerMenuState(
@@ -1642,9 +1687,6 @@ export default function CoupangShipmentsPage() {
     useState<CoupangShipmentWorksheetAuditMissingResponse | null>(null);
   const [isAuditDialogOpen, setIsAuditDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [isCancellingFullSync, setIsCancellingFullSync] = useState(false);
-  const [lastAutoFullSyncSignature, setLastAutoFullSyncSignature] = useState<string | null>(null);
-  const [lastForegroundActionAt, setLastForegroundActionAt] = useState<number>(() => Date.now());
   const [syncPendingAfterWrite, setSyncPendingAfterWrite] = useState(false);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
@@ -2381,10 +2423,6 @@ export default function CoupangShipmentsPage() {
     [filters.selectedStoreId, operations],
   );
   const isSelectedStoreFullSyncActive = Boolean(activeSelectedStoreFullSyncOperation);
-  const authoritativeWorksheetSyncSignature =
-    shouldHoldAuthoritativeWorksheetCounts && filters.selectedStoreId
-      ? `${filters.selectedStoreId}:${filters.createdAtFrom}:${filters.createdAtTo}`
-      : null;
   const isAuthoritativeWorksheetFullSyncBusy =
     shouldHoldAuthoritativeWorksheetCounts &&
     (busyAction === "collect-full" || isSelectedStoreFullSyncActive);
@@ -2401,7 +2439,7 @@ export default function CoupangShipmentsPage() {
     .join(" · ");
   const worksheetSupportSummaryText = [
     filterSummarySupportText,
-    syncPendingAfterWrite ? "일부 상태는 아직 쿠팡 재확인 전" : null,
+    syncPendingAfterWrite ? "수동 동기화 필요: 일부 상태는 아직 쿠팡 재확인 전" : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -2607,7 +2645,7 @@ export default function CoupangShipmentsPage() {
   const invoiceModeNotice =
     effectiveWorksheetMode === "invoice"
       ? "송장 입력 모드에서는 택배사와 송장번호 열이 연보라색으로 강조되며, 다른 엑셀 표를 그대로 복사해 와도 현재 선택 위치부터 붙여넣고 드래그 복제를 사용할 수 있습니다. 팝업 입력도 지원합니다."
-      : "표 안에서 `Ctrl+V`로 붙여넣을 수 있습니다. 일반 값은 선택한 셀부터 반영되고, `셀픽주문번호 | 택배사 | 송장번호` 형식은 주문번호 기준으로 자동 매칭합니다.";
+      : "표 안에서 `Ctrl+V`로 붙여넣을 수 있습니다. 일반 값은 선택한 셀부터 반영되고, `셀픽주문번호 | 택배사 | 송장번호` 또는 `상품주문번호 | 택배사 | 송장번호` 형식은 주문번호 기준으로 자동 매칭합니다.";
   const detailGuideNotice = "행을 클릭하면 메모, 현재 상태, 쿠팡 클레임 상세를 팝업으로 확인할 수 있습니다.";
   const detailDerivedCustomerServiceSnapshot = detailItem
     ? {
@@ -3289,7 +3327,7 @@ export default function CoupangShipmentsPage() {
   const selectedTransmitActionDisabled =
     isReadOnlyWorksheetView || !selectedReadyRows.length || isFallback || busyAction !== null;
   const fullSyncBlockingMessage = isSelectedStoreFullSyncActive
-    ? "같은 스토어의 쿠팡 기준 재동기화가 진행 중이라 빠른 수집과 증분 갱신을 잠시 막고 있습니다. 필요하면 아래에서 재동기화를 취소해 주세요."
+    ? "같은 스토어의 쿠팡 기준 재동기화가 진행 중이라 빠른 수집과 증분 갱신을 잠시 막고 있습니다. 필요하면 작업 상태 패널이나 작업센터에서 중단을 요청해 주세요."
     : null;
   const collectActionDisabled =
     !filters.selectedStoreId || busyAction !== null || isSelectedStoreFullSyncActive;
@@ -3408,6 +3446,7 @@ export default function CoupangShipmentsPage() {
 
       await refetchWorksheetView();
       void archiveQuery.refetch();
+      setSyncPendingAfterWrite(false);
 
       const warning = response.exceptionCount > 0;
       const details = buildShipmentWorksheetAuditDetails(response);
@@ -3484,6 +3523,7 @@ export default function CoupangShipmentsPage() {
 
       await refetchWorksheetView();
       void archiveQuery.refetch();
+      setSyncPendingAfterWrite(false);
 
       const isNoop =
         response.archivedCount === 0 &&
@@ -3528,7 +3568,6 @@ export default function CoupangShipmentsPage() {
         errorMessage: message,
       });
     } finally {
-      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -3664,7 +3703,6 @@ export default function CoupangShipmentsPage() {
         });
       }
     } finally {
-      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -3759,47 +3797,11 @@ export default function CoupangShipmentsPage() {
     }
   }
 
-  function noteForegroundAction() {
-    setLastForegroundActionAt(Date.now());
-  }
-
   function markSyncPendingAfterWrite() {
-    noteForegroundAction();
     setSyncPendingAfterWrite(true);
   }
 
-  async function cancelSelectedStoreFullSync() {
-    if (!activeSelectedStoreFullSyncOperation || isCancellingFullSync) {
-      return;
-    }
-
-    setIsCancellingFullSync(true);
-    try {
-      await cancelOperation(activeSelectedStoreFullSyncOperation.id);
-      await refreshOperations();
-      setFeedback({
-        type: "warning",
-        title: "재동기화 취소 요청 완료",
-        message:
-          "현재 진행 중인 쿠팡 기준 재동기화에 취소를 요청했습니다. 이미 끝난 단계까지는 잠시 반영될 수 있지만, 추가 수집은 곧 멈춥니다.",
-        details: [],
-      });
-    } catch (error) {
-      setFeedback({
-        type: "error",
-        title: "재동기화 취소 실패",
-        message:
-          error instanceof Error
-            ? error.message
-            : "진행 중인 쿠팡 기준 재동기화를 취소하지 못했습니다.",
-        details: [],
-      });
-    } finally {
-      setIsCancellingFullSync(false);
-    }
-  }
-
-  async function refreshWorksheetInBackground(input: {
+  async function executeWorksheetRefresh(input: {
     storeId?: string;
     scope:
       | "pending_after_collect"
@@ -3877,7 +3879,7 @@ export default function CoupangShipmentsPage() {
     setBusyAction("purchase-confirm-sync");
 
     try {
-      const response = await refreshWorksheetInBackground({
+      const response = await executeWorksheetRefresh({
         storeId: requestFilters.selectedStoreId,
         scope: "purchase_confirmed",
         createdAtFrom: requestFilters.createdAtFrom,
@@ -4032,13 +4034,12 @@ export default function CoupangShipmentsPage() {
       return null;
     }
 
-    const currentLookupRows = dedupeShipmentRowsBySourceKey([
+    const { duplicateSelpickOrderNumbers } = buildInvoiceLookupMaps([
       ...Object.values(dirtyRowsBySourceKey),
       ...Object.values(selectedRowsById),
       ...(activeSheet?.items ?? []),
       ...effectiveDraftRows,
     ]);
-    const duplicateSelpickOrderNumbers = findDuplicateShipmentSelpickOrderNumbers(currentLookupRows);
     if (duplicateSelpickOrderNumbers.length) {
       setFeedback({
         type: "error",
@@ -4307,33 +4308,6 @@ export default function CoupangShipmentsPage() {
         setQuickCollectFocus(null);
       }
 
-      if (
-        response.source === "live" &&
-        (response.syncSummary?.pendingPhases?.length ?? 0) > 0
-      ) {
-        void refreshWorksheetInBackground({
-          storeId: requestFilters.selectedStoreId,
-          scope: "pending_after_collect",
-        });
-      }
-
-      let autoAuditResponse: CoupangShipmentWorksheetAuditMissingResponse | null = null;
-      if (syncMode === "new_only" && response.syncSummary?.autoAuditRecommended) {
-        try {
-          autoAuditResponse = await requestShipmentAuditMissingForCurrentFilters();
-          if (autoAuditResponse) {
-            await refetchWorksheetView();
-            void archiveQuery.refetch();
-            setAuditResult(autoAuditResponse);
-            if (autoAuditResponse.exceptionCount > 0) {
-              setIsAuditDialogOpen(true);
-            }
-          }
-        } catch {
-          autoAuditResponse = null;
-        }
-      }
-
       if (!options?.silent) {
         const modeLabel =
           response.syncSummary?.mode === "full"
@@ -4359,7 +4333,11 @@ export default function CoupangShipmentsPage() {
             ...(response.syncSummary?.failedStatuses?.length
               ? [`실패한 주문 상태 조회: ${response.syncSummary.failedStatuses.join(", ")}`]
               : []),
-            ...(autoAuditResponse ? buildShipmentWorksheetAuditDetails(autoAuditResponse) : []),
+            ...(response.syncSummary?.pendingPhases?.length
+              ? [
+                  `후속 보강은 자동으로 실행되지 않습니다. 필요 시 수동 동기화나 검수를 다시 실행해 주세요. 남은 단계: ${response.syncSummary.pendingPhases.join(", ")}`,
+                ]
+              : []),
           ].slice(0, 8),
         });
       }
@@ -4404,68 +4382,9 @@ export default function CoupangShipmentsPage() {
     }
   }
 
-  const triggerAutomaticFullSync = useEffectEvent(() => {
-    if (activeSelectedStoreFullSyncOperation) {
-      return;
-    }
-
-    void collectWorksheet("full", { silent: true });
-  });
-
-  useEffect(() => {
-    if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
-      setLastAutoFullSyncSignature(null);
-      setSyncPendingAfterWrite(false);
-      return;
-    }
-
-    if (worksheetMirrorSyncRequirement.isTrusted) {
-      setLastAutoFullSyncSignature(null);
-      setSyncPendingAfterWrite(false);
-    }
-  }, [
-    authoritativeWorksheetSyncSignature,
-    shouldHoldAuthoritativeWorksheetCounts,
-    worksheetMirrorSyncRequirement.isTrusted,
-  ]);
-
   useEffect(() => {
     setSyncPendingAfterWrite(false);
-  }, [authoritativeWorksheetSyncSignature]);
-
-  useEffect(() => {
-    if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
-      return;
-    }
-
-    if (worksheetQuery.isFetching || busyAction !== null || activeSelectedStoreFullSyncOperation) {
-      return;
-    }
-
-    if (lastAutoFullSyncSignature === authoritativeWorksheetSyncSignature) {
-      return;
-    }
-
-    const waitMs = Math.max(
-      0,
-      lastForegroundActionAt + AUTHORITATIVE_FULL_SYNC_IDLE_MS - Date.now(),
-    );
-    const timerId = window.setTimeout(() => {
-      setLastAutoFullSyncSignature(authoritativeWorksheetSyncSignature);
-      triggerAutomaticFullSync();
-    }, waitMs);
-
-    return () => window.clearTimeout(timerId);
-  }, [
-    authoritativeWorksheetSyncSignature,
-    busyAction,
-    activeSelectedStoreFullSyncOperation,
-    lastAutoFullSyncSignature,
-    lastForegroundActionAt,
-    shouldHoldAuthoritativeWorksheetCounts,
-    triggerAutomaticFullSync,
-    worksheetQuery.isFetching,
-  ]);
+  }, [filters.selectedStoreId]);
 
   async function saveWorksheetChanges() {
     if (isReadOnlyWorksheetView) {
@@ -4530,7 +4449,6 @@ export default function CoupangShipmentsPage() {
       });
       return false;
     } finally {
-      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -5121,7 +5039,6 @@ export default function CoupangShipmentsPage() {
         errorMessage: message,
       });
     } finally {
-      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -5182,7 +5099,17 @@ export default function CoupangShipmentsPage() {
   }
 
   async function applyInvoiceInputDialog() {
-    const { rows, issues } = parseCoupangInvoicePopupInput(invoiceInputDialogValue);
+    const {
+      rowByProductOrderNumber,
+    } = buildInvoiceLookupMaps([
+      ...Object.values(dirtyRowsBySourceKey),
+      ...Object.values(selectedRowsById),
+      ...(activeSheet?.items ?? []),
+      ...effectiveDraftRows,
+    ]);
+    const { rows, issues } = parseCoupangInvoicePopupInput(invoiceInputDialogValue, {
+      knownProductOrderNumbers: new Set(rowByProductOrderNumber.keys()),
+    });
     if (!rows.length) {
       setFeedback({
         type: "warning",
@@ -5195,7 +5122,7 @@ export default function CoupangShipmentsPage() {
 
     await applyInvoiceInputRows(rows, {
       title: "송장 입력하기 반영",
-      emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호를 찾지 못했습니다.",
+      emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호 또는 상품주문번호를 찾지 못했습니다.",
       successMessage: (updatedCount) =>
         `${updatedCount}건의 택배사와 운송장번호를 워크시트에 반영했습니다.`,
       issues,
@@ -5254,16 +5181,21 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    if (looksLikeInvoiceClipboard(clipboardText)) {
+    const {
+      duplicateSelpickOrderNumbers,
+      duplicateProductOrderNumbers,
+      duplicateProductOrderNumberSet,
+      rowBySelpickOrderNumber,
+      rowByProductOrderNumber,
+    } = buildInvoiceLookupMaps([
+      ...Object.values(dirtyRowsBySourceKey),
+      ...Object.values(selectedRowsById),
+      ...(activeSheet?.items ?? []),
+      ...effectiveDraftRows,
+    ]);
+
+    if (looksLikeInvoiceClipboard(clipboardText, rowByProductOrderNumber)) {
       event.preventDefault();
-      const currentLookupRows = dedupeShipmentRowsBySourceKey([
-        ...Object.values(dirtyRowsBySourceKey),
-        ...Object.values(selectedRowsById),
-        ...(activeSheet?.items ?? []),
-        ...effectiveDraftRows,
-      ]);
-      const duplicateSelpickOrderNumbers =
-        findDuplicateShipmentSelpickOrderNumbers(currentLookupRows);
       if (duplicateSelpickOrderNumbers.length) {
         setFeedback({
           type: "error",
@@ -5277,17 +5209,16 @@ export default function CoupangShipmentsPage() {
         return;
       }
 
-      const currentRowsBySelpickOrderNumber = new Map(
-        currentLookupRows.map((row) => [row.selpickOrderNumber, row] as const),
-      );
-      const { updates, issues } = parseInvoiceClipboardRows(
-        clipboardText,
-        currentRowsBySelpickOrderNumber,
-      );
+      const { updates, issues } = parseInvoiceClipboardRows(clipboardText, {
+        rowBySelpickOrderNumber,
+        rowByProductOrderNumber,
+        duplicateProductOrderNumbers: duplicateProductOrderNumberSet,
+      });
       const invoiceRows = Array.from(updates.values()).map(
         (row) =>
           ({
             selpickOrderNumber: row.selpickOrderNumber,
+            productOrderNumber: row.productOrderNumber,
             deliveryCompanyCode: row.deliveryCompanyCode,
             invoiceNumber: row.invoiceNumber,
           }) satisfies CoupangShipmentWorksheetInvoiceInputApplyRow,
@@ -5297,17 +5228,24 @@ export default function CoupangShipmentsPage() {
         setFeedback({
           type: "warning",
           title: "송장 붙여넣기",
-          message: "현재 워크시트에서 일치하는 셀픽주문번호를 찾지 못했습니다.",
+          message: "현재 워크시트에서 일치하는 셀픽주문번호 또는 상품주문번호를 찾지 못했습니다.",
           details: issues.length
             ? issues
-            : ["셀픽주문번호 | 택배사 | 송장번호 형식을 확인해 주세요."],
+            : [
+                "셀픽주문번호 | 택배사 | 송장번호 또는 상품주문번호 | 택배사 | 송장번호 형식을 확인해 주세요.",
+                ...(duplicateProductOrderNumbers.length
+                  ? [
+                      `중복 상품주문번호: ${duplicateProductOrderNumbers.slice(0, 5).join(", ")}${duplicateProductOrderNumbers.length > 5 ? " 외" : ""}`,
+                    ]
+                  : []),
+              ],
         });
         return;
       }
 
       await applyInvoiceInputRows(invoiceRows, {
         title: "송장 붙여넣기 적용",
-        emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호를 찾지 못했습니다.",
+        emptyMessage: "현재 워크시트에서 일치하는 셀픽주문번호 또는 상품주문번호를 찾지 못했습니다.",
         successMessage: (updatedCount) =>
           `${updatedCount}건의 택배사와 송장번호를 워크시트에 반영했습니다.`,
         issues,
@@ -5416,8 +5354,6 @@ export default function CoupangShipmentsPage() {
       reconcileLiveActionDisabled={reconcileLiveActionDisabled}
       purchaseConfirmActionDisabled={purchaseConfirmActionDisabled}
       fullSyncBlockingMessage={fullSyncBlockingMessage}
-      isCancellingFullSync={isCancellingFullSync}
-      cancelFullSyncDisabled={!activeSelectedStoreFullSyncOperation || isCancellingFullSync}
       prepareActionDisabled={prepareActionDisabled}
       transmitActionDisabled={transmitActionDisabled}
       openInvoiceInputDisabled={openInvoiceInputDisabled}
@@ -5449,7 +5385,6 @@ export default function CoupangShipmentsPage() {
       onQuickCollect={() => void collectWorksheet("new_only")}
       onReconcileLive={() => void executeReconcileShipmentWorksheetLive()}
       onSyncPurchaseConfirmed={() => void executePurchaseConfirmedSync()}
-      onCancelFullSync={() => void cancelSelectedStoreFullSync()}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
       onTransmit={() => void executeInvoiceInputMode()}
       onOpenInvoiceInput={openInvoiceInputDialog}

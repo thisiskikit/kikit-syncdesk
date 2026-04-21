@@ -163,7 +163,7 @@ function formatOverviewCount(
   return countsReady ? formatNumber(value ?? 0) : pendingLabel;
 }
 
-function buildMirrorSyncNotice(input: {
+export function buildMirrorSyncNotice(input: {
   countsReady: boolean;
   autoSyncing: boolean;
   requirement: ShipmentWorksheetMirrorSyncRequirement;
@@ -178,8 +178,8 @@ function buildMirrorSyncNotice(input: {
     ? ` 최근 동기화 범위는 ${input.requirement.syncRangeLabel}입니다.`
     : "";
   const prefix = input.autoSyncing
-    ? "자동 쿠팡 기준 재동기화를 실행 중입니다."
-    : "자동 쿠팡 기준 재동기화를 준비 중입니다.";
+    ? "쿠팡 기준 재동기화를 실행 중입니다."
+    : "쿠팡 기준 재동기화가 필요합니다. 자동으로 돌지 않으니 직접 실행해 주세요.";
 
   switch (input.requirement.reason) {
     case "fallback":
@@ -194,7 +194,7 @@ function buildMirrorSyncNotice(input: {
         title: input.autoSyncing ? "쿠팡 기준 재동기화 중" : "쿠팡 기준 재동기화 필요",
         message:
           `${prefix} 현재 선택 기간에 전체 수집 이력이 없어 메인 숫자를 확정할 수 없습니다. ` +
-          `지금 보이는 ${partialCountLabel}건은 부분 미러입니다.`,
+          `지금 보이는 ${partialCountLabel}건은 부분 미러입니다.${syncRangeSuffix}`,
       };
     case "degraded_sync":
       return {

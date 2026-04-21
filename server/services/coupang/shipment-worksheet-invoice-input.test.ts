@@ -259,9 +259,60 @@ describe("applyShipmentWorksheetInvoiceInput", () => {
       touchedRowIds: ["row-1"],
     });
     expect(result.issues).toEqual([
-      "\uD604\uC7AC \uC6CC\uD06C\uC2DC\uD2B8\uC5D0 \uC5C6\uB294 \uC140\uD53D\uC8FC\uBB38\uBC88\uD638\uC785\uB2C8\uB2E4: O20260410K9999",
+      "현재 워크시트에 없는 셀픽주문번호 O20260410K9999입니다.",
     ]);
   });
+
+  it("matches rows by product order number when selpick order number is not provided", async () => {
+    const existingRow = buildRow({
+      id: "row-1",
+      sourceKey: "source-1",
+      selpickOrderNumber: "O20260410K0001",
+    });
+    getStoreSheetMock.mockResolvedValue(buildSheet([existingRow]));
+    patchRowsMock.mockResolvedValue({
+      sheet: buildSheet([
+        {
+          ...existingRow,
+          deliveryCompanyCode: "CJ대한통운",
+          invoiceNumber: "123456789",
+        },
+      ]),
+      missingKeys: [],
+      touchedSourceKeys: ["source-1"],
+    });
+
+    const result = await applyShipmentWorksheetInvoiceInput({
+      storeId: "store-1",
+      rows: [
+        {
+          productOrderNumber: existingRow.productOrderNumber,
+          deliveryCompanyCode: "CJ대한통운",
+          invoiceNumber: "123456789",
+        },
+      ],
+    });
+
+    expect(patchRowsMock).toHaveBeenCalledWith({
+      storeId: "store-1",
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          sourceKey: "source-1",
+          selpickOrderNumber: "O20260410K0001",
+          deliveryCompanyCode: "CJ대한통운",
+          invoiceNumber: "123456789",
+        }),
+      ]),
+    });
+    expect(result).toMatchObject({
+      matchedCount: 1,
+      updatedCount: 1,
+      ignoredCount: 0,
+      touchedRowIds: ["row-1"],
+      issues: [],
+    });
+  });
+
   it("does not leak worksheet-wide CS warning when the same invoice is already applied", async () => {
     const existingRow = buildRow({
       id: "row-1",

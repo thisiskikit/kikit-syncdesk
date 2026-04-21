@@ -6,6 +6,8 @@ import {
 import {
   getOperationActionLabel,
   getOperationErrorSummary,
+  isOperationCancellationPending,
+  operationCancelRequestedMessage,
   getOperationResultSummaryText,
   getOperationTicketDetailState,
   type OperationTicketDetailState,
@@ -95,6 +97,21 @@ export function buildRecoveryDescriptor(entry: LogEntry): RecoveryDescriptor {
     affectedCount && affectedCount > 0 ? `${affectedCount}건 영향 범위를 먼저 확인하세요.` : null;
 
   if (entry.kind === "operation") {
+    if (isOperationCancellationPending(entry.operation)) {
+      return {
+        lane: "monitor",
+        label: "중단 요청",
+        toneClassName: "attention",
+        hint: operationCancelRequestedMessage,
+        summary,
+        groupKey: `cancel:${entry.operation.actionKey}`,
+        groupLabel: buildOperationGroupLabel(entry, "중단 요청"),
+        affectedCount,
+        ticketState,
+        retryable: false,
+      };
+    }
+
     if (entry.operation.retryable && (entry.status === "error" || entry.status === "warning")) {
       return {
         lane: "retry-now",

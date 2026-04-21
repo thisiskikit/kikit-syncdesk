@@ -193,6 +193,26 @@ function buildReconcileLiveResultSummary(
   });
 }
 
+function buildAuditMissingResultSummary(
+  response: Awaited<ReturnType<typeof auditShipmentWorksheetMissing>>,
+) {
+  const headline = `누락 검수 자동반영 ${response.autoAppliedCount}건 / 예외 ${response.exceptionCount}건`;
+
+  return summarizeResult({
+    headline,
+    detail: response.message,
+    stats: {
+      liveCount: response.liveCount,
+      worksheetMatchedCount: response.worksheetMatchedCount,
+      autoAppliedCount: response.autoAppliedCount,
+      restoredCount: response.restoredCount,
+      exceptionCount: response.exceptionCount,
+      hiddenInfoCount: response.hiddenInfoCount,
+    },
+    preview: response.message ?? headline,
+  });
+}
+
 function validateInvoiceTarget(item: {
   shipmentBoxId: string;
   orderId: string;
@@ -459,15 +479,18 @@ export const refreshShipmentWorksheetHandler: RequestHandler = async (req, res) 
       channel: "coupang",
       menuKey: COUPANG_SHIPMENTS_MENU_KEY,
       actionKey: "refresh-worksheet",
-      mode: "background",
+      mode: "foreground",
       targetType: "store",
       targetCount: 1,
       targetIds: [input.storeId],
       requestPayload,
       normalizedPayload,
       retryable: false,
-      execute: async () => {
-        const data = await refreshShipmentWorksheet(input);
+      execute: async ({ isCancellationRequested }) => {
+        const data = await refreshShipmentWorksheet({
+          ...input,
+          isCancellationRequested,
+        });
         const hasWarnings =
           data.warningPhases.length > 0 || data.source === "fallback" || Boolean(data.message);
 
@@ -516,8 +539,11 @@ export const reconcileShipmentWorksheetLiveHandler: RequestHandler = async (req,
       requestPayload,
       normalizedPayload,
       retryable: false,
-      execute: async () => {
-        const data = await reconcileShipmentWorksheetLive(input);
+      execute: async ({ isCancellationRequested }) => {
+        const data = await reconcileShipmentWorksheetLive({
+          ...input,
+          isCancellationRequested,
+        });
         const hasWarnings =
           data.warnings.length > 0 ||
           data.source === "fallback" ||
@@ -589,8 +615,41 @@ export const auditShipmentWorksheetMissingHandler: RequestHandler = async (req, 
     if (!ensureStoreId(res, input.storeId)) {
       return;
     }
+    const normalizedPayload = { ...input } as Record<string, unknown>;
+    const requestPayload =
+      req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : null;
 
-    sendData(res, await auditShipmentWorksheetMissing(input));
+    const tracked = await runTrackedOperation({
+      channel: "coupang",
+      menuKey: COUPANG_SHIPMENTS_MENU_KEY,
+      actionKey: "audit-missing",
+      mode: "foreground",
+      targetType: "store",
+      targetCount: 1,
+      targetIds: [input.storeId],
+      requestPayload,
+      normalizedPayload,
+      retryable: false,
+      execute: async ({ isCancellationRequested }) => {
+        const data = await auditShipmentWorksheetMissing({
+          ...input,
+          isCancellationRequested,
+        });
+        const hasWarnings = data.exceptionCount > 0 || Boolean(data.message);
+
+        return {
+          data,
+          status: hasWarnings ? "warning" : "success",
+          normalizedPayload,
+          resultSummary: buildAuditMissingResultSummary(data),
+        };
+      },
+    });
+
+    sendData(res, {
+      ...tracked.data,
+      operation: tracked.operation,
+    });
   } catch (error) {
     sendError(res, 400, {
       code: "COUPANG_SHIPMENT_WORKSHEET_AUDIT_MISSING_FAILED",

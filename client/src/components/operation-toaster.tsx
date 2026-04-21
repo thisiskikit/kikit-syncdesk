@@ -4,6 +4,12 @@ import type {
   OperationRuntimeStatusItem,
   OperationRuntimeStatusResponse,
 } from "@shared/operations";
+import {
+  isOperationCancellable,
+  isOperationCancellationPending,
+  operationCancelRequestedLabel,
+  operationCancelRequestedMessage,
+} from "@shared/operations";
 import { getOperationLogsHref } from "@/lib/operation-links";
 import { getJson } from "@/lib/queryClient";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -23,7 +29,10 @@ type PanelEntry = {
   startedAt: string;
   updatedAt: string;
   active: boolean;
+  cancelPending: boolean;
+  cancellable: boolean;
   dismissible: boolean;
+  onCancel?: () => void;
   onDismiss?: () => void;
 };
 
@@ -35,15 +44,24 @@ export function canDismissOperationToast(_toast: Pick<OperationToast, "source" |
   return true;
 }
 
-function getOperationTone(status: OperationToast["status"]): PanelTone {
-  if (status === "error") return "failed";
-  if (status === "warning") return "warning";
-  if (status === "success") return "success";
+function getOperationTone(
+  toast: Pick<OperationToast, "status" | "cancelRequestedAt" | "finishedAt">,
+): PanelTone {
+  if (isOperationCancellationPending(toast)) return "warning";
+  if (toast.status === "error") return "failed";
+  if (toast.status === "warning") return "warning";
+  if (toast.status === "success") return "success";
   return "pending";
 }
 
-function formatStatusLabel(status: OperationToast["status"]) {
-  switch (status) {
+function formatStatusLabel(
+  toast: Pick<OperationToast, "status" | "cancelRequestedAt" | "finishedAt">,
+) {
+  if (isOperationCancellationPending(toast)) {
+    return operationCancelRequestedLabel;
+  }
+
+  switch (toast.status) {
     case "queued":
       return "대기";
     case "running":
@@ -55,7 +73,7 @@ function formatStatusLabel(status: OperationToast["status"]) {
     case "error":
       return "실패";
     default:
-      return status;
+      return toast.status;
   }
 }
 
@@ -164,28 +182,58 @@ function getRuntimeSummary(item: OperationRuntimeStatusItem) {
   return "현재 진행 중인 외부 API 요청이 없습니다.";
 }
 
-function buildOperationEntry(toast: OperationToast, dismissToast: (toastId: string) => void): PanelEntry {
+function buildOperationEntry(
+  toast: OperationToast,
+  dismissToast: (toastId: string) => void,
+  cancelOperation: (operationId: string) => Promise<void>,
+): PanelEntry {
   const active = isActiveOperationStatus(toast.status);
   const dismissible = canDismissOperationToast(toast);
+  const cancelPending = isOperationCancellationPending(toast);
+  const operationId = toast.operationId;
+  const cancellable =
+    toast.source === "server" &&
+    active &&
+    Boolean(operationId) &&
+    toast.menuKey !== null &&
+    toast.actionKey !== null &&
+    isOperationCancellable({
+      channel: toast.channel,
+      menuKey: toast.menuKey,
+      actionKey: toast.actionKey,
+      status: toast.status,
+      finishedAt: toast.finishedAt,
+    });
 
   return {
     id: toast.toastId,
     title: toast.title,
     subtitle: `${toast.channel.toUpperCase()} / ${toast.targetCount}건`,
-    body: toast.errorMessage ?? toast.summary ?? "작업이 진행 중입니다.",
-    statusLabel: formatStatusLabel(toast.status),
-    tone: getOperationTone(toast.status),
-    href: getOperationLogsHref(toast.channel, toast.operationId),
+    body:
+      cancelPending
+        ? operationCancelRequestedMessage
+        : toast.errorMessage ?? toast.summary ?? "작업이 진행 중입니다.",
+    statusLabel: formatStatusLabel(toast),
+    tone: getOperationTone(toast),
+    href: getOperationLogsHref(toast.channel, operationId),
     startedAt: toast.startedAt,
     updatedAt: toast.finishedAt ?? toast.startedAt,
     active,
+    cancelPending,
+    cancellable,
     dismissible,
+    onCancel:
+      cancellable && operationId
+        ? () => {
+            void cancelOperation(operationId);
+          }
+        : undefined,
     onDismiss: dismissible ? () => dismissToast(toast.toastId) : undefined,
   };
 }
 
 export function OperationToaster() {
-  const { toasts, dismissToast } = useOperations();
+  const { toasts, dismissToast, cancelOperation } = useOperations();
   const { openTab } = useWorkspaceTabs();
   const [collapsed, setCollapsed] = usePersistentState("kikit:task-status-panel:collapsed", false);
   const runtimeStatusQuery = useQuery({
@@ -201,8 +249,8 @@ export function OperationToaster() {
     () =>
       toasts
         .filter((toast) => isActiveOperationStatus(toast.status))
-        .map((toast) => buildOperationEntry(toast, dismissToast)),
-    [dismissToast, toasts],
+        .map((toast) => buildOperationEntry(toast, dismissToast, cancelOperation)),
+    [cancelOperation, dismissToast, toasts],
   );
 
   const recentEntries = useMemo(
@@ -210,9 +258,9 @@ export function OperationToaster() {
       toasts
         .filter((toast) => !isActiveOperationStatus(toast.status))
         .filter((toast) => shouldShowRecentOperation(toast))
-        .map((toast) => buildOperationEntry(toast, dismissToast))
+        .map((toast) => buildOperationEntry(toast, dismissToast, cancelOperation))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
-    [dismissToast, toasts],
+    [cancelOperation, dismissToast, toasts],
   );
 
   const activeCount = activeEntries.length;
@@ -238,6 +286,16 @@ export function OperationToaster() {
           >
             열기
           </button>
+          {entry.cancellable && entry.onCancel ? (
+            <button
+              type="button"
+              className="task-status-entry-button"
+              onClick={() => entry.onCancel?.()}
+              disabled={entry.cancelPending}
+            >
+              {entry.cancelPending ? "중단 요청됨" : "중단"}
+            </button>
+          ) : null}
           {entry.dismissible && entry.onDismiss ? (
             <button
               type="button"

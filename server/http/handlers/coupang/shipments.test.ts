@@ -2,12 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   collectShipmentWorksheetMock,
+  refreshShipmentWorksheetMock,
+  reconcileShipmentWorksheetLiveMock,
+  auditShipmentWorksheetMissingMock,
   findActiveCoupangShipmentCollectOperationMock,
   runTrackedOperationMock,
   sendDataMock,
   sendErrorMock,
 } = vi.hoisted(() => ({
   collectShipmentWorksheetMock: vi.fn(),
+  refreshShipmentWorksheetMock: vi.fn(),
+  reconcileShipmentWorksheetLiveMock: vi.fn(),
+  auditShipmentWorksheetMissingMock: vi.fn(),
   findActiveCoupangShipmentCollectOperationMock: vi.fn(),
   runTrackedOperationMock: vi.fn(),
   sendDataMock: vi.fn(),
@@ -16,6 +22,9 @@ const {
 
 vi.mock("../../../services/coupang/shipment-worksheet-service", () => ({
   collectShipmentWorksheet: collectShipmentWorksheetMock,
+  refreshShipmentWorksheet: refreshShipmentWorksheetMock,
+  reconcileShipmentWorksheetLive: reconcileShipmentWorksheetLiveMock,
+  auditShipmentWorksheetMissing: auditShipmentWorksheetMissingMock,
   getShipmentWorksheet: vi.fn(),
   getShipmentWorksheetView: vi.fn(),
   getShipmentWorksheetDetail: vi.fn(),
@@ -39,7 +48,12 @@ vi.mock("../../../services/operations/service", () => ({
   summarizeResult: (input: unknown) => input,
 }));
 
-import { collectShipmentWorksheetHandler } from "./shipments";
+import {
+  auditShipmentWorksheetMissingHandler,
+  collectShipmentWorksheetHandler,
+  reconcileShipmentWorksheetLiveHandler,
+  refreshShipmentWorksheetHandler,
+} from "./shipments";
 
 describe("collectShipmentWorksheetHandler", () => {
   beforeEach(() => {
@@ -312,6 +326,165 @@ describe("collectShipmentWorksheetHandler", () => {
             selpickOrderNumber: "SP-0",
           }),
         ]),
+      }),
+    );
+  });
+
+  it("passes cooperative cancellation context into refresh tracking", async () => {
+    let cancellationRequested = false;
+    refreshShipmentWorksheetMock.mockImplementationOnce(async (input: {
+      isCancellationRequested?: () => boolean;
+    }) => {
+      cancellationRequested = input.isCancellationRequested?.() ?? false;
+      return {
+        items: [],
+        fetchedAt: "2026-04-09T01:00:00.000Z",
+        refreshedAt: "2026-04-09T01:00:00.000Z",
+        message: null,
+        source: "live",
+        completedPhases: ["shipment_boxes"],
+        pendingPhases: [],
+        warningPhases: [],
+        updatedRowCount: 0,
+      };
+    });
+
+    const res = { json: vi.fn(), status: vi.fn() } as unknown as Parameters<
+      typeof refreshShipmentWorksheetHandler
+    >[1];
+
+    await refreshShipmentWorksheetHandler(
+      {
+        body: {
+          storeId: "store-1",
+          scope: "shipment_boxes",
+          shipmentBoxIds: ["1001"],
+        },
+      } as Parameters<typeof refreshShipmentWorksheetHandler>[0],
+      res,
+      vi.fn(),
+    );
+
+    expect(runTrackedOperationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKey: "refresh-worksheet",
+        mode: "foreground",
+      }),
+    );
+    expect(refreshShipmentWorksheetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        scope: "shipment_boxes",
+        shipmentBoxIds: ["1001"],
+        isCancellationRequested: expect.any(Function),
+      }),
+    );
+    expect(cancellationRequested).toBe(false);
+  });
+
+  it("passes cooperative cancellation context into live reconcile tracking", async () => {
+    let cancellationRequested = false;
+    reconcileShipmentWorksheetLiveMock.mockImplementationOnce(async (input: {
+      isCancellationRequested?: () => boolean;
+    }) => {
+      cancellationRequested = input.isCancellationRequested?.() ?? false;
+      return {
+        source: "live",
+        archivedCount: 0,
+        refreshedCount: 1,
+        warningCount: 0,
+        warnings: [],
+        message: null,
+      };
+    });
+
+    const res = { json: vi.fn(), status: vi.fn() } as unknown as Parameters<
+      typeof reconcileShipmentWorksheetLiveHandler
+    >[1];
+
+    await reconcileShipmentWorksheetLiveHandler(
+      {
+        body: {
+          storeId: "store-1",
+          createdAtFrom: "2026-04-08",
+          createdAtTo: "2026-04-09",
+          viewQuery: {},
+        },
+      } as Parameters<typeof reconcileShipmentWorksheetLiveHandler>[0],
+      res,
+      vi.fn(),
+    );
+
+    expect(runTrackedOperationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKey: "reconcile-live-worksheet",
+        mode: "foreground",
+      }),
+    );
+    expect(reconcileShipmentWorksheetLiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        isCancellationRequested: expect.any(Function),
+      }),
+    );
+    expect(cancellationRequested).toBe(false);
+  });
+
+  it("tracks audit missing as a cancellable foreground operation", async () => {
+    let cancellationRequested = false;
+    auditShipmentWorksheetMissingMock.mockImplementationOnce(async (input: {
+      isCancellationRequested?: () => boolean;
+    }) => {
+      cancellationRequested = input.isCancellationRequested?.() ?? false;
+      return {
+        liveCount: 0,
+        worksheetMatchedCount: 0,
+        autoAppliedCount: 0,
+        restoredCount: 0,
+        exceptionCount: 0,
+        hiddenInfoCount: 0,
+        autoAppliedItems: [],
+        exceptionItems: [],
+        hiddenItems: [],
+        message: null,
+      };
+    });
+
+    const res = { json: vi.fn(), status: vi.fn() } as unknown as Parameters<
+      typeof auditShipmentWorksheetMissingHandler
+    >[1];
+
+    await auditShipmentWorksheetMissingHandler(
+      {
+        body: {
+          storeId: "store-1",
+          createdAtFrom: "2026-04-08",
+          createdAtTo: "2026-04-09",
+          viewQuery: {},
+        },
+      } as Parameters<typeof auditShipmentWorksheetMissingHandler>[0],
+      res,
+      vi.fn(),
+    );
+
+    expect(runTrackedOperationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionKey: "audit-missing",
+        mode: "foreground",
+      }),
+    );
+    expect(auditShipmentWorksheetMissingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        isCancellationRequested: expect.any(Function),
+      }),
+    );
+    expect(cancellationRequested).toBe(false);
+    expect(sendDataMock).toHaveBeenCalledWith(
+      res,
+      expect.objectContaining({
+        operation: expect.objectContaining({ id: "operation-1" }),
+        exceptionCount: 0,
       }),
     );
   });

@@ -304,6 +304,7 @@ export function parseShipmentWorksheetInvoiceInputApplyRequest(
       const row = rawItem && typeof rawItem === "object" ? (rawItem as JsonRecord) : {};
       return {
         selpickOrderNumber: asString(row.selpickOrderNumber),
+        productOrderNumber: asString(row.productOrderNumber),
         deliveryCompanyCode: asString(row.deliveryCompanyCode),
         invoiceNumber: asString(row.invoiceNumber),
       };
