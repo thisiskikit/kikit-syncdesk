@@ -38,6 +38,7 @@ vi.mock("./shipment-worksheet-store", () => ({
   coupangShipmentWorksheetStore: {
     getStoreSheet: getStoreSheetMock,
     setStoreSheet: setStoreSheetMock,
+    ensureSelpickIntegrity: vi.fn(),
     patchRows: vi.fn(),
     getArchivedRows: vi.fn(),
     archiveRows: vi.fn(),
@@ -337,7 +338,7 @@ describe("resolveShipmentWorksheetBulkRows", () => {
     expect(setStoreSheetMock).not.toHaveBeenCalled();
   });
 
-  it("drops stale ACCEPT rows from prepare_ready when live status is already INSTRUCT", async () => {
+  it("keeps local ACCEPT rows in prepare_ready without forcing a live refresh", async () => {
     state.sheet = buildSheet([
       buildWorksheetRow({
         deliveryCompanyCode: "",
@@ -347,24 +348,6 @@ describe("resolveShipmentWorksheetBulkRows", () => {
         vendorItemId: "VI-stale",
       }),
     ]);
-    getOrderDetailMock.mockResolvedValue({
-      store: {
-        id: "store-1",
-        name: "테스트 스토어",
-        vendorId: "A0001",
-      },
-      item: buildLiveDetail(
-        buildLiveOrderRow({
-          status: "INSTRUCT",
-          vendorItemId: "VI-live",
-          availableActions: ["uploadInvoice", "cancelOrderItem"],
-        }),
-      ),
-      fetchedAt: "2026-04-17T10:00:00.000Z",
-      servedFromFallback: false,
-      message: null,
-      source: "live",
-    });
 
     const result = await resolveShipmentWorksheetBulkRows({
       storeId: "store-1",
@@ -376,10 +359,16 @@ describe("resolveShipmentWorksheetBulkRows", () => {
       mode: "prepare_ready",
     });
 
-    expect(result.items).toHaveLength(0);
+    expect(result.items).toHaveLength(1);
     expect(result.blockedItems).toHaveLength(0);
-    expect(result.matchedCount).toBe(0);
-    expect(result.resolvedCount).toBe(0);
+    expect(result.items[0]).toMatchObject({
+      orderStatus: "ACCEPT",
+      vendorItemId: "VI-stale",
+      availableActions: ["markPreparing"],
+    });
+    expect(result.matchedCount).toBe(1);
+    expect(result.resolvedCount).toBe(1);
+    expect(getOrderDetailMock).not.toHaveBeenCalled();
     expect(setStoreSheetMock).not.toHaveBeenCalled();
   });
 

@@ -52,6 +52,9 @@ type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsS
 type LooseObject = Record<string, unknown>;
 type ActionStatus = CoupangActionItemResult["status"];
 type ReturnCancelType = Exclude<CoupangCancelType, "ALL">;
+type SchedulerPriority = NonNullable<
+  Parameters<typeof requestCoupangJson>[0]["schedulerPriority"]
+>;
 
 const DEFAULT_RANGE_DAYS = 6;
 const RETURN_LOOKUP_RANGE_DAYS = 14;
@@ -409,6 +412,7 @@ async function loadCustomerServiceLookup(input: {
   createdAtFrom?: string;
   createdAtTo?: string;
   forceRefresh?: boolean;
+  schedulerPriority?: SchedulerPriority;
 }): Promise<CustomerServiceLookupResult> {
   const normalizedInput = {
     storeId: input.storeId,
@@ -440,18 +444,21 @@ async function loadCustomerServiceLookup(input: {
         cancelType: "RETURN",
         createdAtFrom: normalizedInput.createdAtFrom,
         createdAtTo: normalizedInput.createdAtTo,
+        schedulerPriority: input.schedulerPriority,
       }),
       listReturns({
         storeId: normalizedInput.storeId,
         cancelType: "CANCEL",
         createdAtFrom: normalizedInput.createdAtFrom,
         createdAtTo: normalizedInput.createdAtTo,
+        schedulerPriority: input.schedulerPriority,
       }),
       listExchanges({
         storeId: normalizedInput.storeId,
         createdAtFrom: normalizedInput.createdAtFrom,
         createdAtTo: normalizedInput.createdAtTo,
         maxPerPage: 50,
+        schedulerPriority: input.schedulerPriority,
       }),
     ]);
 
@@ -500,6 +507,7 @@ async function enrichOrdersWithCustomerServiceIssues(input: {
   storeId: string;
   rows: CoupangOrderRow[];
   createdAtFrom?: string;
+  schedulerPriority?: SchedulerPriority;
 }): Promise<{
   items: CoupangOrderRow[];
   message: string | null;
@@ -515,6 +523,7 @@ async function enrichOrdersWithCustomerServiceIssues(input: {
     storeId: input.storeId,
     createdAtFrom: input.createdAtFrom,
     createdAtTo: formatSeoulDate(new Date()),
+    schedulerPriority: input.schedulerPriority,
   });
 
   if (lookupResult.source !== "live" || !lookupResult.lookup) {
@@ -700,6 +709,113 @@ type InvoiceWorksheetMatch = {
   target: CoupangInvoiceTarget;
   rows: CoupangShipmentWorksheetRow[];
 };
+
+type PrepareWorksheetMatch = {
+  target: CoupangPrepareTarget;
+  rows: CoupangShipmentWorksheetRow[];
+};
+
+async function findPrepareWorksheetMatches(
+  storeId: string,
+  items: CoupangPrepareTarget[],
+): Promise<PrepareWorksheetMatch[]> {
+  const sheet = await coupangShipmentWorksheetStore.getStoreSheet(storeId);
+  const rowsByGroupKey = new Map<string, CoupangShipmentWorksheetRow[]>();
+
+  for (const row of sheet.items) {
+    const groupKey = buildInvoiceWorksheetGroupKey({
+      shipmentBoxId: row.shipmentBoxId,
+      orderId: row.orderId,
+    });
+    const existing = rowsByGroupKey.get(groupKey);
+    if (existing) {
+      existing.push(row);
+      continue;
+    }
+
+    rowsByGroupKey.set(groupKey, [row]);
+  }
+
+  return items
+    .map((target) => ({
+      target,
+      rows:
+        rowsByGroupKey.get(
+          buildInvoiceWorksheetGroupKey({
+            shipmentBoxId: target.shipmentBoxId,
+            orderId: target.orderId,
+          }),
+        ) ?? [],
+    }))
+    .filter((match) => match.rows.length > 0);
+}
+
+async function patchPrepareWorksheetMatches(input: {
+  storeId: string;
+  items: CoupangPrepareTarget[];
+  results: CoupangActionItemResult[];
+}) {
+  const succeededGroupKeys = new Set(
+    input.results
+      .filter((item) => item.status === "succeeded")
+      .map((item) =>
+        buildInvoiceWorksheetGroupKey({
+          shipmentBoxId: item.shipmentBoxId,
+          orderId: item.orderId,
+        }),
+      ),
+  );
+
+  if (!succeededGroupKeys.size) {
+    return;
+  }
+
+  const matches = await findPrepareWorksheetMatches(input.storeId, input.items);
+  if (!matches.length) {
+    return;
+  }
+
+  const patchItems = matches.flatMap(({ target, rows }) => {
+    const groupKey = buildInvoiceWorksheetGroupKey({
+      shipmentBoxId: target.shipmentBoxId,
+      orderId: target.orderId,
+    });
+    if (!succeededGroupKeys.has(groupKey)) {
+      return [];
+    }
+
+    return rows.map((row) => ({
+      sourceKey: row.sourceKey,
+      orderStatus: "INSTRUCT",
+      availableActions: buildOrderAvailableActions({
+        status: "INSTRUCT",
+        invoiceNumber: row.invoiceNumber,
+      }),
+    }));
+  });
+
+  if (!patchItems.length) {
+    return;
+  }
+
+  try {
+    await coupangShipmentWorksheetStore.patchRows({
+      storeId: input.storeId,
+      items: patchItems,
+    });
+  } catch (error) {
+    void recordSystemErrorEvent({
+      source: "coupang.prepare.worksheet-patch",
+      channel: "coupang",
+      error,
+      meta: {
+        phase: "mark_preparing",
+        storeId: input.storeId,
+        patchItemCount: patchItems.length,
+      },
+    });
+  }
+}
 
 async function findInvoiceWorksheetMatches(
   storeId: string,
@@ -1038,6 +1154,7 @@ async function requestOrdersForStatus(
     maxPerPage: number;
     fetchAllPages: boolean;
     maxPages?: number;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const execute = async () =>
@@ -1048,12 +1165,14 @@ async function requestOrdersForStatus(
           status: input.status,
           maxPerPage: input.maxPerPage,
           maxPages: input.maxPages,
+          schedulerPriority: input.schedulerPriority,
         })
       : requestOrders(store, {
           createdAtFrom: input.createdAtFrom,
           createdAtTo: input.createdAtTo,
           status: input.status,
           maxPerPage: input.maxPerPage,
+          schedulerPriority: input.schedulerPriority,
         });
 
   try {
@@ -1297,6 +1416,7 @@ async function requestOrders(
     status?: string;
     nextToken?: string | null;
     maxPerPage?: number;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const query = new URLSearchParams({
@@ -1325,6 +1445,7 @@ async function requestOrders(
     method: "GET",
     path: `/v2/providers/openapi/apis/api/v5/vendors/${encodeURIComponent(store.vendorId)}/ordersheets`,
     query,
+    schedulerPriority: input.schedulerPriority,
   });
 }
 
@@ -1337,6 +1458,7 @@ async function requestAllOrderPages(
     nextToken?: string | null;
     maxPerPage?: number;
     maxPages?: number;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const rows: CoupangOrderRow[] = [];
@@ -1373,7 +1495,11 @@ async function requestAllOrderPages(
   };
 }
 
-async function requestOrderByShipmentBoxId(store: StoredCoupangStore, shipmentBoxId: string) {
+async function requestOrderByShipmentBoxId(
+  store: StoredCoupangStore,
+  shipmentBoxId: string,
+  schedulerPriority: SchedulerPriority = "foreground",
+) {
   return requestCoupangJson<{
     data?: LooseObject;
   }>({
@@ -1386,10 +1512,15 @@ async function requestOrderByShipmentBoxId(store: StoredCoupangStore, shipmentBo
     path:
       `/v2/providers/openapi/apis/api/v5/vendors/${encodeURIComponent(store.vendorId)}` +
       `/ordersheets/${encodeURIComponent(shipmentBoxId)}`,
+    schedulerPriority,
   });
 }
 
-async function requestOrderByOrderId(store: StoredCoupangStore, orderId: string) {
+async function requestOrderByOrderId(
+  store: StoredCoupangStore,
+  orderId: string,
+  schedulerPriority: SchedulerPriority = "foreground",
+) {
   return requestCoupangJson<{
     data?: LooseObject[] | LooseObject;
   }>({
@@ -1402,6 +1533,7 @@ async function requestOrderByOrderId(store: StoredCoupangStore, orderId: string)
     path:
       `/v2/providers/openapi/apis/api/v5/vendors/${encodeURIComponent(store.vendorId)}` +
       `/${encodeURIComponent(orderId)}/ordersheets`,
+    schedulerPriority,
   });
 }
 
@@ -1413,6 +1545,7 @@ async function requestReturnReceipts(
     status?: string;
     orderId?: string;
     cancelType?: Exclude<CoupangCancelType, "ALL">;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const cancelType = input.cancelType ?? "RETURN";
@@ -1442,6 +1575,7 @@ async function requestReturnReceipts(
     method: "GET",
     path: `/v2/providers/openapi/apis/api/v6/vendors/${encodeURIComponent(store.vendorId)}/returnRequests`,
     query,
+    schedulerPriority: input.schedulerPriority,
   });
 }
 
@@ -1468,6 +1602,7 @@ async function requestRevenueHistory(
     recognitionDateTo?: string;
     token?: string | null;
     maxPerPage?: number;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const query = new URLSearchParams({
@@ -1491,12 +1626,14 @@ async function requestRevenueHistory(
     method: "GET",
     path: "/v2/providers/openapi/apis/api/v1/revenue-history",
     query,
+    schedulerPriority: input.schedulerPriority,
   });
 }
 
 async function requestSettlementHistories(
   store: StoredCoupangStore,
   revenueRecognitionYearMonth: string,
+  schedulerPriority: SchedulerPriority = "foreground",
 ) {
   return requestCoupangJson<{
     data?: LooseObject[];
@@ -1511,6 +1648,7 @@ async function requestSettlementHistories(
     query: new URLSearchParams({
       revenueRecognitionYearMonth,
     }),
+    schedulerPriority,
   });
 }
 
@@ -1741,6 +1879,7 @@ async function requestExchanges(
     status?: string;
     orderId?: string;
     maxPerPage?: number;
+    schedulerPriority?: SchedulerPriority;
   },
 ) {
   const now = new Date();
@@ -1781,6 +1920,7 @@ async function requestExchanges(
     method: "GET",
     path: `/v2/providers/openapi/apis/api/v4/vendors/${encodeURIComponent(store.vendorId)}/exchangeRequests`,
     query,
+    schedulerPriority: input?.schedulerPriority,
   });
 }
 
@@ -2226,6 +2366,7 @@ export async function listOrders(input: {
   fetchAllPages?: boolean;
   maxPages?: number;
   includeCustomerService?: boolean;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
   const normalizedStatus = input.status?.trim();
@@ -2265,6 +2406,7 @@ export async function listOrders(input: {
           storeId: input.storeId,
           rows: baseItems,
           createdAtFrom: input.createdAtFrom,
+          schedulerPriority: input.schedulerPriority,
         })
       : {
           items: baseItems.map(applyUnknownCustomerServiceState),
@@ -2296,6 +2438,7 @@ export async function listOrders(input: {
             maxPerPage: pageSize,
             fetchAllPages,
             maxPages: input.maxPages,
+            schedulerPriority: input.schedulerPriority,
           });
           return {
             status: "fulfilled",
@@ -2340,6 +2483,7 @@ export async function listOrders(input: {
           storeId: input.storeId,
           rows: baseItems,
           createdAtFrom: input.createdAtFrom,
+          schedulerPriority: input.schedulerPriority,
         })
       : {
           items: baseItems.map(applyUnknownCustomerServiceState),
@@ -2378,6 +2522,7 @@ export async function getOrderDetail(input: {
   shipmentBoxId?: string;
   orderId?: string;
   includeCustomerService?: boolean;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
 
@@ -2387,8 +2532,12 @@ export async function getOrderDetail(input: {
 
   try {
     const payload = input.shipmentBoxId
-      ? await requestOrderByShipmentBoxId(store, input.shipmentBoxId)
-      : await requestOrderByOrderId(store, input.orderId!);
+      ? await requestOrderByShipmentBoxId(
+          store,
+          input.shipmentBoxId,
+          input.schedulerPriority,
+        )
+      : await requestOrderByOrderId(store, input.orderId!, input.schedulerPriority);
     const shipment = Array.isArray(payload.data)
       ? asObject(payload.data[0])
       : asObject(payload.data);
@@ -2424,18 +2573,21 @@ export async function getOrderDetail(input: {
           cancelType: "RETURN",
           createdAtFrom: claimLookupRange.createdAtFrom,
           createdAtTo: claimLookupRange.createdAtTo,
+          schedulerPriority: input.schedulerPriority,
         }),
         requestReturnReceipts(store, {
           orderId: asString(shipment.orderId) ?? undefined,
           cancelType: "CANCEL",
           createdAtFrom: claimLookupRange.createdAtFrom,
           createdAtTo: claimLookupRange.createdAtTo,
+          schedulerPriority: input.schedulerPriority,
         }),
         requestExchanges(store, {
           orderId: asString(shipment.orderId) ?? undefined,
           createdAtFrom: claimLookupRange.createdAtFrom,
           createdAtTo: claimLookupRange.createdAtTo,
           maxPerPage: 50,
+          schedulerPriority: input.schedulerPriority,
         }),
       ]);
 
@@ -2519,6 +2671,7 @@ export async function getOrderCustomerServiceSummary(input: {
   createdAtTo?: string;
   items: CoupangCustomerServiceSummaryRequestItem[];
   forceRefresh?: boolean;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
 
@@ -2539,6 +2692,7 @@ export async function getOrderCustomerServiceSummary(input: {
     createdAtFrom: input.createdAtFrom,
     createdAtTo: input.createdAtTo ?? formatSeoulDate(new Date()),
     forceRefresh: input.forceRefresh,
+    schedulerPriority: input.schedulerPriority,
   });
 
   if (lookupResult.source !== "live" || !lookupResult.lookup) {
@@ -2586,6 +2740,7 @@ export async function listReturns(input: {
   status?: string;
   orderId?: string;
   cancelType?: CoupangCancelType;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
   const cancelType = input.cancelType ?? "ALL";
@@ -2597,6 +2752,7 @@ export async function listReturns(input: {
       status: input.status,
       orderId: input.orderId,
       cancelType: targetCancelType,
+      schedulerPriority: input.schedulerPriority,
     });
 
     return normalizeReturnRows(payload, { cancelType: targetCancelType });
@@ -2698,6 +2854,7 @@ export async function listExchanges(input: {
   status?: string;
   orderId?: string;
   maxPerPage?: number;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
 
@@ -2917,6 +3074,7 @@ export async function listSettlementSales(input: {
   recognitionDateTo?: string;
   maxPerPage?: number;
   maxPageCount?: number;
+  schedulerPriority?: SchedulerPriority;
 }) {
   const store = await getStoreOrThrow(input.storeId);
   const recognitionDateFrom = normalizeDateRangeInput(input.recognitionDateFrom, "start");
@@ -2935,6 +3093,7 @@ export async function listSettlementSales(input: {
         recognitionDateTo,
         token: nextToken,
         maxPerPage: input.maxPerPage,
+        schedulerPriority: input.schedulerPriority,
       });
 
       const sales = asArray(payload.data)
@@ -3012,6 +3171,7 @@ export async function markPreparing(input: {
         `/v2/providers/openapi/apis/api/v4/vendors/${encodeURIComponent(store.vendorId)}` +
         "/ordersheets/acknowledgement",
       body: buildPrepareBody(store.vendorId, items),
+      schedulerPriority: "foreground",
     });
 
     const orderIdByShipmentBox = new Map(
@@ -3064,7 +3224,13 @@ export async function markPreparing(input: {
     }
   }
 
-  return buildActionResponse(items);
+  const response = buildActionResponse(items);
+  await patchPrepareWorksheetMatches({
+    storeId: input.storeId,
+    items: input.items,
+    results: response.items,
+  });
+  return response;
 }
 
 async function submitInvoiceAction(input: {
@@ -3134,6 +3300,7 @@ async function submitInvoiceAction(input: {
       method: "POST",
       path,
       body: buildInvoiceBody(store.vendorId, items),
+      schedulerPriority: "foreground",
     });
 
     const orderIdByShipmentBox = new Map(items.map((item) => [item.shipmentBoxId, item.orderId]));

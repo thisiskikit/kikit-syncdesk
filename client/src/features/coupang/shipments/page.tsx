@@ -362,6 +362,7 @@ const SEOUL_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 });
+const AUTHORITATIVE_FULL_SYNC_IDLE_MS = 30_000;
 
 function getSeoulDateParts(date: Date) {
   const parts = SEOUL_DATE_FORMATTER
@@ -1638,6 +1639,8 @@ export default function CoupangShipmentsPage() {
   const [isAuditDialogOpen, setIsAuditDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lastAutoFullSyncSignature, setLastAutoFullSyncSignature] = useState<string | null>(null);
+  const [lastForegroundActionAt, setLastForegroundActionAt] = useState<number>(() => Date.now());
+  const [syncPendingAfterWrite, setSyncPendingAfterWrite] = useState(false);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
   const [selectedCell, setSelectedCell] = useState<SelectedCellState>(null);
   const [detailRowSnapshot, setDetailRowSnapshot] = useState<CoupangShipmentWorksheetRow | null>(null);
@@ -2382,6 +2385,12 @@ export default function CoupangShipmentsPage() {
     (activeSheet?.invoiceReadyCount ?? 0) > 0
       ? `송장 전송 대상 ${formatNumber(activeSheet?.invoiceReadyCount ?? 0)}건`
       : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const worksheetSupportSummaryText = [
+    filterSummarySupportText,
+    syncPendingAfterWrite ? "일부 상태는 아직 쿠팡 재확인 전" : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -3502,6 +3511,7 @@ export default function CoupangShipmentsPage() {
         errorMessage: message,
       });
     } finally {
+      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -3545,29 +3555,11 @@ export default function CoupangShipmentsPage() {
     let localToastId: string | null = null;
 
     try {
-      let auditResponse: CoupangShipmentWorksheetAuditMissingResponse | null = null;
-      let auditFailureMessage: string | null = null;
-
-      try {
-        auditResponse = await requestShipmentAuditMissingForCurrentFilters();
-      } catch (error) {
-        auditFailureMessage =
-          error instanceof Error
-            ? error.message
-            : "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
-      }
-
       const resolvedRows = await resolveWorksheetBulkRows("prepare_ready");
       const preparePlan = resolvePrepareAcceptedOrdersPlan({
-        auditResponse,
+        auditResponse: null,
         resolvedRows,
-        auditFailureMessage,
       });
-
-      if (auditResponse && preparePlan.hasAuditWarnings) {
-        setAuditResult(auditResponse);
-        setIsAuditDialogOpen(true);
-      }
 
       if (!preparePlan.shouldSubmitPrepare) {
         setFeedback({
@@ -3576,7 +3568,7 @@ export default function CoupangShipmentsPage() {
           message: resolvedRows?.matchedCount
             ? "\uD074\uB808\uC784\uC774 \uC788\uB294 \uC8FC\uBB38\uC774 \uC81C\uC678\uB418\uC5B4 \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
             : "\uD604\uC7AC \uD654\uBA74 \uC870\uAC74\uC5D0\uC11C \uBC1C\uC1A1\uC900\uBE44\uC911\uC73C\uB85C \uB118\uAE38 \uACB0\uC81C\uC644\uB8CC \uC8FC\uBB38\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
-          details: [...preparePlan.blockedClaimDetails, ...preparePlan.auditWarningDetails].slice(0, 8),
+          details: preparePlan.blockedClaimDetails.slice(0, 8),
         });
         return;
       }
@@ -3618,19 +3610,14 @@ export default function CoupangShipmentsPage() {
           }),
           { markDirty: false },
         );
-        void refreshWorksheetInBackground({
-          storeId: filters.selectedStoreId,
-          scope: "shipment_boxes",
-          shipmentBoxIds: succeededShipmentBoxIds,
-        });
+        markSyncPendingAfterWrite();
       }
 
       const feedbackState = buildPrepareAcceptedOrdersFeedback({
-        auditResponse,
+        auditResponse: null,
         blockedClaimDetails: preparePlan.blockedClaimDetails,
         result,
         targetRowCount: preparePlan.targetRows.length,
-        auditFailureMessage,
       });
 
       setFeedback(feedbackState);
@@ -3645,8 +3632,8 @@ export default function CoupangShipmentsPage() {
     } catch (error) {
       const message =
         error instanceof Error
-          ? `\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uB610\uB294 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. ${error.message}`
-          : "\uC218\uC9D1 \uB204\uB77D \uAC80\uC218 \uB610\uB294 \uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
+          ? `\uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. ${error.message}`
+          : "\uC0C1\uD488\uC900\uBE44\uC911 \uCC98\uB9AC \uC911 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
       setFeedback({
         type: "error",
         title: "\uBC1C\uC1A1\uC900\uBE44\uC911 \uCC98\uB9AC \uCC28\uB2E8",
@@ -3660,6 +3647,7 @@ export default function CoupangShipmentsPage() {
         });
       }
     } finally {
+      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -3754,6 +3742,15 @@ export default function CoupangShipmentsPage() {
     }
   }
 
+  function noteForegroundAction() {
+    setLastForegroundActionAt(Date.now());
+  }
+
+  function markSyncPendingAfterWrite() {
+    noteForegroundAction();
+    setSyncPendingAfterWrite(true);
+  }
+
   async function refreshWorksheetInBackground(input: {
     storeId?: string;
     scope:
@@ -3792,6 +3789,7 @@ export default function CoupangShipmentsPage() {
         { markDirty: false },
       );
       await refetchWorksheetView();
+      setSyncPendingAfterWrite(false);
       return response;
     } catch (error) {
       const message =
@@ -4209,6 +4207,7 @@ export default function CoupangShipmentsPage() {
       setDetailRowSnapshot(null);
       setWorksheetPage(1);
       await refetchWorksheetView();
+      setSyncPendingAfterWrite(false);
       if (syncMode === "new_only") {
         const insertedSourceKeys = Array.from(
           new Set(response.syncSummary?.insertedSourceKeys ?? []),
@@ -4344,17 +4343,23 @@ export default function CoupangShipmentsPage() {
   useEffect(() => {
     if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
       setLastAutoFullSyncSignature(null);
+      setSyncPendingAfterWrite(false);
       return;
     }
 
     if (worksheetMirrorSyncRequirement.isTrusted) {
       setLastAutoFullSyncSignature(null);
+      setSyncPendingAfterWrite(false);
     }
   }, [
     authoritativeWorksheetSyncSignature,
     shouldHoldAuthoritativeWorksheetCounts,
     worksheetMirrorSyncRequirement.isTrusted,
   ]);
+
+  useEffect(() => {
+    setSyncPendingAfterWrite(false);
+  }, [authoritativeWorksheetSyncSignature]);
 
   useEffect(() => {
     if (!shouldHoldAuthoritativeWorksheetCounts || !authoritativeWorksheetSyncSignature) {
@@ -4369,12 +4374,21 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    setLastAutoFullSyncSignature(authoritativeWorksheetSyncSignature);
-    triggerAutomaticFullSync();
+    const waitMs = Math.max(
+      0,
+      lastForegroundActionAt + AUTHORITATIVE_FULL_SYNC_IDLE_MS - Date.now(),
+    );
+    const timerId = window.setTimeout(() => {
+      setLastAutoFullSyncSignature(authoritativeWorksheetSyncSignature);
+      triggerAutomaticFullSync();
+    }, waitMs);
+
+    return () => window.clearTimeout(timerId);
   }, [
     authoritativeWorksheetSyncSignature,
     busyAction,
     lastAutoFullSyncSignature,
+    lastForegroundActionAt,
     shouldHoldAuthoritativeWorksheetCounts,
     triggerAutomaticFullSync,
     worksheetQuery.isFetching,
@@ -4443,6 +4457,7 @@ export default function CoupangShipmentsPage() {
       });
       return false;
     } finally {
+      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -4661,31 +4676,7 @@ export default function CoupangShipmentsPage() {
       }
     }
 
-    const selectedShipmentBoxIds =
-      scope === "selected"
-        ? Array.from(
-            new Set(
-              selectedRows
-                .map((row) => row.shipmentBoxId?.trim())
-                .filter((shipmentBoxId): shipmentBoxId is string => Boolean(shipmentBoxId)),
-            ),
-          )
-        : [];
-    const selectedRefreshResponse =
-      scope === "selected" && selectedShipmentBoxIds.length > 0
-        ? await refreshWorksheetInBackground({
-            storeId: filters.selectedStoreId,
-            scope: "shipment_boxes",
-            shipmentBoxIds: selectedShipmentBoxIds,
-          })
-        : null;
-    const refreshedSelectedRowById = new Map(
-      (selectedRefreshResponse?.items ?? []).map((row) => [row.id, row] as const),
-    );
-    const selectedTransmissionRows =
-      scope === "selected"
-        ? selectedRows.map((row) => refreshedSelectedRowById.get(row.id) ?? row)
-        : [];
+    const selectedTransmissionRows = scope === "selected" ? selectedRows : [];
     let autoPreparedSummary: string | null = null;
     let autoPreparedFailureDetails: string[] = [];
 
@@ -4729,11 +4720,7 @@ export default function CoupangShipmentsPage() {
             }),
             { markDirty: false },
           );
-          await refreshWorksheetInBackground({
-            storeId: filters.selectedStoreId,
-            scope: "shipment_boxes",
-            shipmentBoxIds: succeededPrepareShipmentBoxIds,
-          });
+          markSyncPendingAfterWrite();
         }
       }
     }
@@ -5000,19 +4987,8 @@ export default function CoupangShipmentsPage() {
         message: summary,
         details: [...blockedDecisionDetails, ...detailLines, ...blockedClaimDetails].slice(0, 8),
       });
-      const succeededShipmentBoxIds = Array.from(
-        new Set(
-          combined.items
-            .map((item) => (item.status === "succeeded" ? item.shipmentBoxId?.trim() ?? "" : ""))
-            .filter(Boolean),
-        ),
-      );
-      if (succeededShipmentBoxIds.length > 0) {
-        void refreshWorksheetInBackground({
-          storeId: filters.selectedStoreId,
-          scope: "shipment_boxes",
-          shipmentBoxIds: succeededShipmentBoxIds,
-        });
+      if (combined.summary.succeededCount > 0) {
+        markSyncPendingAfterWrite();
       }
       finishLocalOperation(localToastId, {
         status:
@@ -5072,6 +5048,7 @@ export default function CoupangShipmentsPage() {
         errorMessage: message,
       });
     } finally {
+      noteForegroundAction();
       setBusyAction(null);
     }
   }
@@ -5425,7 +5402,7 @@ export default function CoupangShipmentsPage() {
         detailFiltersOpen,
         activeDetailFilterCount: effectiveDetailFilterCount,
         activeFilterSummaryTokens,
-        filterSummarySupportText,
+        filterSummarySupportText: worksheetSupportSummaryText,
         hasCustomWorksheetFilters: effectiveHasCustomWorksheetFilters,
         pageRowCount: activeSheet?.filteredRowCount ?? effectiveDraftRows.length,
         visibleRowsCount: visibleRows.length,

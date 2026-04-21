@@ -79,6 +79,7 @@ import {
 } from "./shipment-worksheet-raw-fields";
 
 type StoredCoupangStore = NonNullable<Awaited<ReturnType<typeof coupangSettingsStore.getStore>>>;
+const BACKGROUND_SCHEDULER_PRIORITY = "background" as const;
 
 function asStoreRef(store: StoredCoupangStore) {
   return {
@@ -1176,6 +1177,7 @@ async function verifyMissingInCoupangRows(input: {
         storeId: input.storeId,
         shipmentBoxId: row.shipmentBoxId,
         includeCustomerService: false,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       });
 
       if (response.source === "live" && !response.item) {
@@ -1742,6 +1744,7 @@ async function fetchQuickCollectOrders(input: {
         fetchAllPages: true,
         maxPages: QUICK_COLLECT_MAX_PAGES,
         includeCustomerService: false,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       });
 
       if (response.source !== "live") {
@@ -2162,6 +2165,7 @@ async function refreshPurchaseConfirmedWorksheetRows(input: {
       recognitionDateTo: range.createdAtTo,
       maxPerPage: PURCHASE_CONFIRM_PAGE_SIZE,
       maxPageCount: PURCHASE_CONFIRM_SAFE_PAGE_CAP,
+      schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
     });
 
     pushUniqueWorksheetWarning(warnings, response.message);
@@ -2363,6 +2367,7 @@ async function refreshShipmentWorksheetRows(
           storeId: input.storeId,
           shipmentBoxId,
           includeCustomerService: false,
+          schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
         });
 
         if (response.source !== "live") {
@@ -3041,6 +3046,7 @@ async function refreshWorksheetCustomerServiceStatuses(input: {
         vendorItemId: row.vendorItemId,
         sellerProductId: row.sellerProductId,
       })),
+      schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
     });
 
     if (response.source !== "live") {
@@ -3403,6 +3409,7 @@ async function buildCollectedWorksheetRows(input: {
           storeId: input.store.id,
           shipmentBoxId,
           includeCustomerService: false,
+          schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
         });
 
         return response.source === "live" ? response.item : null;
@@ -4474,6 +4481,7 @@ async function auditShipmentWorksheetMissingV2(
         maxPerPage: WORKSHEET_AUDIT_PAGE_SIZE,
         fetchAllPages: true,
         includeCustomerService: false,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       });
 
       if (response.source !== "live") {
@@ -4686,6 +4694,7 @@ async function auditShipmentWorksheetMissingV2(
             storeId: input.storeId,
             shipmentBoxId: candidate.row.shipmentBoxId,
             includeCustomerService: false,
+            schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
           });
           if (detailResponse.source !== "live" || !detailResponse.item) {
             return {
@@ -5129,7 +5138,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
   const worksheetRows = buildWorksheetRows(sheetForResolve);
   let rowsForResolve = worksheetRows;
 
-  if (input.mode === "prepare_ready" || input.mode === "invoice_ready") {
+  if (input.mode === "invoice_ready") {
     const { filteredRows } = resolveShipmentWorksheetFilteredRows(worksheetRows, {
       ...input.viewQuery,
       storeId: input.storeId,
@@ -5167,7 +5176,7 @@ export async function resolveShipmentWorksheetBulkRows(input: {
     input.mode,
   );
 
-  if (!didRefreshTargetRows && customerServiceTargetRows.length > 0) {
+  if (input.mode !== "prepare_ready" && !didRefreshTargetRows && customerServiceTargetRows.length > 0) {
     const refreshed = await refreshWorksheetCustomerServiceStatuses({
       storeId: input.storeId,
       rows: customerServiceTargetRows,
@@ -5394,6 +5403,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         maxPerPage: input.maxPerPage,
         fetchAllPages: true,
         includeCustomerService: false,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       });
 
   if (listResponse.source !== "live") {
@@ -5482,12 +5492,14 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         cancelType: "ALL",
         createdAtFrom: syncPlan.fetchCreatedAtFrom,
         createdAtTo: syncPlan.fetchCreatedAtTo,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       }),
       listExchanges({
         storeId: input.storeId,
         createdAtFrom: syncPlan.fetchCreatedAtFrom,
         createdAtTo: syncPlan.fetchCreatedAtTo,
         maxPerPage: 50,
+        schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
       }),
     ]);
   }

@@ -14,6 +14,10 @@ export type CoupangRequestSchedulerRuntimeStatus = {
   schedulerCount: number;
   activeRequestCount: number;
   queuedRequestCount: number;
+  foregroundActiveRequestCount: number;
+  foregroundQueuedRequestCount: number;
+  backgroundActiveRequestCount: number;
+  backgroundQueuedRequestCount: number;
   concurrencyLimit: number;
   minRequestGapMs: number;
   coolingDownSchedulerCount: number;
@@ -23,9 +27,13 @@ export type CoupangRequestSchedulerRuntimeStatus = {
   fetchedAt: string;
 };
 
+export type CoupangRequestSchedulerPriority = "foreground" | "background";
+
 type RequestSchedulerState = {
-  activeCount: number;
-  queue: Array<() => void>;
+  foregroundActiveCount: number;
+  backgroundActiveCount: number;
+  foregroundQueue: Array<() => void>;
+  backgroundQueue: Array<() => void>;
   nextAvailableAt: number;
   blockedUntil: number;
   lastUsedAt: number;
@@ -159,8 +167,10 @@ function getSchedulerState(key: string) {
   }
 
   const created: RequestSchedulerState = {
-    activeCount: 0,
-    queue: [],
+    foregroundActiveCount: 0,
+    backgroundActiveCount: 0,
+    foregroundQueue: [],
+    backgroundQueue: [],
     nextAvailableAt: 0,
     blockedUntil: 0,
     lastUsedAt: Date.now(),
@@ -178,7 +188,12 @@ function toIsoTimestamp(value: number) {
 }
 
 function tryCleanupScheduler(key: string, state: RequestSchedulerState) {
-  if (state.activeCount || state.queue.length) {
+  if (
+    state.foregroundActiveCount ||
+    state.backgroundActiveCount ||
+    state.foregroundQueue.length ||
+    state.backgroundQueue.length
+  ) {
     return;
   }
 
@@ -199,9 +214,34 @@ async function waitForSchedulerWindow(state: RequestSchedulerState) {
   }
 }
 
+function getTotalActiveCount(state: RequestSchedulerState) {
+  return state.foregroundActiveCount + state.backgroundActiveCount;
+}
+
 function pumpSchedulerQueue(key: string, state: RequestSchedulerState) {
-  while (state.activeCount < COUPANG_MAX_CONCURRENCY && state.queue.length) {
-    const nextTask = state.queue.shift();
+  while (
+    getTotalActiveCount(state) < COUPANG_MAX_CONCURRENCY &&
+    state.foregroundQueue.length
+  ) {
+    const nextTask = state.foregroundQueue.shift();
+    if (!nextTask) {
+      break;
+    }
+
+    nextTask();
+  }
+
+  if (state.foregroundActiveCount > 0 || state.foregroundQueue.length > 0) {
+    tryCleanupScheduler(key, state);
+    return;
+  }
+
+  while (
+    getTotalActiveCount(state) < COUPANG_MAX_CONCURRENCY &&
+    state.backgroundActiveCount < 1 &&
+    state.backgroundQueue.length
+  ) {
+    const nextTask = state.backgroundQueue.shift();
     if (!nextTask) {
       break;
     }
@@ -216,8 +256,26 @@ export function getCoupangRequestSchedulerRuntimeStatus(
   now = Date.now(),
 ): CoupangRequestSchedulerRuntimeStatus {
   const states = Array.from(requestSchedulers.values());
-  const activeRequestCount = states.reduce((sum, state) => sum + state.activeCount, 0);
-  const queuedRequestCount = states.reduce((sum, state) => sum + state.queue.length, 0);
+  const foregroundActiveRequestCount = states.reduce(
+    (sum, state) => sum + state.foregroundActiveCount,
+    0,
+  );
+  const backgroundActiveRequestCount = states.reduce(
+    (sum, state) => sum + state.backgroundActiveCount,
+    0,
+  );
+  const foregroundQueuedRequestCount = states.reduce(
+    (sum, state) => sum + state.foregroundQueue.length,
+    0,
+  );
+  const backgroundQueuedRequestCount = states.reduce(
+    (sum, state) => sum + state.backgroundQueue.length,
+    0,
+  );
+  const activeRequestCount =
+    foregroundActiveRequestCount + backgroundActiveRequestCount;
+  const queuedRequestCount =
+    foregroundQueuedRequestCount + backgroundQueuedRequestCount;
   const latestBlockedUntilMs = states.reduce(
     (maxValue, state) => Math.max(maxValue, state.blockedUntil),
     0,
@@ -233,6 +291,10 @@ export function getCoupangRequestSchedulerRuntimeStatus(
     schedulerCount: states.length,
     activeRequestCount,
     queuedRequestCount,
+    foregroundActiveRequestCount,
+    foregroundQueuedRequestCount,
+    backgroundActiveRequestCount,
+    backgroundQueuedRequestCount,
     concurrencyLimit: COUPANG_MAX_CONCURRENCY,
     minRequestGapMs: COUPANG_MIN_REQUEST_GAP_MS,
     coolingDownSchedulerCount,
@@ -245,13 +307,18 @@ export function getCoupangRequestSchedulerRuntimeStatus(
 
 async function scheduleCoupangRequest<T>(
   key: string,
+  priority: CoupangRequestSchedulerPriority,
   task: (controller: { applyCooldown: (delayMs: number) => void }) => Promise<T>,
 ) {
   const state = getSchedulerState(key);
 
   return new Promise<T>((resolve, reject) => {
     const run = () => {
-      state.activeCount += 1;
+      if (priority === "background") {
+        state.backgroundActiveCount += 1;
+      } else {
+        state.foregroundActiveCount += 1;
+      }
       state.lastUsedAt = Date.now();
 
       void (async () => {
@@ -272,14 +339,22 @@ async function scheduleCoupangRequest<T>(
         } catch (error) {
           reject(error);
         } finally {
-          state.activeCount -= 1;
+          if (priority === "background") {
+            state.backgroundActiveCount -= 1;
+          } else {
+            state.foregroundActiveCount -= 1;
+          }
           state.lastUsedAt = Date.now();
           pumpSchedulerQueue(key, state);
         }
       })();
     };
 
-    state.queue.push(run);
+    if (priority === "background") {
+      state.backgroundQueue.push(run);
+    } else {
+      state.foregroundQueue.push(run);
+    }
     pumpSchedulerQueue(key, state);
   });
 }
@@ -335,6 +410,7 @@ export async function requestCoupangJson<T>(input: {
   query?: URLSearchParams | string;
   body?: Record<string, unknown> | string;
   timeoutMs?: number;
+  schedulerPriority?: CoupangRequestSchedulerPriority;
 }) {
   const query =
     typeof input.query === "string"
@@ -356,7 +432,10 @@ export async function requestCoupangJson<T>(input: {
   let retryCount = 0;
 
   try {
-    const result = await scheduleCoupangRequest(schedulerKey, async ({ applyCooldown }) => {
+    const result = await scheduleCoupangRequest(
+      schedulerKey,
+      input.schedulerPriority ?? "foreground",
+      async ({ applyCooldown }) => {
     let attempt = 0;
 
     while (true) {
@@ -434,7 +513,8 @@ export async function requestCoupangJson<T>(input: {
 
       return (payload ?? {}) as T;
     }
-    });
+      },
+    );
 
     void recordExternalRequestEvent({
       provider: "coupang",

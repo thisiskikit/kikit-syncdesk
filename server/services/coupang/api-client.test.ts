@@ -221,4 +221,92 @@ describe("coupang api client rate limiting", () => {
       data: { ok: true },
     });
   });
+
+  it("dispatches queued foreground requests before queued background requests", async () => {
+    const { getCoupangRequestSchedulerRuntimeStatus, requestCoupangJson } = await loadApiClient();
+    const fetchMock = vi.mocked(global.fetch);
+    const resolvers: Array<() => void> = [];
+
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+
+      return new Promise<Response>((resolve) => {
+        resolvers.push(() =>
+          resolve(
+            buildJsonResponse({
+              code: "SUCCESS",
+              data: { url },
+            }),
+          ),
+        );
+      });
+    });
+
+    const credentials = {
+      accessKey: "test-access",
+      secretKey: "test-secret",
+      baseUrl: "https://api-gateway.coupang.com",
+    };
+    const buildRequestInput = (vendorId: string, schedulerPriority?: "foreground" | "background") => ({
+      credentials,
+      method: "GET" as const,
+      path: "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products",
+      query: new URLSearchParams({
+        vendorId,
+        maxPerPage: "1",
+      }),
+      schedulerPriority,
+    });
+
+    const firstBackground = requestCoupangJson<{ data: { url: string } }>(
+      buildRequestInput("bg-1", "background"),
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const queuedBackground = requestCoupangJson<{ data: { url: string } }>(
+      buildRequestInput("bg-2", "background"),
+    );
+    const queuedForeground = requestCoupangJson<{ data: { url: string } }>(
+      buildRequestInput("fg-1", "foreground"),
+    );
+
+    await vi.waitFor(() => {
+      expect(getCoupangRequestSchedulerRuntimeStatus()).toMatchObject({
+        activeRequestCount: 1,
+        queuedRequestCount: 2,
+        foregroundActiveRequestCount: 0,
+        foregroundQueuedRequestCount: 1,
+        backgroundActiveRequestCount: 1,
+        backgroundQueuedRequestCount: 1,
+      });
+    });
+
+    resolvers[0]?.();
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("vendorId=fg-1");
+
+    resolvers[1]?.();
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("vendorId=bg-2");
+
+    resolvers[2]?.();
+
+    const [firstBackgroundResult, foregroundResult, queuedBackgroundResult] = await Promise.all([
+      firstBackground,
+      queuedForeground,
+      queuedBackground,
+    ]);
+
+    expect(firstBackgroundResult.data.url).toContain("vendorId=bg-1");
+    expect(foregroundResult.data.url).toContain("vendorId=fg-1");
+    expect(queuedBackgroundResult.data.url).toContain("vendorId=bg-2");
+  });
 });
