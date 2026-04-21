@@ -7,6 +7,7 @@ import {
   type OperationResultSummary,
 } from "@shared/operations";
 import {
+  requestOperationCancellation,
   createManualOperation,
   listRecentOperations,
   retryOperation,
@@ -231,6 +232,19 @@ router.post("/:id/retry", async (req, res) => {
     sendNormalizedError(res, error, {
       fallbackCode: "RETRY_FAILED",
       fallbackMessage: "Failed to retry operation.",
+      fallbackStatus: 400,
+    });
+  }
+});
+
+router.post("/:id/cancel", async (req, res) => {
+  try {
+    const result = await requestOperationCancellation(req.params.id);
+    sendData(res, result);
+  } catch (error) {
+    sendNormalizedError(res, error, {
+      fallbackCode: "OPERATION_CANCEL_FAILED",
+      fallbackMessage: "Failed to cancel operation.",
       fallbackStatus: 400,
     });
   }

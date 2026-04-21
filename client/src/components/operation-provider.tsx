@@ -74,6 +74,7 @@ type OperationContextValue = {
   ) => void;
   removeLocalOperation: (toastId: string) => void;
   retryOperation: (operationId: string) => Promise<void>;
+  cancelOperation: (operationId: string) => Promise<void>;
 };
 
 const OperationContext = createContext<OperationContextValue | null>(null);
@@ -696,6 +697,20 @@ export function OperationProvider(props: { children: ReactNode }) {
     publishOperation(response.operation);
   });
 
+  const cancelOperation = useEffectEvent(async (operationId: string) => {
+    const response = await apiRequestJson<OperationExecutionResponse<unknown>>(
+      "POST",
+      `/api/operations/${operationId}/cancel`,
+      {},
+    );
+
+    if (!response || typeof response !== "object" || !isOperationLogEntryLike(response.operation)) {
+      throw new Error("Cancel response is missing a valid operation payload.");
+    }
+
+    publishOperation(response.operation);
+  });
+
   const toasts = useMemo(() => {
     const mappedLocal = Object.values(localToasts).map<OperationToast>((toast) => ({
       toastId: toast.id,
@@ -736,8 +751,10 @@ export function OperationProvider(props: { children: ReactNode }) {
       finishLocalOperation,
       removeLocalOperation,
       retryOperation,
+      cancelOperation,
     }),
     [
+      cancelOperation,
       dismissToast,
       finishLocalOperation,
       operations,

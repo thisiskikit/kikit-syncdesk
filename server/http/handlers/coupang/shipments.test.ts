@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   collectShipmentWorksheetMock,
+  findActiveCoupangShipmentCollectOperationMock,
   runTrackedOperationMock,
   sendDataMock,
   sendErrorMock,
 } = vi.hoisted(() => ({
   collectShipmentWorksheetMock: vi.fn(),
+  findActiveCoupangShipmentCollectOperationMock: vi.fn(),
   runTrackedOperationMock: vi.fn(),
   sendDataMock: vi.fn(),
   sendErrorMock: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock("../../../services/shared/api-response", () => ({
 }));
 
 vi.mock("../../../services/operations/service", () => ({
+  findActiveCoupangShipmentCollectOperation: findActiveCoupangShipmentCollectOperationMock,
   runTrackedOperation: runTrackedOperationMock,
   summarizeResult: (input: unknown) => input,
 }));
@@ -41,8 +44,17 @@ import { collectShipmentWorksheetHandler } from "./shipments";
 describe("collectShipmentWorksheetHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    runTrackedOperationMock.mockImplementation(async (input: { execute: () => Promise<unknown> }) => {
-      const executed = (await input.execute()) as { data: unknown; status?: string };
+    findActiveCoupangShipmentCollectOperationMock.mockResolvedValue(null);
+    runTrackedOperationMock.mockImplementation(async (input: {
+      execute: (context: {
+        operationId: string;
+        isCancellationRequested: () => boolean;
+      }) => Promise<unknown>;
+    }) => {
+      const executed = (await input.execute({
+        operationId: "operation-1",
+        isCancellationRequested: () => false,
+      })) as { data: unknown; status?: string };
       return {
         operation: {
           id: "operation-1",
@@ -125,8 +137,16 @@ describe("collectShipmentWorksheetHandler", () => {
 
   it("marks fallback collection results as warning operations", async () => {
     let executedStatus: string | undefined;
-    runTrackedOperationMock.mockImplementationOnce(async (input: { execute: () => Promise<unknown> }) => {
-      const executed = (await input.execute()) as { data: unknown; status?: string };
+    runTrackedOperationMock.mockImplementationOnce(async (input: {
+      execute: (context: {
+        operationId: string;
+        isCancellationRequested: () => boolean;
+      }) => Promise<unknown>;
+    }) => {
+      const executed = (await input.execute({
+        operationId: "operation-2",
+        isCancellationRequested: () => false,
+      })) as { data: unknown; status?: string };
       executedStatus = executed.status;
       return {
         operation: {
@@ -177,10 +197,51 @@ describe("collectShipmentWorksheetHandler", () => {
     expect(executedStatus).toBe("warning");
   });
 
+  it("blocks quick collect when the same store already has an active full sync", async () => {
+    findActiveCoupangShipmentCollectOperationMock.mockResolvedValue({
+      id: "active-full-sync",
+      status: "running",
+    });
+
+    const res = { json: vi.fn(), status: vi.fn() } as unknown as Parameters<
+      typeof collectShipmentWorksheetHandler
+    >[1];
+
+    await collectShipmentWorksheetHandler(
+      {
+        body: {
+          storeId: "store-1",
+          createdAtFrom: "2026-04-08",
+          createdAtTo: "2026-04-09",
+          syncMode: "new_only",
+        },
+      } as Parameters<typeof collectShipmentWorksheetHandler>[0],
+      res,
+      vi.fn(),
+    );
+
+    expect(runTrackedOperationMock).not.toHaveBeenCalled();
+    expect(sendErrorMock).toHaveBeenCalledWith(
+      res,
+      409,
+      expect.objectContaining({
+        code: "COUPANG_SHIPMENT_FULL_SYNC_IN_PROGRESS",
+      }),
+    );
+  });
+
   it("stores up to five collected order ticket details in the tracked result summary", async () => {
     let executedSummary: Record<string, unknown> | null | undefined;
-    runTrackedOperationMock.mockImplementationOnce(async (input: { execute: () => Promise<unknown> }) => {
-      const executed = (await input.execute()) as { data: unknown; resultSummary?: { stats?: Record<string, unknown> | null } };
+    runTrackedOperationMock.mockImplementationOnce(async (input: {
+      execute: (context: {
+        operationId: string;
+        isCancellationRequested: () => boolean;
+      }) => Promise<unknown>;
+    }) => {
+      const executed = (await input.execute({
+        operationId: "operation-3",
+        isCancellationRequested: () => false,
+      })) as { data: unknown; resultSummary?: { stats?: Record<string, unknown> | null } };
       executedSummary = executed.resultSummary?.stats;
       return {
         operation: {

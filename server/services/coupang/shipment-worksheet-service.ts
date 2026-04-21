@@ -408,6 +408,9 @@ async function mapWithConcurrency<TItem, TResult>(
   items: TItem[],
   concurrency: number,
   iteratee: (item: TItem, index: number) => Promise<TResult>,
+  options?: {
+    beforeEach?: (item: TItem, index: number) => Promise<void> | void;
+  },
 ) {
   if (!items.length) {
     return [];
@@ -422,6 +425,7 @@ async function mapWithConcurrency<TItem, TResult>(
       while (nextIndex < items.length) {
         const currentIndex = nextIndex;
         nextIndex += 1;
+        await options?.beforeEach?.(items[currentIndex], currentIndex);
         results[currentIndex] = await iteratee(items[currentIndex], currentIndex);
       }
     },
@@ -1156,9 +1160,21 @@ function clearWorksheetRowMissingInCoupang(row: CoupangShipmentWorksheetRow) {
   });
 }
 
+class ShipmentWorksheetCollectCancelledError extends Error {
+  constructor() {
+    super("Shipment worksheet collect cancelled.");
+    this.name = "ShipmentWorksheetCollectCancelledError";
+  }
+}
+
+function isShipmentWorksheetCollectCancelledError(error: unknown) {
+  return error instanceof ShipmentWorksheetCollectCancelledError;
+}
+
 async function verifyMissingInCoupangRows(input: {
   storeId: string;
   rows: readonly CoupangShipmentWorksheetRow[];
+  assertNotCancelled?: (() => Promise<void>) | undefined;
 }) {
   type MissingInCoupangCheckResult = {
     row: CoupangShipmentWorksheetRow;
@@ -1213,6 +1229,11 @@ async function verifyMissingInCoupangRows(input: {
             : `${row.shipmentBoxId}: Coupang live 상세 조회에 실패해 미조회 예외로 확정하지 않았습니다.`,
       };
     }
+    },
+    {
+      beforeEach: async () => {
+        await input.assertNotCancelled?.();
+      },
     },
   );
 
@@ -3388,6 +3409,7 @@ async function buildCollectedWorksheetRows(input: {
   shouldHydrateOptionsDuringCollect: (
     currentRow: CoupangShipmentWorksheetRow | undefined,
   ) => boolean;
+  assertNotCancelled?: (() => Promise<void>) | undefined;
 }) {
   const optionHydrationCandidates = input.collectionCandidates.filter((candidate) =>
     input.shouldHydrateOptionsDuringCollect(candidate.currentRow),
@@ -3403,20 +3425,29 @@ async function buildCollectedWorksheetRows(input: {
       ),
     );
 
-    const detailResults = await mapWithConcurrency(detailTargets, 4, async (shipmentBoxId) => {
-      try {
-        const response = await getOrderDetail({
-          storeId: input.store.id,
-          shipmentBoxId,
-          includeCustomerService: false,
-          schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
-        });
+    const detailResults = await mapWithConcurrency(
+      detailTargets,
+      4,
+      async (shipmentBoxId) => {
+        try {
+          const response = await getOrderDetail({
+            storeId: input.store.id,
+            shipmentBoxId,
+            includeCustomerService: false,
+            schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+          });
 
-        return response.source === "live" ? response.item : null;
-      } catch {
-        return null;
-      }
-    });
+          return response.source === "live" ? response.item : null;
+        } catch {
+          return null;
+        }
+      },
+      {
+        beforeEach: async () => {
+          await input.assertNotCancelled?.();
+        },
+      },
+    );
 
     detailTargets.forEach((shipmentBoxId, index) => {
       optionDetailByShipmentBoxId.set(shipmentBoxId, detailResults[index] ?? null);
@@ -3448,20 +3479,28 @@ async function buildCollectedWorksheetRows(input: {
     return nextPromise;
   };
 
-  return mapWithConcurrency(input.collectionCandidates, 4, async (candidate) =>
-    buildWorksheetRow({
-      store: input.store,
-      row: candidate.row,
-      currentRow: candidate.currentRow,
-      nowIso: input.nowIso,
-      detail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
-        ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
-        : null,
-      productDetail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
-        ? await getCollectProductDetailCached(candidate.row)
-        : null,
-      selpickOrderNumber: candidate.currentRow?.selpickOrderNumber ?? "",
-    }),
+  return mapWithConcurrency(
+    input.collectionCandidates,
+    4,
+    async (candidate) =>
+      buildWorksheetRow({
+        store: input.store,
+        row: candidate.row,
+        currentRow: candidate.currentRow,
+        nowIso: input.nowIso,
+        detail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
+          ? optionDetailByShipmentBoxId.get(candidate.row.shipmentBoxId) ?? null
+          : null,
+        productDetail: input.shouldHydrateOptionsDuringCollect(candidate.currentRow)
+          ? await getCollectProductDetailCached(candidate.row)
+          : null,
+        selpickOrderNumber: candidate.currentRow?.selpickOrderNumber ?? "",
+      }),
+    {
+      beforeEach: async () => {
+        await input.assertNotCancelled?.();
+      },
+    },
   );
 }
 
@@ -5366,7 +5405,11 @@ export async function getShipmentWorksheetDetail(input: {
   } satisfies CoupangShipmentWorksheetDetailResponse;
 }
 
-export async function collectShipmentWorksheet(input: CollectCoupangShipmentInput) {
+export async function collectShipmentWorksheet(
+  input: CollectCoupangShipmentInput & {
+    isCancellationRequested?: (() => boolean) | undefined;
+  },
+) {
   const store = await getStoreOrThrow(input.storeId);
   const platformKey = resolvePlatformKey(store);
   await coupangShipmentWorksheetStore.ensureSelpickIntegrity({
@@ -5379,6 +5422,19 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     await coupangShipmentWorksheetStore.getArchivedSourceKeys(input.storeId),
   );
   const now = new Date().toISOString();
+  const buildCancelledResponse = () =>
+    buildWorksheetResponse(
+      store,
+      currentSheet,
+      "사용자 요청으로 쿠팡 기준 재동기화를 취소했습니다.",
+    );
+  const assertNotCancelled = async () => {
+    if (input.isCancellationRequested?.()) {
+      throw new ShipmentWorksheetCollectCancelledError();
+    }
+  };
+  try {
+    await assertNotCancelled();
   const syncPlan = resolveSyncPlan(input, currentSheet, now);
   const insertOnlyMode = syncPlan.mode === "new_only";
   const syncModeLabel =
@@ -5404,6 +5460,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
         fetchAllPages: true,
         includeCustomerService: false,
         schedulerPriority: BACKGROUND_SCHEDULER_PRIORITY,
+        assertNotCancelled,
       });
 
   if (listResponse.source !== "live") {
@@ -5465,6 +5522,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   }
 
   const archivedRows = await coupangShipmentWorksheetStore.getArchivedRows(input.storeId);
+  await assertNotCancelled();
   const candidateRows = listResponse.items.filter(isShipmentWorksheetCandidate);
   const claimWarnings: string[] = [];
   const rawCollectionCandidates: ShipmentWorksheetCollectionCandidate[] = candidateRows
@@ -5503,6 +5561,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       }),
     ]);
   }
+  await assertNotCancelled();
 
   const appendClaimGroup = (inputGroup: {
     sourceKey: string;
@@ -5676,6 +5735,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   if (restoredMissingArchiveRows.warningMessage) {
     claimWarnings.push(restoredMissingArchiveRows.warningMessage);
   }
+  await assertNotCancelled();
 
   const collectionCandidates: ShipmentWorksheetCollectionCandidate[] = rawCollectionCandidates.filter(
     (candidate) => !archivedSourceKeys.has(candidate.sourceKey),
@@ -6029,7 +6089,9 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     nowIso: now,
     shouldHydrateOptionsDuringCollect: (currentRow) =>
       shouldHydrateWorksheetOptionDuringCollect(currentRow),
+    assertNotCancelled,
   });
+  await assertNotCancelled();
   const materializedFetchedRows = await coupangShipmentWorksheetStore.materializeSelpickOrderNumbers({
     storeId: input.storeId,
     platformKey: platformKey.key,
@@ -6080,6 +6142,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     const missingVerification = await verifyMissingInCoupangRows({
       storeId: input.storeId,
       rows: missingVerificationTargets,
+      assertNotCancelled,
     });
     fullSyncMissingWarnings.push(...missingVerification.warningMessages);
 
@@ -6107,6 +6170,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
       ),
     );
   }
+  await assertNotCancelled();
 
   const syncState = buildNextSyncState(
     currentSheet.syncState ?? createEmptySyncState(),
@@ -6174,6 +6238,7 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
     archivedAt: now,
     persistToStore: true,
   });
+  await assertNotCancelled();
   const sheet = await setWorksheetStoreSheetWithDiagnostics({
     storeId: input.storeId,
     items: autoArchiveResult.rows,
@@ -6191,6 +6256,13 @@ export async function collectShipmentWorksheet(input: CollectCoupangShipmentInpu
   });
 
   return buildWorksheetResponse(store, sheet);
+  } catch (error) {
+    if (isShipmentWorksheetCollectCancelledError(error)) {
+      return buildCancelledResponse();
+    }
+
+    throw error;
+  }
 }
 
 function normalizePatchAgainstRow(

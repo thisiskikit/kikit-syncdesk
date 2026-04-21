@@ -657,6 +657,9 @@ async function mapWithConcurrency<TItem, TResult>(
   items: TItem[],
   concurrency: number,
   iteratee: (item: TItem, index: number) => Promise<TResult>,
+  options?: {
+    beforeEach?: (item: TItem, index: number) => Promise<void> | void;
+  },
 ) {
   if (!items.length) {
     return [];
@@ -671,6 +674,7 @@ async function mapWithConcurrency<TItem, TResult>(
       while (nextIndex < items.length) {
         const currentIndex = nextIndex;
         nextIndex += 1;
+        await options?.beforeEach?.(items[currentIndex], currentIndex);
         results[currentIndex] = await iteratee(items[currentIndex], currentIndex);
       }
     },
@@ -1155,6 +1159,7 @@ async function requestOrdersForStatus(
     fetchAllPages: boolean;
     maxPages?: number;
     schedulerPriority?: SchedulerPriority;
+    assertNotCancelled?: (() => Promise<void>) | undefined;
   },
 ) {
   const execute = async () =>
@@ -1166,6 +1171,7 @@ async function requestOrdersForStatus(
           maxPerPage: input.maxPerPage,
           maxPages: input.maxPages,
           schedulerPriority: input.schedulerPriority,
+          assertNotCancelled: input.assertNotCancelled,
         })
       : requestOrders(store, {
           createdAtFrom: input.createdAtFrom,
@@ -1459,6 +1465,7 @@ async function requestAllOrderPages(
     maxPerPage?: number;
     maxPages?: number;
     schedulerPriority?: SchedulerPriority;
+    assertNotCancelled?: (() => Promise<void>) | undefined;
   },
 ) {
   const rows: CoupangOrderRow[] = [];
@@ -1470,6 +1477,7 @@ async function requestAllOrderPages(
   );
 
   while (pageCount < maxPages) {
+    await input.assertNotCancelled?.();
     const payload = await requestOrders(store, {
       ...input,
       nextToken,
@@ -2367,6 +2375,7 @@ export async function listOrders(input: {
   maxPages?: number;
   includeCustomerService?: boolean;
   schedulerPriority?: SchedulerPriority;
+  assertNotCancelled?: (() => Promise<void>) | undefined;
 }) {
   const store = await getStoreOrThrow(input.storeId);
   const normalizedStatus = input.status?.trim();
@@ -2387,6 +2396,7 @@ export async function listOrders(input: {
   }
 
   try {
+    await input.assertNotCancelled?.();
     if (normalizedStatus) {
     const payload = fetchAllPages
       ? await requestAllOrderPages(store, {
@@ -2394,6 +2404,7 @@ export async function listOrders(input: {
           status: normalizedStatus,
           maxPerPage: pageSize,
           maxPages: input.maxPages,
+          assertNotCancelled: input.assertNotCancelled,
         })
       : await requestOrders(store, {
           ...input,
@@ -2439,6 +2450,7 @@ export async function listOrders(input: {
             fetchAllPages,
             maxPages: input.maxPages,
             schedulerPriority: input.schedulerPriority,
+            assertNotCancelled: input.assertNotCancelled,
           });
           return {
             status: "fulfilled",
@@ -2452,6 +2464,11 @@ export async function listOrders(input: {
             reason,
           } satisfies PromiseRejectedResult;
         }
+      },
+      {
+        beforeEach: async () => {
+          await input.assertNotCancelled?.();
+        },
       },
     );
 

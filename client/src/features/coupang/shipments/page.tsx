@@ -159,6 +159,7 @@ import {
   buildQuickCollectFocusSignature,
   type QuickCollectFocusState,
 } from "./quick-collect-focus";
+import { getActiveCoupangShipmentFullSyncOperation } from "./full-sync-operations";
 import FulfillmentDrawerController from "./fulfillment-drawer-controller";
 import FulfillmentGridController from "./fulfillment-grid-controller";
 import ShipmentHubSidePanel from "./shipment-hub-side-panel";
@@ -1615,10 +1616,13 @@ export default function CoupangShipmentsPage() {
   const [pathname, navigate] = useLocation();
   const search = useSearch();
   const {
+    operations,
+    refreshOperations,
     startLocalOperation,
     finishLocalOperation,
     removeLocalOperation,
     publishOperation,
+    cancelOperation,
   } = useOperations();
   const defaultFilters = useMemo(() => createDefaultFilters(), []);
   const { state: filters, setState: setFilters, isLoaded: isFiltersLoaded } = useServerMenuState(
@@ -1638,6 +1642,7 @@ export default function CoupangShipmentsPage() {
     useState<CoupangShipmentWorksheetAuditMissingResponse | null>(null);
   const [isAuditDialogOpen, setIsAuditDialogOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [isCancellingFullSync, setIsCancellingFullSync] = useState(false);
   const [lastAutoFullSyncSignature, setLastAutoFullSyncSignature] = useState<string | null>(null);
   const [lastForegroundActionAt, setLastForegroundActionAt] = useState<number>(() => Date.now());
   const [syncPendingAfterWrite, setSyncPendingAfterWrite] = useState(false);
@@ -2371,12 +2376,18 @@ export default function CoupangShipmentsPage() {
     !effectiveHasCustomWorksheetFilters;
   const shouldHoldAuthoritativeWorksheetCounts =
     isAuthoritativeWorksheetMirrorView && worksheetMirrorSyncRequirement.requiresFullSync;
+  const activeSelectedStoreFullSyncOperation = useMemo(
+    () => getActiveCoupangShipmentFullSyncOperation(operations, filters.selectedStoreId),
+    [filters.selectedStoreId, operations],
+  );
+  const isSelectedStoreFullSyncActive = Boolean(activeSelectedStoreFullSyncOperation);
   const authoritativeWorksheetSyncSignature =
     shouldHoldAuthoritativeWorksheetCounts && filters.selectedStoreId
       ? `${filters.selectedStoreId}:${filters.createdAtFrom}:${filters.createdAtTo}`
       : null;
   const isAuthoritativeWorksheetFullSyncBusy =
-    shouldHoldAuthoritativeWorksheetCounts && busyAction === "collect-full";
+    shouldHoldAuthoritativeWorksheetCounts &&
+    (busyAction === "collect-full" || isSelectedStoreFullSyncActive);
   const filterSummarySupportText = [
     isQuickCollectFocusActive && quickCollectFocusResult
       ? `빠른 수집 신규 ${formatNumber(quickCollectFocusResult.focusedRows.length)}건 우선 표시 중`
@@ -3277,9 +3288,15 @@ export default function CoupangShipmentsPage() {
     busyAction !== null;
   const selectedTransmitActionDisabled =
     isReadOnlyWorksheetView || !selectedReadyRows.length || isFallback || busyAction !== null;
-  const collectActionDisabled = !filters.selectedStoreId || busyAction !== null;
-  const reconcileLiveActionDisabled = !filters.selectedStoreId || busyAction !== null;
-  const purchaseConfirmActionDisabled = !filters.selectedStoreId || busyAction !== null;
+  const fullSyncBlockingMessage = isSelectedStoreFullSyncActive
+    ? "같은 스토어의 쿠팡 기준 재동기화가 진행 중이라 빠른 수집과 증분 갱신을 잠시 막고 있습니다. 필요하면 아래에서 재동기화를 취소해 주세요."
+    : null;
+  const collectActionDisabled =
+    !filters.selectedStoreId || busyAction !== null || isSelectedStoreFullSyncActive;
+  const reconcileLiveActionDisabled =
+    !filters.selectedStoreId || busyAction !== null || isSelectedStoreFullSyncActive;
+  const purchaseConfirmActionDisabled =
+    !filters.selectedStoreId || busyAction !== null || isSelectedStoreFullSyncActive;
   const prepareActionDisabled =
     !filters.selectedStoreId ||
     isReadOnlyWorksheetView ||
@@ -3751,6 +3768,37 @@ export default function CoupangShipmentsPage() {
     setSyncPendingAfterWrite(true);
   }
 
+  async function cancelSelectedStoreFullSync() {
+    if (!activeSelectedStoreFullSyncOperation || isCancellingFullSync) {
+      return;
+    }
+
+    setIsCancellingFullSync(true);
+    try {
+      await cancelOperation(activeSelectedStoreFullSyncOperation.id);
+      await refreshOperations();
+      setFeedback({
+        type: "warning",
+        title: "재동기화 취소 요청 완료",
+        message:
+          "현재 진행 중인 쿠팡 기준 재동기화에 취소를 요청했습니다. 이미 끝난 단계까지는 잠시 반영될 수 있지만, 추가 수집은 곧 멈춥니다.",
+        details: [],
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        title: "재동기화 취소 실패",
+        message:
+          error instanceof Error
+            ? error.message
+            : "진행 중인 쿠팡 기준 재동기화를 취소하지 못했습니다.",
+        details: [],
+      });
+    } finally {
+      setIsCancellingFullSync(false);
+    }
+  }
+
   async function refreshWorksheetInBackground(input: {
     storeId?: string;
     scope:
@@ -4153,6 +4201,26 @@ export default function CoupangShipmentsPage() {
       return null;
     }
 
+    if (activeSelectedStoreFullSyncOperation) {
+      if (!options?.silent) {
+        setFeedback({
+          type: "warning",
+          title:
+            syncMode === "full"
+              ? "재동기화 진행 중"
+              : syncMode === "incremental"
+                ? "증분 갱신 잠시 대기"
+                : "빠른 수집 잠시 대기",
+          message:
+            syncMode === "full"
+              ? "같은 스토어의 쿠팡 기준 재동기화가 이미 진행 중입니다. 완료를 기다리거나 재동기화를 취소한 뒤 다시 시도해 주세요."
+              : "같은 스토어의 쿠팡 기준 재동기화가 진행 중이라 빠른 수집과 증분 갱신을 잠시 시작할 수 없습니다. 재동기화를 취소하거나 완료 후 다시 시도해 주세요.",
+          details: [],
+        });
+      }
+      return null;
+    }
+
     if (!areFiltersEqual(filters, requestFilters)) {
       setFilters(requestFilters);
     }
@@ -4337,6 +4405,10 @@ export default function CoupangShipmentsPage() {
   }
 
   const triggerAutomaticFullSync = useEffectEvent(() => {
+    if (activeSelectedStoreFullSyncOperation) {
+      return;
+    }
+
     void collectWorksheet("full", { silent: true });
   });
 
@@ -4366,7 +4438,7 @@ export default function CoupangShipmentsPage() {
       return;
     }
 
-    if (worksheetQuery.isFetching || busyAction !== null) {
+    if (worksheetQuery.isFetching || busyAction !== null || activeSelectedStoreFullSyncOperation) {
       return;
     }
 
@@ -4387,6 +4459,7 @@ export default function CoupangShipmentsPage() {
   }, [
     authoritativeWorksheetSyncSignature,
     busyAction,
+    activeSelectedStoreFullSyncOperation,
     lastAutoFullSyncSignature,
     lastForegroundActionAt,
     shouldHoldAuthoritativeWorksheetCounts,
@@ -5342,6 +5415,9 @@ export default function CoupangShipmentsPage() {
       collectActionDisabled={collectActionDisabled}
       reconcileLiveActionDisabled={reconcileLiveActionDisabled}
       purchaseConfirmActionDisabled={purchaseConfirmActionDisabled}
+      fullSyncBlockingMessage={fullSyncBlockingMessage}
+      isCancellingFullSync={isCancellingFullSync}
+      cancelFullSyncDisabled={!activeSelectedStoreFullSyncOperation || isCancellingFullSync}
       prepareActionDisabled={prepareActionDisabled}
       transmitActionDisabled={transmitActionDisabled}
       openInvoiceInputDisabled={openInvoiceInputDisabled}
@@ -5373,6 +5449,7 @@ export default function CoupangShipmentsPage() {
       onQuickCollect={() => void collectWorksheet("new_only")}
       onReconcileLive={() => void executeReconcileShipmentWorksheetLive()}
       onSyncPurchaseConfirmed={() => void executePurchaseConfirmedSync()}
+      onCancelFullSync={() => void cancelSelectedStoreFullSync()}
       onPrepareAcceptedOrders={() => void executePrepareAcceptedOrders()}
       onTransmit={() => void executeInvoiceInputMode()}
       onOpenInvoiceInput={openInvoiceInputDialog}

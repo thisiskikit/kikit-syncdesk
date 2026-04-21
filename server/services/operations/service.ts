@@ -18,6 +18,10 @@ type RetryHandler = (input: {
 
 const STALE_OPERATION_THRESHOLD_MS = 15 * 60_000;
 const STALE_OPERATION_SCAN_LIMIT = 500;
+const ACTIVE_OPERATION_LOOKUP_LIMIT = 200;
+const OPERATION_CANCELLED_ERROR_CODE = "OPERATION_CANCELLED";
+const OPERATION_CANCELLED_MESSAGE = "사용자 요청으로 작업을 취소했습니다.";
+const ACTIVE_OPERATION_STATUSES = new Set<OperationStatus>(["queued", "running"]);
 
 type TrackedOperationResult<T> = {
   data: T;
@@ -42,6 +46,7 @@ type BaseOperationInput = {
 
 const retryHandlers = new Map<string, RetryHandler>();
 const inFlightRetries = new Map<string, Promise<OperationExecutionResponse<unknown>>>();
+const requestedOperationCancellations = new Set<string>();
 
 export function summarizeResult(input: {
   headline?: string | null;
@@ -88,6 +93,143 @@ export function subscribeToOperationUpdates(listener: (entry: OperationLogEntry)
   return operationStore.subscribe(listener);
 }
 
+function isActiveOperation(operation: OperationLogEntry | null | undefined) {
+  return Boolean(
+    operation &&
+      !operation.finishedAt &&
+      ACTIVE_OPERATION_STATUSES.has(operation.status),
+  );
+}
+
+function getOperationPayloadString(
+  operation: Pick<OperationLogEntry, "normalizedPayload" | "requestPayload" | "targetIds" | "targetType">,
+  key: string,
+) {
+  const normalizedValue = operation.normalizedPayload?.[key];
+  if (typeof normalizedValue === "string" && normalizedValue.trim()) {
+    return normalizedValue.trim();
+  }
+
+  const requestValue = operation.requestPayload?.[key];
+  if (typeof requestValue === "string" && requestValue.trim()) {
+    return requestValue.trim();
+  }
+
+  if (key === "storeId" && operation.targetType === "store") {
+    const targetStoreId = operation.targetIds.find((value) => typeof value === "string" && value.trim());
+    if (targetStoreId) {
+      return targetStoreId.trim();
+    }
+  }
+
+  return null;
+}
+
+function getOperationStoreId(
+  operation: Pick<OperationLogEntry, "normalizedPayload" | "requestPayload" | "targetIds" | "targetType">,
+) {
+  return getOperationPayloadString(operation, "storeId");
+}
+
+function getOperationSyncMode(
+  operation: Pick<OperationLogEntry, "normalizedPayload" | "requestPayload" | "targetIds" | "targetType">,
+) {
+  const syncMode = getOperationPayloadString(operation, "syncMode");
+  return syncMode === "full" || syncMode === "incremental" || syncMode === "new_only"
+    ? syncMode
+    : null;
+}
+
+async function getProtectedCancelledOperation(operationId: string) {
+  const current = await operationStore.getById(operationId);
+  if (current?.errorCode === OPERATION_CANCELLED_ERROR_CODE) {
+    return current;
+  }
+
+  return null;
+}
+
+export async function findActiveOperation(
+  predicate: (operation: OperationLogEntry) => boolean,
+  limit = ACTIVE_OPERATION_LOOKUP_LIMIT,
+) {
+  const operations = await operationStore.listRecent(limit);
+  return (
+    operations.find((operation) => isActiveOperation(operation) && predicate(operation)) ?? null
+  );
+}
+
+export async function findActiveCoupangShipmentCollectOperation(input: {
+  storeId: string;
+  syncMode?: "full" | "incremental" | "new_only" | null;
+}) {
+  return findActiveOperation(
+    (operation) =>
+      operation.channel === "coupang" &&
+      operation.menuKey === "coupang.shipments" &&
+      operation.actionKey === "collect-worksheet" &&
+      getOperationStoreId(operation) === input.storeId &&
+      (input.syncMode ? getOperationSyncMode(operation) === input.syncMode : true),
+  );
+}
+
+export function isOperationCancellationRequested(operationId: string) {
+  return requestedOperationCancellations.has(operationId);
+}
+
+export async function requestOperationCancellation(id: string) {
+  const operation = await operationStore.getById(id);
+
+  if (!operation) {
+    throw new ApiRouteError({
+      code: "OPERATION_NOT_FOUND",
+      message: "Operation not found.",
+      status: 404,
+    });
+  }
+
+  if (!isActiveOperation(operation)) {
+    return {
+      operation,
+      data: {
+        cancelled: false,
+        alreadyFinished: true,
+      },
+    } satisfies OperationExecutionResponse<{
+      cancelled: boolean;
+      alreadyFinished: boolean;
+    }>;
+  }
+
+  requestedOperationCancellations.add(id);
+
+  const cancelledOperation = await operationStore.update(id, {
+    status: "warning",
+    normalizedPayload: operation.normalizedPayload,
+    resultSummary:
+      operation.resultSummary ??
+      summarizeResult({
+        headline: "작업 취소",
+        detail: OPERATION_CANCELLED_MESSAGE,
+      }),
+    errorCode: OPERATION_CANCELLED_ERROR_CODE,
+    errorMessage: OPERATION_CANCELLED_MESSAGE,
+    finishedAt: new Date().toISOString(),
+    retryable: false,
+  });
+
+  return {
+    operation: cancelledOperation ?? operation,
+    data: {
+      cancelled: true,
+      alreadyFinished: false,
+    },
+  } satisfies OperationExecutionResponse<{
+    cancelled: boolean;
+    alreadyFinished: boolean;
+  }>;
+}
+
 export async function startOperation(
   input: BaseOperationInput & {
     status?: OperationStatus;
@@ -122,6 +264,11 @@ export async function completeOperation(
     resultSummary?: OperationResultSummary | null;
   },
 ) {
+  const cancelledOperation = await getProtectedCancelledOperation(operationId);
+  if (cancelledOperation) {
+    return cancelledOperation;
+  }
+
   return operationStore.update(operationId, {
     status: "success",
     normalizedPayload: input.normalizedPayload,
@@ -141,6 +288,11 @@ export async function warnOperation(
     errorMessage?: string | null;
   },
 ) {
+  const cancelledOperation = await getProtectedCancelledOperation(operationId);
+  if (cancelledOperation) {
+    return cancelledOperation;
+  }
+
   return operationStore.update(operationId, {
     status: "warning",
     normalizedPayload: input.normalizedPayload,
@@ -160,6 +312,11 @@ export async function failOperation(
     errorMessage: string;
   },
 ) {
+  const cancelledOperation = await getProtectedCancelledOperation(operationId);
+  if (cancelledOperation) {
+    return cancelledOperation;
+  }
+
   return operationStore.update(operationId, {
     status: "error",
     normalizedPayload: input.normalizedPayload,
@@ -226,7 +383,10 @@ export async function recoverStaleOperations() {
 
 export async function runTrackedOperation<T>(
   input: BaseOperationInput & {
-    execute: () => Promise<TrackedOperationResult<T>>;
+    execute: (context: {
+      operationId: string;
+      isCancellationRequested: () => boolean;
+    }) => Promise<TrackedOperationResult<T>>;
   },
 ) {
   const created = await startOperation({
@@ -241,7 +401,10 @@ export async function runTrackedOperation<T>(
   });
 
   try {
-    const result = await input.execute();
+    const result = await input.execute({
+      operationId: created.id,
+      isCancellationRequested: () => isOperationCancellationRequested(created.id),
+    });
     const summary = result.resultSummary ?? summarizeResult({});
     const finalOperation =
       result.status === "warning"
@@ -273,6 +436,8 @@ export async function runTrackedOperation<T>(
     });
 
     throw error;
+  } finally {
+    requestedOperationCancellations.delete(created.id);
   }
 }
 

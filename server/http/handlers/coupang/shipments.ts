@@ -21,7 +21,11 @@ import {
   uploadInvoice,
 } from "../../../services/coupang/order-service";
 import { sendData, sendError } from "../../../services/shared/api-response";
-import { runTrackedOperation, summarizeResult } from "../../../services/operations/service";
+import {
+  findActiveCoupangShipmentCollectOperation,
+  runTrackedOperation,
+  summarizeResult,
+} from "../../../services/operations/service";
 import { COUPANG_ACTION_LABELS } from "../../coupang/action-labels";
 import { COUPANG_SHIPMENTS_MENU_KEY } from "../../coupang/constants";
 import { buildInvoicePayload } from "../../coupang/payloads";
@@ -379,6 +383,25 @@ export const collectShipmentWorksheetHandler: RequestHandler = async (req, res) 
     if (!ensureStoreId(res, input.storeId)) {
       return;
     }
+
+    const activeFullSyncOperation = await findActiveCoupangShipmentCollectOperation({
+      storeId: input.storeId,
+      syncMode: "full",
+    });
+    if (activeFullSyncOperation) {
+      sendError(res, 409, {
+        code:
+          input.syncMode === "full"
+            ? "COUPANG_SHIPMENT_FULL_SYNC_ALREADY_RUNNING"
+            : "COUPANG_SHIPMENT_FULL_SYNC_IN_PROGRESS",
+        message:
+          input.syncMode === "full"
+            ? "같은 스토어의 쿠팡 기준 재동기화가 이미 진행 중입니다. 완료를 기다리거나 취소 후 다시 시도해 주세요."
+            : "같은 스토어의 쿠팡 기준 재동기화가 진행 중이라 빠른 수집이나 증분 갱신을 잠시 시작할 수 없습니다. 재동기화를 취소하거나 완료 후 다시 시도해 주세요.",
+      });
+      return;
+    }
+
     const normalizedPayload = { ...input } as Record<string, unknown>;
     const requestPayload =
       req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : null;
@@ -394,8 +417,11 @@ export const collectShipmentWorksheetHandler: RequestHandler = async (req, res) 
       requestPayload,
       normalizedPayload,
       retryable: false,
-      execute: async () => {
-        const data = await collectShipmentWorksheet(input);
+      execute: async ({ isCancellationRequested }) => {
+        const data = await collectShipmentWorksheet({
+          ...input,
+          isCancellationRequested,
+        });
 
         return {
           data,

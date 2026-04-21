@@ -11,6 +11,9 @@ type FulfillmentToolbarProps = {
   collectActionDisabled: boolean;
   reconcileLiveActionDisabled: boolean;
   purchaseConfirmActionDisabled: boolean;
+  fullSyncBlockingMessage: string | null;
+  isCancellingFullSync: boolean;
+  cancelFullSyncDisabled: boolean;
   prepareActionDisabled: boolean;
   transmitActionDisabled: boolean;
   openInvoiceInputDisabled: boolean;
@@ -29,6 +32,7 @@ type FulfillmentToolbarProps = {
   onQuickCollect: () => void;
   onReconcileLive: () => void;
   onSyncPurchaseConfirmed: () => void;
+  onCancelFullSync: () => void;
   onPrepareAcceptedOrders: () => void;
   onTransmit: () => void;
   onOpenInvoiceInput: () => void;
@@ -81,6 +85,9 @@ export default function FulfillmentToolbar({
   collectActionDisabled,
   reconcileLiveActionDisabled,
   purchaseConfirmActionDisabled,
+  fullSyncBlockingMessage,
+  isCancellingFullSync,
+  cancelFullSyncDisabled,
   prepareActionDisabled,
   transmitActionDisabled,
   openInvoiceInputDisabled,
@@ -99,6 +106,7 @@ export default function FulfillmentToolbar({
   onQuickCollect,
   onReconcileLive,
   onSyncPurchaseConfirmed,
+  onCancelFullSync,
   onPrepareAcceptedOrders,
   onTransmit,
   onOpenInvoiceInput,
@@ -207,6 +215,15 @@ export default function FulfillmentToolbar({
                 >
                   미출력건 엑셀 다운로드
                 </button>
+                {fullSyncBlockingMessage ? (
+                  <button
+                    className="button ghost"
+                    onClick={onCancelFullSync}
+                    disabled={cancelFullSyncDisabled}
+                  >
+                    {isCancellingFullSync ? "재동기화 취소 중..." : "재동기화 취소"}
+                  </button>
+                ) : null}
                 {selectedRowsCount > 0 && selectedExportBlockedRowsCount > 0 ? (
                   <div className="muted action-disabled-reason">
                     선택한 행 중 {selectedExportBlockedRowsCount}건은 다운로드에서 제외됩니다.
@@ -248,6 +265,9 @@ export default function FulfillmentToolbar({
                     </button>
                   </div>
                 </details>
+                {fullSyncBlockingMessage ? (
+                  <div className="muted action-disabled-reason">{fullSyncBlockingMessage}</div>
+                ) : null}
               </div>
             ) : isConfirmedTab ? (
               <div className="shipment-primary-actions">

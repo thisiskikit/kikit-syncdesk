@@ -43,6 +43,9 @@
 - `syncMode="full"`은 기존 active worksheet에만 남아 있고 쿠팡 live 기준 최근 30일 authoritative mirror에는 없는 주문을 다시 검증합니다. live 상세가 성공했고 `item === null`이면 `쿠팡 미조회` 예외로 보관함으로 이동시키고, archive 실패 시에는 row에 `missingInCoupang` 메타를 남긴 채 경고로 유지합니다.
 - `syncMode="incremental"`은 더 이상 자동으로 `full`로 승격되지 않고, 저장된 미러를 유지하기 위한 겹침 구간 `증분 갱신` 의미로만 동작합니다.
 - 기본 메인 보기(`출고 / 전체 배송관리 / 추가 필터 없음`)에서 authoritative 30일 미러가 없으면, 화면이 부분 집계를 확정값처럼 쓰지 않고 자동으로 `쿠팡 기준 재동기화`를 다시 시작합니다.
+- 같은 스토어의 `쿠팡 기준 재동기화(full)`가 이미 `queued/running`이면 서버가 추가 full 재동기화와 `빠른 수집(new_only)`, `증분 갱신(incremental)`을 함께 막아 중복 수집을 방지합니다.
+- 출고 툴바는 서버 operation 목록에서 `선택 스토어의 active full sync`를 감지하고, `재동기화 취소` 버튼과 함께 왜 `빠른 수집`이 막혔는지 바로 안내합니다.
+- `POST /api/operations/:id/cancel` 경로와 collect 내부 취소 체크포인트가 연결돼 있어, full 재동기화 취소 요청 후에는 다음 status/page/보강 단계부터 추가 진행을 멈추고 현재 worksheet 스냅샷으로 돌아옵니다.
 - 필터 위계는 아래와 같습니다.
   - 메인 축: `우선 처리 카드 / 배송 처리 / 이슈 필터`
   - 보조 축: `전체 배송관리 / 내부 작업 대상 / 배송 이후 / 구매확정 / 이슈·클레임`

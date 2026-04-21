@@ -2,6 +2,41 @@
 
 이 문서는 구현이 실제 코드와 문서에 함께 반영된 변경만 기록합니다.
 
+## 2026-04-21 / 쿠팡 출고 full 재동기화 중복 방지와 취소 경로 추가
+
+- 변경 유형:
+  - 코드 + 문서
+- 관련 파일:
+  - `server/services/operations/service.ts`
+  - `server/services/operations/service.test.ts`
+  - `server/routes/operations.ts`
+  - `server/application/coupang/orders/service.ts`
+  - `server/services/coupang/shipment-worksheet-service.ts`
+  - `server/http/handlers/coupang/shipments.ts`
+  - `server/http/handlers/coupang/shipments.test.ts`
+  - `client/src/components/operation-provider.tsx`
+  - `client/src/features/coupang/shipments/full-sync-operations.ts`
+  - `client/src/features/coupang/shipments/full-sync-operations.test.ts`
+  - `client/src/features/coupang/shipments/page.tsx`
+  - `client/src/features/coupang/shipments/fulfillment-toolbar.tsx`
+  - `docs/current-status.md`
+  - `docs/change-log.md`
+- 변경 내용:
+  - 같은 `storeId`에 대해 이미 `syncMode="full"`인 `collect-worksheet` operation이 `queued/running` 상태면, 서버가 추가 full 재동기화뿐 아니라 `빠른 수집(new_only)`과 `증분 갱신(incremental)`도 409로 거절하도록 바꿨습니다.
+  - operation 서비스에 `findActiveCoupangShipmentCollectOperation`, `requestOperationCancellation`을 추가했고, `POST /api/operations/:id/cancel` 경로를 열었습니다.
+  - cancel 요청이 들어오면 operation은 `OPERATION_CANCELLED` warning으로 먼저 닫히고, 이후 collect 종료 단계가 이 상태를 success/error로 다시 덮어쓰지 못하도록 보호했습니다.
+  - 쿠팡 주문 목록 fan-out과 worksheet collect 단계에는 취소 체크포인트를 넣어, cancel 후 다음 page/status/보강 단계로 더 진행하지 않고 현재 worksheet 스냅샷을 그대로 반환하게 했습니다.
+  - 출고 화면은 서버 operation 목록에서 `선택 스토어의 active full sync`를 감지해 자동 full sync 중복 트리거를 멈추고, 툴바에 `재동기화 취소` 버튼과 차단 이유 문구를 함께 보여줍니다.
+- 이유:
+  - 실제 운영 중 같은 스토어의 `full` 재동기화가 여러 개 겹쳐 돌면서 `빠른 수집`이 막히고, 서버 쪽 쿠팡 요청이 불필요하게 중복되는 문제가 확인됐기 때문입니다.
+  - 단순히 버튼만 막는 것으로는 이미 돌아가는 full sync를 멈출 수 없어서, 서버 dedupe와 cancel 경로를 같이 넣어야 했습니다.
+- 남은 점:
+  - 취소는 협력적 취소라서 이미 시작된 단일 쿠팡 API 호출 1건은 timeout 또는 응답 완료까지 잠시 남을 수 있습니다.
+  - 브라우저에서 실제로 `재동기화 취소` 버튼을 누른 뒤 몇 초 내에 operation이 warning으로 닫히는 end-to-end 확인은 아직 하지 못했습니다. 이 부분은 `추정`이 남아 있습니다.
+- 검증:
+  - `npm run check -- --pretty false`
+  - `npx vitest run --root . server/services/operations/service.test.ts server/http/handlers/coupang/shipments.test.ts client/src/features/coupang/shipments/full-sync-operations.test.ts`
+
 ## 2026-04-20 / 쿠팡 기준 집계와 Active 작업 목록 분리
 
 - 변경 유형:
